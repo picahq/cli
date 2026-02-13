@@ -20,74 +20,34 @@ triggers:
 
 Pica gives you access to 200+ third-party platforms (Gmail, Slack, HubSpot, Stripe, Shopify, etc.) through a single interface. It handles auth, rate limiting, and retries so you just call the action you need.
 
-## How to interact with Pica
+## Two interfaces: MCP and CLI
 
-Pica provides two interfaces: the **MCP tools** and the **CLI**. Use the right one for the job.
-
-### MCP tools (primary, for AI agents)
-
-The Pica MCP is your primary interface. It gives you structured JSON in/out with no parsing overhead. Always prefer MCP tools for discovering, inspecting, and executing actions.
-
-The MCP exposes 5 tools:
-
-| Tool | Purpose |
-|------|---------|
-| `mcp__pica__list_pica_integrations` | List all available platforms and active connections |
-| `mcp__pica__search_pica_platform_actions` | Search for actions on a platform |
-| `mcp__pica__get_pica_action_knowledge` | Get full API docs for an action (MUST call before execute) |
-| `mcp__pica__execute_pica_action` | Execute an action on a connected platform |
-
-### CLI (secondary, for setup and human-facing tasks)
-
-The `pica` CLI is better for tasks that require a browser (OAuth), interactive prompts, or human-readable output. Use it for:
-
-- **Setup**: `pica init` (configures API key and installs MCP)
-- **Adding connections**: `pica add gmail` (opens browser for OAuth)
-- **Browsing platforms**: `pica platforms` (visual, categorized list)
-- **Quick lookups by a human**: `pica list`, `pica search gmail "send"`
-
-## When to use which
-
-| Task | Use |
-|------|-----|
-| Execute an API action | MCP |
-| Search for actions | MCP |
-| Read action docs | MCP |
-| List connections/platforms | MCP |
-| Add a new connection (OAuth) | CLI |
-| Initial setup | CLI |
-| Show a user what's available (visual output) | CLI |
+| Interface | Best for |
+|-----------|----------|
+| **MCP tools** | AI agents doing work (search, inspect, execute actions) |
+| **CLI** (`pica`) | Humans doing setup, OAuth, browsing |
 
 **Rule of thumb:** If you're doing the work, use MCP. If a human needs to interact (OAuth, setup), use CLI.
 
-## Setup and prerequisites
+## MCP tools
 
-The MCP server is installed via `pica init`. If the MCP tools are not available, the CLI needs to be installed and init needs to run:
+The Pica MCP is your primary interface. It gives you structured JSON in/out with no parsing overhead.
 
-```bash
-pica --version
+| Tool | What it does |
+|------|-------------|
+| `mcp__pica__list_pica_integrations` | List all platforms and active connections |
+| `mcp__pica__search_pica_platform_actions` | Search for actions on a platform |
+| `mcp__pica__get_pica_action_knowledge` | Get full API docs for an action (call before execute) |
+| `mcp__pica__execute_pica_action` | Execute an action on a connected platform |
+
+### Standard workflow
+
 ```
-
-If the command is not found, install it:
-
-```bash
-cd /Users/moe/projects/one/connection-cli
-npm install
-npm run build
-npm link
+1. list_pica_integrations          -> get connection keys and platform names
+2. search_pica_platform_actions    -> find the right action
+3. get_pica_action_knowledge       -> read the docs (REQUIRED before execute)
+4. execute_pica_action             -> do the thing
 ```
-
-Then run setup:
-
-```bash
-pica init
-```
-
-This stores the API key in `~/.pica/config.json` and installs the MCP server into Claude Code, Claude Desktop, Cursor, and Windsurf. After init, the MCP tools will be available.
-
-## MCP workflow
-
-This is the standard workflow for any integration task.
 
 ### Step 1: List connections and platforms
 
@@ -95,7 +55,7 @@ This is the standard workflow for any integration task.
 mcp__pica__list_pica_integrations()
 ```
 
-Returns all active connections (with connection keys) and available platforms. Check this first to see what's connected.
+Returns all active connections (with connection keys) and available platforms. Always check this first.
 
 ### Step 2: Search for the right action
 
@@ -107,9 +67,10 @@ mcp__pica__search_pica_platform_actions({
 })
 ```
 
-Use `agentType: "execute"` when the intent is to run the action. Use `"knowledge"` when the user wants to understand the API or write code against it.
-
-The platform name must be in kebab-case (e.g., `ship-station`, `hubspot`, `google-calendar`). Get the exact name from `list_pica_integrations`.
+- `agentType: "execute"` when you intend to run the action
+- `agentType: "knowledge"` when you want to understand the API or write code
+- Platform names are kebab-case: `gmail`, `hubspot`, `google-calendar`, `ship-station`
+- Get the exact platform name from `list_pica_integrations`
 
 ### Step 3: Get action knowledge (required before execute)
 
@@ -120,7 +81,7 @@ mcp__pica__get_pica_action_knowledge({
 })
 ```
 
-This returns full API documentation: parameters, request/response schemas, caveats, examples. You MUST call this before executing to understand what the action expects.
+Returns parameters, request/response schemas, caveats, and examples. You MUST call this before executing.
 
 ### Step 4: Execute
 
@@ -134,23 +95,63 @@ mcp__pica__execute_pica_action({
 })
 ```
 
-Pass the `connectionKey` from step 1, the `actionId` from step 2, and the parameters from step 3.
+Pass: `connectionKey` from step 1, `actionId` from step 2, parameters from step 3.
 
 ## CLI reference
 
-For when you need the CLI (setup, OAuth, human-facing output):
+For setup, OAuth, and human-facing tasks.
+
+### Setup: `pica init`
+
+First run prompts for API key, validates it, and installs the MCP into your AI agents.
+
+Re-running `pica init` after setup shows a status dashboard:
+
+```
+  Current Setup
+  ──────────────────────────────────────────
+  API Key:  sk_test_...9j-Y
+  Config:   ~/.pica/config.json
+
+  Agent           Global  Project
+  ──────────────  ──────  ───────
+  Claude Code     ● yes   ● yes
+  Claude Desktop  ● yes   -
+  Cursor          ○ no    ○ no
+  Windsurf        -       -
+
+  - = not detected on this machine
+```
+
+Then offers targeted actions (only relevant options shown):
+
+| Action | What it does |
+|--------|-------------|
+| Update API key | Validates new key, re-installs MCP to all agents that have it |
+| Install MCP to more agents | Shows only detected agents missing the MCP |
+| Install MCP for this project | Creates project-level configs in cwd |
+| Start fresh | Full setup from scratch |
+
+Flags: `-y` (skip confirmations), `-g` (global install), `-p` (project install).
+
+### Other commands
 
 | Command | Description |
 |---------|-------------|
-| `pica init` | Set up API key and install MCP |
+| `pica add <platform>` | Connect a platform via OAuth (opens browser) |
 | `pica list` | List connections with keys |
-| `pica add <platform>` | Add a new connection via OAuth (opens browser) |
-| `pica platforms` | Browse all available platforms |
+| `pica platforms` | Browse all 200+ platforms |
 | `pica search <platform> [query]` | Search for actions |
 | `pica actions knowledge <id>` | Get API docs for an action |
 | `pica exec <id>` | Execute an action |
 
-### CLI options for exec
+All commands support `--json` for machine-readable output.
+
+### Aliases
+
+`pica ls` = list, `pica p` = platforms, `pica a search` = actions search, `pica a k` = actions knowledge, `pica a x` = actions execute.
+
+### Exec flags
 
 ```bash
 pica exec <actionId> \
@@ -161,15 +162,34 @@ pica exec <actionId> \
   --json
 ```
 
-All commands support `--json` for machine-readable output.
-
 ## Key concepts
 
-- **Connection key**: Identifies which authenticated connection to use. Format: `live::gmail::default::abc123` or `test::gmail::default::abc123`. Get these from `list_pica_integrations` or `pica list`.
-- **Action ID**: Identifies a specific API action. Always starts with `conn_mod_def::`. Get these from search results.
-- **Platform name**: Kebab-case identifier (e.g., `gmail`, `hubspot`, `google-calendar`, `ship-station`). Get the exact name from `list_pica_integrations`.
+- **Connection key**: Identifies which authenticated connection to use. Format: `live::gmail::default::abc123`. Get from `list_pica_integrations` or `pica list`.
+- **Action ID**: Identifies a specific API action. Starts with `conn_mod_def::`. Get from search results.
+- **Platform name**: Kebab-case identifier (`gmail`, `hubspot`, `google-calendar`, `ship-station`). Get from `list_pica_integrations`.
 - **Passthrough proxy**: All actions route through Pica's proxy which injects auth, handles rate limits, and normalizes responses. You never touch raw OAuth tokens.
 - **Pagination**: Some actions return `nextPageToken` or similar. Pass it back in subsequent requests to page through results.
+
+## MCP installation details
+
+`pica init` writes MCP configs here:
+
+| Agent | Global | Project |
+|-------|--------|---------|
+| Claude Code | `~/.claude.json` | `.mcp.json` |
+| Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` | n/a |
+| Cursor | `~/.cursor/mcp.json` | `.cursor/mcp.json` |
+| Windsurf | `~/.codeium/windsurf/mcp_config.json` | n/a |
+
+Global = available everywhere. Project = committed to repo, shared with team (each person needs their own API key).
+
+If MCP tools are not available, install and init:
+
+```bash
+cd /Users/moe/projects/one/connection-cli
+npm install && npm run build && npm link
+pica init
+```
 
 ## Common patterns
 
@@ -189,7 +209,7 @@ All commands support `--json` for machine-readable output.
 3. Execute with `data: { channel, text }`
 
 ### CRM operations
-1. Search: `platform: "hubspot"` or `"attio"`, query: `"create contact"` / `"list contacts"` / etc.
+1. Search: `platform: "hubspot"` or `"attio"`, query: `"create contact"` / `"list contacts"`
 2. Knowledge: understand required fields
 3. Execute with the right data shape
 
