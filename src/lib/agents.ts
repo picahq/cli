@@ -171,3 +171,21 @@ export function getProjectConfigPaths(agents: Agent[]): string[] {
   }
   return paths;
 }
+
+export interface AgentStatus {
+  agent: Agent;
+  detected: boolean;
+  globalMcp: boolean;
+  projectMcp: boolean | null; // null = agent doesn't support project scope
+}
+
+export function getAgentStatuses(): AgentStatus[] {
+  return AGENTS.map(agent => {
+    const detected = fs.existsSync(expandPath(agent.detectDir));
+    const globalMcp = detected && isMcpInstalled(agent, 'global');
+    const projectMcp = agent.projectConfigPath
+      ? isMcpInstalled(agent, 'project')
+      : null;
+    return { agent, detected, globalMcp, projectMcp };
+  });
+}

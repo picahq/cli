@@ -3,6 +3,7 @@ import pc from 'picocolors';
 import { getApiKey } from '../lib/config.js';
 import { PicaApi } from '../lib/api.js';
 import { extractPathVariables, resolveTemplateVariables } from '../lib/actions.js';
+import { printTable } from '../lib/table.js';
 import type { PlatformAction, ActionKnowledge } from '../lib/types.js';
 
 function getApi(): PicaApi {
@@ -70,14 +71,25 @@ export async function actionsSearchCommand(
     }
 
     console.log();
-    for (const action of actions) {
-      const method = colorMethod(padMethod(action.method));
-      console.log(`  ${method} ${pc.dim(action.path)}`);
-      console.log(`         ${action.title}`);
-      console.log(`         ${pc.dim(action._id)}`);
-      console.log();
-    }
 
+    const rows = actions.map(action => ({
+      method: colorMethod(padMethod(action.method)),
+      path: action.path,
+      title: action.title,
+      id: action._id,
+    }));
+
+    printTable(
+      [
+        { key: 'method', label: 'Method' },
+        { key: 'title', label: 'Title' },
+        { key: 'path', label: 'Path', color: pc.dim },
+        { key: 'id', label: 'Action ID', color: pc.dim },
+      ],
+      rows
+    );
+
+    console.log();
     p.note(
       `Get docs:  ${pc.cyan('pica actions knowledge <actionId>')}\n` +
       `Execute:   ${pc.cyan('pica actions execute <actionId>')}`,

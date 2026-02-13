@@ -4,6 +4,7 @@ import { getApiKey } from '../lib/config.js';
 import { PicaApi, TimeoutError } from '../lib/api.js';
 import { openConnectionPage, getConnectionUrl } from '../lib/browser.js';
 import { findPlatform, findSimilarPlatforms } from '../lib/platforms.js';
+import { printTable } from '../lib/table.js';
 import type { Connection } from '../lib/types.js';
 
 export async function connectionAddCommand(platformArg?: string): Promise<void> {
@@ -154,17 +155,23 @@ export async function connectionListCommand(): Promise<void> {
     }
 
     console.log();
-    console.log(pc.bold('  Your Connections'));
-    console.log();
 
-    const maxPlatformLen = Math.max(...connections.map(c => c.platform.length));
+    const rows = connections.map(conn => ({
+      status: getStatusIndicator(conn.state),
+      platform: conn.platform,
+      state: conn.state,
+      key: conn.key,
+    }));
 
-    for (const conn of connections) {
-      const status = getStatusIndicator(conn.state);
-      const platform = conn.platform.padEnd(maxPlatformLen);
-      console.log(`  ${status} ${platform}  ${pc.dim(conn.state)}`);
-      console.log(`    ${pc.dim(conn.key)}`);
-    }
+    printTable(
+      [
+        { key: 'status', label: '' },
+        { key: 'platform', label: 'Platform' },
+        { key: 'state', label: 'Status' },
+        { key: 'key', label: 'Connection Key', color: pc.dim },
+      ],
+      rows
+    );
 
     console.log();
     p.note(`Add more with: ${pc.cyan('pica connection add <platform>')}`, 'Tip');
