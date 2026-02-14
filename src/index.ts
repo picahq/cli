@@ -1,17 +1,21 @@
 #!/usr/bin/env node
 
+import { createRequire } from 'module';
 import { Command } from 'commander';
 import { initCommand } from './commands/init.js';
 import { connectionAddCommand, connectionListCommand } from './commands/connection.js';
 import { platformsCommand } from './commands/platforms.js';
 import { actionsSearchCommand, actionsKnowledgeCommand, actionsExecuteCommand } from './commands/actions.js';
 
+const require = createRequire(import.meta.url);
+const { version } = require('../package.json');
+
 const program = new Command();
 
 program
   .name('pica')
-  .description('CLI for managing Pica integrations')
-  .version('0.1.0');
+  .description('CLI for managing Pica')
+  .version(version);
 
 program
   .command('init')
