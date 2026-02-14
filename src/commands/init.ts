@@ -11,22 +11,23 @@ import {
   type InstallScope,
   type AgentStatus,
 } from '../lib/agents.js';
-import { PicaApi } from '../lib/api.js';
-import { getApiKeyUrl, openApiKeyPage } from '../lib/browser.js';
+import { PicaApi, TimeoutError } from '../lib/api.js';
+import { getApiKeyUrl, openApiKeyPage, openConnectionPage, getConnectionUrl } from '../lib/browser.js';
+import open from 'open';
 import { printTable } from '../lib/table.js';
 import type { Agent } from '../lib/types.js';
 
 export async function initCommand(options: { yes?: boolean; global?: boolean; project?: boolean }): Promise<void> {
-  p.intro(pc.bgCyan(pc.black(' Pica ')));
-
   const existingConfig = readConfig();
 
   if (existingConfig) {
+    p.intro(pc.bgCyan(pc.black(' Pica ')));
     await handleExistingConfig(existingConfig.apiKey, options);
     return;
   }
 
-  // First-run: no config exists
+  // First-run: show welcome banner
+  printBanner();
   await freshSetup(options);
 }
 
@@ -490,13 +491,13 @@ async function freshSetup(options: { yes?: boolean; global?: boolean; project?: 
 
     summary +=
       pc.yellow('Note: Project config files can be committed to share with your team.\n') +
-      pc.yellow('Team members will need their own API key.\n\n') +
-      `Next steps:\n` +
-      `  ${pc.cyan('pica add gmail')}       - Connect Gmail\n` +
-      `  ${pc.cyan('pica platforms')}        - See all 200+ integrations`;
+      pc.yellow('Team members will need their own API key.');
 
     p.note(summary, 'Setup Complete');
-    p.outro('Pica MCP installed!');
+
+    await promptConnectIntegrations(apiKey);
+
+    p.outro('Your AI agents now have access to Pica integrations!');
     return;
   }
 
@@ -520,15 +521,130 @@ async function freshSetup(options: { yes?: boolean; global?: boolean; project?: 
   });
 
   p.note(
-    `Config saved to: ${pc.dim(getConfigPath())}\n\n` +
-    `Next steps:\n` +
-    `  ${pc.cyan('pica add gmail')}       - Connect Gmail\n` +
-    `  ${pc.cyan('pica platforms')}        - See all 200+ integrations\n` +
-    `  ${pc.cyan('pica connection list')}  - View your connections`,
+    `Config saved to: ${pc.dim(getConfigPath())}`,
     'Setup Complete'
   );
 
+  await promptConnectIntegrations(apiKey);
+
   p.outro('Your AI agents now have access to Pica integrations!');
+}
+
+// ── Welcome banner & post-setup integration prompt ───────────────────
+
+function printBanner(): void {
+  console.log();
+  console.log(pc.cyan('  ██████████████   ██████   ██████████████   ██████████████'));
+  console.log(pc.cyan('  ██████████████   ██████   ██████████████   ██████████████'));
+  console.log(pc.cyan('  █████    █████   ██████   █████            █████    █████'));
+  console.log(pc.cyan('  █████    █████   ██████   █████            █████    █████'));
+  console.log(pc.cyan('  ██████████████   ██████   █████            ██████████████'));
+  console.log(pc.cyan('  ██████████████   ██████   █████            ██████████████'));
+  console.log(pc.cyan('  █████            ██████   █████            █████    █████'));
+  console.log(pc.cyan('  █████            ██████   █████            █████    █████'));
+  console.log(pc.cyan('  █████            ██████   ██████████████   █████    █████'));
+  console.log(pc.cyan('  █████            ██████   ██████████████   █████    █████'));
+  console.log();
+  console.log(pc.dim('  U N I V E R S A L   I N T E G R A T I O N S   F O R   A I'));
+  console.log();
+}
+
+const TOP_INTEGRATIONS = [
+  { value: 'gmail', label: 'Gmail', hint: 'Read and send emails' },
+  { value: 'google-calendar', label: 'Google Calendar', hint: 'Manage events and schedules' },
+  { value: 'notion', label: 'Notion', hint: 'Access pages, databases, and docs' },
+];
+
+async function promptConnectIntegrations(apiKey: string): Promise<void> {
+  const api = new PicaApi(apiKey);
+  const connected: string[] = [];
+
+  // Check which top integrations are already connected
+  try {
+    const existing = await api.listConnections();
+    for (const conn of existing) {
+      const match = TOP_INTEGRATIONS.find(
+        i => i.value === conn.platform.toLowerCase(),
+      );
+      if (match) connected.push(match.value);
+    }
+  } catch {
+    // If we can't check, show all options
+  }
+
+  let first = true;
+
+  while (true) {
+    const available = TOP_INTEGRATIONS.filter(i => !connected.includes(i.value));
+
+    const options: { value: string; label: string; hint?: string }[] = [
+      ...available.map(i => ({
+        value: i.value,
+        label: i.label,
+        hint: i.hint,
+      })),
+      { value: 'more', label: 'Browse all 200+ platforms' },
+      { value: 'skip', label: 'Skip for now', hint: 'you can always run pica add later' },
+    ];
+
+    const message = first
+      ? 'Connect your first integration?'
+      : 'Connect another?';
+
+    const choice = await p.select({ message, options });
+
+    if (p.isCancel(choice) || choice === 'skip') {
+      break;
+    }
+
+    if (choice === 'more') {
+      try {
+        await open('https://app.picaos.com/connections');
+        p.log.info('Opened Pica dashboard in browser.');
+      } catch {
+        p.note('https://app.picaos.com/connections', 'Open in browser');
+      }
+      p.log.info(`Connect from the dashboard, or use ${pc.cyan('pica add <platform>')}`);
+      break;
+    }
+
+    const platform = choice as string;
+    const integration = TOP_INTEGRATIONS.find(i => i.value === platform);
+    const label = integration?.label ?? platform;
+
+    p.log.info(`Opening browser to connect ${pc.cyan(label)}...`);
+
+    try {
+      await openConnectionPage(platform);
+    } catch {
+      const url = getConnectionUrl(platform);
+      p.log.warn('Could not open browser automatically.');
+      p.note(url, 'Open manually');
+    }
+
+    const spinner = p.spinner();
+    spinner.start('Waiting for connection... (complete auth in browser)');
+
+    try {
+      await api.waitForConnection(platform, 5 * 60 * 1000, 5000);
+      spinner.stop(`${label} connected!`);
+      p.log.success(`${pc.green('\u2713')} ${label} is now available to your AI agents`);
+      connected.push(platform);
+      first = false;
+    } catch (error) {
+      spinner.stop('Connection timed out');
+      if (error instanceof TimeoutError) {
+        p.log.warn(`No worries. Connect later with: ${pc.cyan(`pica add ${platform}`)}`);
+      }
+      first = false;
+    }
+
+    // All top integrations connected
+    if (TOP_INTEGRATIONS.every(i => connected.includes(i.value))) {
+      p.log.success('All top integrations connected!');
+      break;
+    }
+  }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
