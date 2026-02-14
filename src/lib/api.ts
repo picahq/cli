@@ -3,12 +3,7 @@ import type {
   ConnectionsResponse,
   Platform,
   PlatformsResponse,
-  PlatformAction,
-  ActionsSearchResponse,
-  ActionKnowledge,
-  KnowledgeResponse,
 } from './types.js';
-import { normalizeActionId } from './actions.js';
 
 const API_BASE = 'https://api.picaos.com/v1';
 
@@ -94,61 +89,6 @@ export class PicaApi {
     } while (page <= totalPages);
 
     return allPlatforms;
-  }
-
-  async searchActions(platform: string, query?: string, limit = 10): Promise<PlatformAction[]> {
-    const queryParams: Record<string, string> = {
-      limit: String(limit),
-      executeAgent: 'true',
-    };
-    if (query) queryParams.query = query;
-
-    const response = await this.requestFull<ActionsSearchResponse>({
-      path: `/available-actions/search/${encodeURIComponent(platform)}`,
-      queryParams,
-    });
-    return response.rows || [];
-  }
-
-  async getActionKnowledge(actionId: string): Promise<ActionKnowledge | null> {
-    const normalized = normalizeActionId(actionId);
-    const response = await this.requestFull<KnowledgeResponse>({
-      path: '/knowledge',
-      queryParams: { _id: normalized },
-    });
-    return response.rows?.[0] ?? null;
-  }
-
-  async executeAction(opts: {
-    method: string;
-    path: string;
-    actionId: string;
-    connectionKey: string;
-    data?: unknown;
-    queryParams?: Record<string, string>;
-    headers?: Record<string, string>;
-    isFormData?: boolean;
-    isFormUrlEncoded?: boolean;
-  }): Promise<unknown> {
-    const headers: Record<string, string> = {
-      'x-pica-connection-key': opts.connectionKey,
-      'x-pica-action-id': normalizeActionId(opts.actionId),
-      ...opts.headers,
-    };
-
-    if (opts.isFormData) {
-      headers['Content-Type'] = 'multipart/form-data';
-    } else if (opts.isFormUrlEncoded) {
-      headers['Content-Type'] = 'application/x-www-form-urlencoded';
-    }
-
-    return this.requestFull<unknown>({
-      path: `/passthrough${opts.path}`,
-      method: opts.method.toUpperCase(),
-      body: opts.data,
-      headers,
-      queryParams: opts.queryParams,
-    });
   }
 
   async waitForConnection(

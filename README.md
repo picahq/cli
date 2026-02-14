@@ -96,45 +96,6 @@ pica platforms
 pica platforms -c "CRM"
 ```
 
-### Search actions
-
-Find available API actions on any connected platform:
-
-```bash
-pica search gmail "send email"
-pica search slack "post message"
-pica search stripe "list payments"
-```
-
-```
-  POST    /gmail/v1/users/{{userId}}/messages/send
-         Send Message
-         conn_mod_def::ABC123::XYZ789
-```
-
-### Read API docs
-
-```bash
-pica actions knowledge <actionId>
-pica actions k <actionId> --full    # no truncation
-```
-
-Shows method, path, path variables, parameter schemas, and request/response examples.
-
-### Execute an action
-
-```bash
-pica exec <actionId> \
-  -c live::gmail::default::abc123 \
-  -d '{"to": "test@example.com", "subject": "Hello", "body": "Hi there"}' \
-  -p userId=me
-```
-
-If you omit flags, the CLI prompts interactively:
-- Auto-selects the connection if only one exists for the platform
-- Prompts for each `{{path variable}}` not provided via `-p`
-- Prompts for the request body on POST/PUT/PATCH if `-d` is missing
-
 ## Commands
 
 | Command | Description |
@@ -143,9 +104,6 @@ If you omit flags, the CLI prompts interactively:
 | `pica add <platform>` | Connect a platform via OAuth |
 | `pica list` | List connections with keys |
 | `pica platforms` | Browse available platforms |
-| `pica search <platform> [query]` | Search for actions |
-| `pica actions knowledge <id>` | Get API docs for an action |
-| `pica exec <id>` | Execute an action |
 
 Every command supports `--json` for machine-readable output.
 
@@ -155,9 +113,6 @@ Every command supports `--json` for machine-readable output.
 |-------|------|
 | `pica ls` | `pica list` |
 | `pica p` | `pica platforms` |
-| `pica a search` | `pica actions search` |
-| `pica a k` | `pica actions knowledge` |
-| `pica a x` | `pica actions execute` |
 
 ## How it works
 
@@ -193,11 +148,9 @@ src/
     init.ts             # pica init (setup, status display, targeted actions)
     connection.ts       # pica add, pica list
     platforms.ts        # pica platforms
-    actions.ts          # pica search, actions knowledge, exec
   lib/
     api.ts              # HTTP client for Pica API
     types.ts            # TypeScript interfaces
-    actions.ts          # Action ID normalization, path variable helpers
     config.ts           # ~/.pica/config.json read/write
     agents.ts           # Agent detection, MCP config, status reporting
     platforms.ts        # Platform search and fuzzy matching

@@ -5,7 +5,6 @@ import { Command } from 'commander';
 import { initCommand } from './commands/init.js';
 import { connectionAddCommand, connectionListCommand } from './commands/connection.js';
 import { platformsCommand } from './commands/platforms.js';
-import { actionsSearchCommand, actionsKnowledgeCommand, actionsExecuteCommand } from './commands/actions.js';
 
 const require = createRequire(import.meta.url);
 const { version } = require('../package.json');
@@ -72,73 +71,5 @@ program
   .action(async () => {
     await connectionListCommand();
   });
-
-// Actions command group
-const actions = program
-  .command('actions')
-  .alias('a')
-  .description('Discover and execute platform actions');
-
-actions
-  .command('search <platform> [query]')
-  .description('Search actions on a platform')
-  .option('--json', 'Output as JSON')
-  .option('-l, --limit <limit>', 'Max results', '10')
-  .action(async (platform: string, query: string | undefined, options: { json?: boolean; limit?: string }) => {
-    await actionsSearchCommand(platform, query, options);
-  });
-
-actions
-  .command('knowledge <actionId>')
-  .alias('k')
-  .description('Get API docs for an action')
-  .option('--json', 'Output as JSON')
-  .option('--full', 'Show full knowledge (no truncation)')
-  .action(async (actionId: string, options: { json?: boolean; full?: boolean }) => {
-    await actionsKnowledgeCommand(actionId, options);
-  });
-
-actions
-  .command('execute <actionId>')
-  .alias('x')
-  .description('Execute an action')
-  .option('-c, --connection <key>', 'Connection key to use')
-  .option('-d, --data <json>', 'Request body as JSON')
-  .option('-p, --path-var <key=value...>', 'Path variable', collectValues)
-  .option('-q, --query <key=value...>', 'Query parameter', collectValues)
-  .option('--form-data', 'Send as multipart/form-data')
-  .option('--form-urlencoded', 'Send as application/x-www-form-urlencoded')
-  .option('--json', 'Output as JSON')
-  .action(async (actionId: string, options) => {
-    await actionsExecuteCommand(actionId, options);
-  });
-
-// Top-level shortcuts
-program
-  .command('search <platform> [query]')
-  .description('Shortcut for: actions search')
-  .option('--json', 'Output as JSON')
-  .option('-l, --limit <limit>', 'Max results', '10')
-  .action(async (platform: string, query: string | undefined, options: { json?: boolean; limit?: string }) => {
-    await actionsSearchCommand(platform, query, options);
-  });
-
-program
-  .command('exec <actionId>')
-  .description('Shortcut for: actions execute')
-  .option('-c, --connection <key>', 'Connection key to use')
-  .option('-d, --data <json>', 'Request body as JSON')
-  .option('-p, --path-var <key=value...>', 'Path variable', collectValues)
-  .option('-q, --query <key=value...>', 'Query parameter', collectValues)
-  .option('--form-data', 'Send as multipart/form-data')
-  .option('--form-urlencoded', 'Send as application/x-www-form-urlencoded')
-  .option('--json', 'Output as JSON')
-  .action(async (actionId: string, options) => {
-    await actionsExecuteCommand(actionId, options);
-  });
-
-function collectValues(value: string, previous: string[]): string[] {
-  return (previous || []).concat([value]);
-}
 
 program.parse();
