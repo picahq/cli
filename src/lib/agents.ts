@@ -96,6 +96,14 @@ const AGENTS: Agent[] = [
     projectConfigPath: '.codex/config.toml',
     configFormat: 'toml',
   },
+  {
+    id: 'kiro',
+    name: 'Kiro',
+    configPath: '~/.kiro/settings/mcp.json',
+    configKey: 'mcpServers',
+    detectDir: '~/.kiro',
+    projectConfigPath: '.kiro/settings/mcp.json',
+  },
 ];
 
 export function getAllAgents(): Agent[] {

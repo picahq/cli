@@ -46,6 +46,7 @@ If you already have a config, `pica init` shows your current setup instead of st
   Cursor          ○ no    ○ no
   Windsurf        -       -
   Codex           ● yes   ○ no
+  Kiro            ○ no    ○ no
 
   - = not detected on this machine
 ```
@@ -54,7 +55,7 @@ Then it offers targeted actions based on what's missing:
 
 - **Update API key** -- validates the new key, then re-installs to every agent that currently has the MCP (preserving global/project scopes)
 - **Install MCP to more agents** -- only shows detected agents missing the MCP
-- **Install MCP for this project** -- creates `.mcp.json` / `.cursor/mcp.json` / `.codex/config.toml` in cwd for agents that support project scope
+- **Install MCP for this project** -- creates `.mcp.json` / `.cursor/mcp.json` / `.codex/config.toml` / `.kiro/settings/mcp.json` in cwd for agents that support project scope
 - **Start fresh** -- full setup flow from scratch
 
 Options that don't apply are hidden. If every detected agent already has the MCP globally, "Install MCP to more agents" won't appear.
@@ -130,6 +131,7 @@ All API calls route through Pica's passthrough proxy (`api.picaos.com/v1/passthr
 | Cursor | `~/.cursor/mcp.json` | `.cursor/mcp.json` |
 | Windsurf | `~/.codeium/windsurf/mcp_config.json` | n/a |
 | Codex | `~/.codex/config.toml` | `.codex/config.toml` |
+| Kiro | `~/.kiro/settings/mcp.json` | `.kiro/settings/mcp.json` |
 
 Global installs make the MCP available everywhere. Project installs create config files in your current directory that can be committed and shared with your team (each team member needs their own API key).
 
