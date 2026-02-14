@@ -378,7 +378,7 @@ async function freshSetup(options: { yes?: boolean; global?: boolean; project?: 
       {
         value: 'all',
         label: 'All agents',
-        hint: 'Claude Code, Claude Desktop, Cursor, Windsurf',
+        hint: allAgents.map(a => a.name).join(', '),
       },
       ...allAgents.map(agent => ({
         value: agent.id,

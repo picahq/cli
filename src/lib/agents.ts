@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import type { Agent } from './types.js';
 
 export type InstallScope = 'global' | 'project';
@@ -86,6 +87,15 @@ const AGENTS: Agent[] = [
     configKey: 'mcpServers',
     detectDir: getWindsurfDetectDir(),
   },
+  {
+    id: 'codex',
+    name: 'Codex',
+    configPath: '~/.codex/config.toml',
+    configKey: 'mcp_servers',
+    detectDir: '~/.codex',
+    projectConfigPath: '.codex/config.toml',
+    configFormat: 'toml',
+  },
 ];
 
 export function getAllAgents(): Agent[] {
@@ -117,6 +127,9 @@ export function readAgentConfig(agent: Agent, scope: InstallScope = 'global'): R
   }
   try {
     const content = fs.readFileSync(configPath, 'utf-8');
+    if (agent.configFormat === 'toml') {
+      return parseToml(content) as Record<string, unknown>;
+    }
     return JSON.parse(content);
   } catch {
     return {};
@@ -131,7 +144,11 @@ export function writeAgentConfig(agent: Agent, config: Record<string, unknown>, 
     fs.mkdirSync(configDir, { recursive: true });
   }
 
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+  if (agent.configFormat === 'toml') {
+    fs.writeFileSync(configPath, stringifyToml(config));
+  } else {
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+  }
 }
 
 export function getMcpServerConfig(apiKey: string): Record<string, unknown> {

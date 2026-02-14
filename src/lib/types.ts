@@ -5,6 +5,7 @@ export interface Agent {
   configKey: string;
   detectDir: string;
   projectConfigPath?: string;
+  configFormat?: 'json' | 'toml';
 }
 
 export interface Connection {
