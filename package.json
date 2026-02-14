@@ -1,8 +1,12 @@
 {
   "name": "@picahq/cli",
-  "version": "0.2.0",
-  "description": "CLI for managing Pica integrations",
+  "version": "0.3.0",
+  "description": "CLI for managing Pica",
   "type": "module",
+  "files": [
+    "bin",
+    "dist"
+  ],
   "bin": {
     "pica": "./bin/cli.js"
   },
