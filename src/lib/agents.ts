@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
-import type { Agent } from './types.js';
+import type { Agent, AccessControlSettings } from './types.js';
 
 export type InstallScope = 'global' | 'project';
 
@@ -159,22 +159,39 @@ export function writeAgentConfig(agent: Agent, config: Record<string, unknown>, 
   }
 }
 
-export function getMcpServerConfig(apiKey: string): Record<string, unknown> {
+export function getMcpServerConfig(apiKey: string, accessControl?: AccessControlSettings): Record<string, unknown> {
+  const env: Record<string, string> = {
+    PICA_SECRET: apiKey,
+  };
+
+  if (accessControl) {
+    if (accessControl.permissions && accessControl.permissions !== 'admin') {
+      env.PICA_PERMISSIONS = accessControl.permissions;
+    }
+    if (accessControl.connectionKeys && !(accessControl.connectionKeys.length === 1 && accessControl.connectionKeys[0] === '*')) {
+      env.PICA_CONNECTION_KEYS = accessControl.connectionKeys.join(',');
+    }
+    if (accessControl.actionIds && !(accessControl.actionIds.length === 1 && accessControl.actionIds[0] === '*')) {
+      env.PICA_ACTION_IDS = accessControl.actionIds.join(',');
+    }
+    if (accessControl.knowledgeAgent) {
+      env.PICA_KNOWLEDGE_AGENT = 'true';
+    }
+  }
+
   return {
     command: 'npx',
     args: ['-y', '@picahq/mcp'],
-    env: {
-      PICA_SECRET: apiKey,
-    },
+    env,
   };
 }
 
-export function installMcpConfig(agent: Agent, apiKey: string, scope: InstallScope = 'global'): void {
+export function installMcpConfig(agent: Agent, apiKey: string, scope: InstallScope = 'global', accessControl?: AccessControlSettings): void {
   const config = readAgentConfig(agent, scope);
   const configKey = agent.configKey;
 
   const mcpServers = (config[configKey] as Record<string, unknown>) || {};
-  mcpServers['pica'] = getMcpServerConfig(apiKey);
+  mcpServers['pica'] = getMcpServerConfig(apiKey, accessControl);
 
   config[configKey] = mcpServers;
   writeAgentConfig(agent, config, scope);

@@ -1,6 +1,6 @@
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
-import { writeConfig, readConfig, getConfigPath } from '../lib/config.js';
+import { writeConfig, readConfig, getConfigPath, getAccessControl } from '../lib/config.js';
 import {
   getAllAgents,
   installMcpConfig,
@@ -13,6 +13,7 @@ import {
 } from '../lib/agents.js';
 import { PicaApi, TimeoutError } from '../lib/api.js';
 import { getApiKeyUrl, openApiKeyPage, openConnectionPage, getConnectionUrl } from '../lib/browser.js';
+import { configCommand } from './config.js';
 import open from 'open';
 import { printTable } from '../lib/table.js';
 import type { Agent } from '../lib/types.js';
@@ -74,10 +75,20 @@ async function handleExistingConfig(
   if (notDetected.length > 0) {
     console.log(`  ${pc.dim('- = not detected on this machine')}`);
   }
-  console.log();
+  // Show access control summary if non-default settings are configured
+  const ac = getAccessControl();
+  if (Object.keys(ac).length > 0) {
+    console.log(`  ${pc.bold('Access Control')}`);
+    console.log(`  ${pc.dim('─'.repeat(42))}`);
+    if (ac.permissions) console.log(`  ${pc.dim('Permissions:')}   ${ac.permissions}`);
+    if (ac.connectionKeys) console.log(`  ${pc.dim('Connections:')}   ${ac.connectionKeys.join(', ')}`);
+    if (ac.actionIds) console.log(`  ${pc.dim('Action IDs:')}    ${ac.actionIds.join(', ')}`);
+    if (ac.knowledgeAgent) console.log(`  ${pc.dim('Knowledge only:')} yes`);
+    console.log();
+  }
 
   // Build action menu: only show relevant options
-  type Action = 'update-key' | 'install-more' | 'install-project' | 'start-fresh';
+  type Action = 'update-key' | 'install-more' | 'install-project' | 'access-control' | 'start-fresh';
   const actionOptions: { value: Action; label: string; hint?: string }[] = [];
 
   actionOptions.push({
@@ -104,6 +115,12 @@ async function handleExistingConfig(
   }
 
   actionOptions.push({
+    value: 'access-control',
+    label: 'Configure access control',
+    hint: 'permissions, connections, actions',
+  });
+
+  actionOptions.push({
     value: 'start-fresh',
     label: 'Start fresh (reconfigure everything)',
   });
@@ -127,6 +144,9 @@ async function handleExistingConfig(
       break;
     case 'install-project':
       await handleInstallProject(apiKey, agentsMissingProject);
+      break;
+    case 'access-control':
+      await configCommand();
       break;
     case 'start-fresh':
       await freshSetup({ yes: true });
@@ -186,24 +206,26 @@ async function handleUpdateKey(statuses: AgentStatus[]): Promise<void> {
   spinner.stop('API key validated');
 
   // Re-install MCP to every agent that currently has it (preserve scopes)
+  const ac = getAccessControl();
   const reinstalled: string[] = [];
   for (const s of statuses) {
     if (s.globalMcp) {
-      installMcpConfig(s.agent, newKey, 'global');
+      installMcpConfig(s.agent, newKey, 'global', ac);
       reinstalled.push(`${s.agent.name} (global)`);
     }
     if (s.projectMcp) {
-      installMcpConfig(s.agent, newKey, 'project');
+      installMcpConfig(s.agent, newKey, 'project', ac);
       reinstalled.push(`${s.agent.name} (project)`);
     }
   }
 
-  // Update config
+  // Update config (preserve accessControl)
   const config = readConfig();
   writeConfig({
     apiKey: newKey,
     installedAgents: config?.installedAgents ?? [],
     createdAt: config?.createdAt ?? new Date().toISOString(),
+    accessControl: config?.accessControl,
   });
 
   if (reinstalled.length > 0) {
@@ -214,6 +236,8 @@ async function handleUpdateKey(statuses: AgentStatus[]): Promise<void> {
 }
 
 async function handleInstallMore(apiKey: string, missing: AgentStatus[]): Promise<void> {
+  const ac = getAccessControl();
+
   if (missing.length === 1) {
     // Only one option, just confirm
     const agent = missing[0].agent;
@@ -227,7 +251,7 @@ async function handleInstallMore(apiKey: string, missing: AgentStatus[]): Promis
       return;
     }
 
-    installMcpConfig(agent, apiKey, 'global');
+    installMcpConfig(agent, apiKey, 'global', ac);
     updateConfigAgents(agent.id);
     p.log.success(`${agent.name}: MCP installed`);
     p.outro('Done.');
@@ -249,7 +273,7 @@ async function handleInstallMore(apiKey: string, missing: AgentStatus[]): Promis
 
   const agents = missing.filter(s => (selected as string[]).includes(s.agent.id));
   for (const s of agents) {
-    installMcpConfig(s.agent, apiKey, 'global');
+    installMcpConfig(s.agent, apiKey, 'global', ac);
     updateConfigAgents(s.agent.id);
     p.log.success(`${s.agent.name}: MCP installed`);
   }
@@ -258,6 +282,8 @@ async function handleInstallMore(apiKey: string, missing: AgentStatus[]): Promis
 }
 
 async function handleInstallProject(apiKey: string, missing: AgentStatus[]): Promise<void> {
+  const ac = getAccessControl();
+
   if (missing.length === 1) {
     const agent = missing[0].agent;
     const confirm = await p.confirm({
@@ -270,7 +296,7 @@ async function handleInstallProject(apiKey: string, missing: AgentStatus[]): Pro
       return;
     }
 
-    installMcpConfig(agent, apiKey, 'project');
+    installMcpConfig(agent, apiKey, 'project', ac);
     const configPath = getAgentConfigPath(agent, 'project');
     p.log.success(`${agent.name}: ${configPath} created`);
     p.note(
@@ -297,7 +323,7 @@ async function handleInstallProject(apiKey: string, missing: AgentStatus[]): Pro
 
   const agents = missing.filter(s => (selected as string[]).includes(s.agent.id));
   for (const s of agents) {
-    installMcpConfig(s.agent, apiKey, 'project');
+    installMcpConfig(s.agent, apiKey, 'project', ac);
     const configPath = getAgentConfigPath(s.agent, 'project');
     p.log.success(`${s.agent.name}: ${configPath} created`);
   }

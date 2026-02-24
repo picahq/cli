@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import type { Config } from './types.js';
+import type { Config, AccessControlSettings } from './types.js';
 
 const CONFIG_DIR = path.join(os.homedir(), '.pica');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
@@ -44,4 +44,36 @@ export function updateInstalledAgents(agentIds: string[]): void {
     config.installedAgents = agentIds;
     writeConfig(config);
   }
+}
+
+export function getAccessControl(): AccessControlSettings {
+  return readConfig()?.accessControl ?? {};
+}
+
+export function updateAccessControl(settings: AccessControlSettings): void {
+  const config = readConfig();
+  if (!config) return;
+
+  const cleaned: AccessControlSettings = {};
+
+  if (settings.permissions && settings.permissions !== 'admin') {
+    cleaned.permissions = settings.permissions;
+  }
+  if (settings.connectionKeys && !(settings.connectionKeys.length === 1 && settings.connectionKeys[0] === '*')) {
+    cleaned.connectionKeys = settings.connectionKeys;
+  }
+  if (settings.actionIds && !(settings.actionIds.length === 1 && settings.actionIds[0] === '*')) {
+    cleaned.actionIds = settings.actionIds;
+  }
+  if (settings.knowledgeAgent) {
+    cleaned.knowledgeAgent = true;
+  }
+
+  if (Object.keys(cleaned).length === 0) {
+    delete config.accessControl;
+  } else {
+    config.accessControl = cleaned;
+  }
+
+  writeConfig(config);
 }
