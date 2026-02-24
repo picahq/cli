@@ -56,6 +56,7 @@ Then it offers targeted actions based on what's missing:
 - **Update API key** -- validates the new key, then re-installs to every agent that currently has the MCP (preserving global/project scopes)
 - **Install MCP to more agents** -- only shows detected agents missing the MCP
 - **Install MCP for this project** -- creates `.mcp.json` / `.cursor/mcp.json` / `.codex/config.toml` / `.kiro/settings/mcp.json` in cwd for agents that support project scope
+- **Configure access control** -- launches the `pica config` flow (see below)
 - **Start fresh** -- full setup flow from scratch
 
 Options that don't apply are hidden. If every detected agent already has the MCP globally, "Install MCP to more agents" won't appear.
@@ -67,6 +68,25 @@ Options that don't apply are hidden. If every detected agent already has the MCP
 | `-y, --yes` | Skip confirmations |
 | `-g, --global` | Install MCP globally (default, available in all projects) |
 | `-p, --project` | Install MCP for this project only (creates config files in cwd) |
+
+## Access control
+
+```bash
+pica config
+```
+
+Configure what the MCP server is allowed to do. This is optional -- by default, agents have full access.
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| Permission level | `admin` (full), `write` (no DELETE), `read` (GET only) | `admin` |
+| Connection keys | Restrict to specific connections | All (`*`) |
+| Action IDs | Restrict to specific action IDs | All (`*`) |
+| Knowledge-only mode | Disable action execution (read docs only) | Off |
+
+Settings are saved to `~/.pica/config.json` and propagated as environment variables (`PICA_PERMISSIONS`, `PICA_CONNECTION_KEYS`, `PICA_ACTION_IDS`, `PICA_KNOWLEDGE_AGENT`) to all installed agent configs. Selecting all defaults removes the extra env vars entirely.
+
+You can also access this from `pica init` → "Configure access control".
 
 ## Usage
 
@@ -103,6 +123,7 @@ pica platforms -c "CRM"
 | Command | Description |
 |---------|-------------|
 | `pica init` | Set up API key and install MCP |
+| `pica config` | Configure MCP access control |
 | `pica add <platform>` | Connect a platform via OAuth |
 | `pica list` | List connections with keys |
 | `pica platforms` | Browse available platforms |
@@ -150,6 +171,7 @@ src/
   index.ts              # Commander setup and command registration
   commands/
     init.ts             # pica init (setup, status display, targeted actions)
+    config.ts           # pica config (access control settings)
     connection.ts       # pica add, pica list
     platforms.ts        # pica platforms
   lib/
