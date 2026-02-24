@@ -3,6 +3,7 @@
 import { createRequire } from 'module';
 import { Command } from 'commander';
 import { initCommand } from './commands/init.js';
+import { configCommand } from './commands/config.js';
 import { connectionAddCommand, connectionListCommand } from './commands/connection.js';
 import { platformsCommand } from './commands/platforms.js';
 
@@ -24,6 +25,13 @@ program
   .option('-p, --project', 'Install MCP for this project only (creates .mcp.json)')
   .action(async (options) => {
     await initCommand(options);
+  });
+
+program
+  .command('config')
+  .description('Configure MCP access control (permissions, connections, actions)')
+  .action(async () => {
+    await configCommand();
   });
 
 const connection = program

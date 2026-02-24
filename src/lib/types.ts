@@ -34,10 +34,20 @@ export interface PlatformsResponse {
   page: number;
 }
 
+export type PermissionLevel = 'read' | 'write' | 'admin';
+
+export interface AccessControlSettings {
+  permissions?: PermissionLevel;
+  connectionKeys?: string[];
+  actionIds?: string[];
+  knowledgeAgent?: boolean;
+}
+
 export interface Config {
   apiKey: string;
   installedAgents: string[];
   createdAt: string;
+  accessControl?: AccessControlSettings;
 }
 
 export interface ConnectionsResponse {
