@@ -15,7 +15,34 @@ const program = new Command();
 
 program
   .name('pica')
-  .description('CLI for managing Pica')
+  .description(`Pica CLI — Connect AI agents to 200+ platforms through one interface.
+
+  Setup:
+    pica init                              Set up API key and install MCP server
+    pica add <platform>                    Connect a platform via OAuth (e.g. gmail, slack, shopify)
+    pica config                            Configure access control (permissions, scoping)
+
+  Workflow (use these in order):
+    1. pica list                           List your connected platforms and connection keys
+    2. pica actions search <platform> <q>  Search for actions using natural language
+    3. pica actions knowledge <plat> <id>  Get full docs for an action (ALWAYS do this before execute)
+    4. pica actions execute <p> <id> <key> Execute the action
+
+  Example — send an email through Gmail:
+    $ pica list
+    # Find: gmail  operational  live::gmail::default::abc123
+
+    $ pica actions search gmail "send email" -t execute
+    # Find: POST  Send Email  conn_mod_def::xxx::yyy
+
+    $ pica actions knowledge gmail conn_mod_def::xxx::yyy
+    # Read the docs: required fields are to, subject, body, connectionKey
+
+    $ pica actions execute gmail conn_mod_def::xxx::yyy live::gmail::default::abc123 \\
+        -d '{"to":"j@example.com","subject":"Hello","body":"Hi!","connectionKey":"live::gmail::default::abc123"}'
+
+  Platform names are always kebab-case (e.g. hub-spot, ship-station, google-calendar).
+  Run 'pica platforms' to browse all 200+ available platforms.`)
   .version(version);
 
 program
@@ -68,12 +95,12 @@ program
 const actions = program
   .command('actions')
   .alias('a')
-  .description('Search, explore, and execute platform actions');
+  .description('Search, explore, and execute platform actions (workflow: search → knowledge → execute)');
 
 actions
   .command('search <platform> <query>')
-  .description('Search for actions on a platform')
-  .option('-t, --type <type>', 'Agent type: execute or knowledge (default: knowledge)')
+  .description('Search for actions on a platform (e.g. pica actions search gmail "send email")')
+  .option('-t, --type <type>', 'execute (to run it) or knowledge (to learn about it). Default: knowledge')
   .action(async (platform: string, query: string, options: { type?: string }) => {
     await actionsSearchCommand(platform, query, options);
   });
@@ -81,7 +108,7 @@ actions
 actions
   .command('knowledge <platform> <actionId>')
   .alias('k')
-  .description('Get detailed documentation for an action')
+  .description('Get full docs for an action — MUST call before execute to know required params')
   .action(async (platform: string, actionId: string) => {
     await actionsKnowledgeCommand(platform, actionId);
   });
@@ -89,7 +116,7 @@ actions
 actions
   .command('execute <platform> <actionId> <connectionKey>')
   .alias('x')
-  .description('Execute an action on a connected platform')
+  .description('Execute an action — pass connectionKey from "pica list", actionId from "actions search"')
   .option('-d, --data <json>', 'Request body as JSON')
   .option('--path-vars <json>', 'Path variables as JSON')
   .option('--query-params <json>', 'Query parameters as JSON')
