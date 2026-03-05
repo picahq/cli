@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import type { Config, AccessControlSettings } from './types.js';
+import type { Config, AccessControlSettings, PermissionLevel } from './types.js';
 
 const CONFIG_DIR = path.join(os.homedir(), '.pica');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
@@ -33,9 +33,59 @@ export function writeConfig(config: Config): void {
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), { mode: 0o600 });
 }
 
+function readPicaRc(): Record<string, string> {
+  const rcPath = path.join(process.cwd(), '.picarc');
+  if (!fs.existsSync(rcPath)) return {};
+
+  try {
+    const content = fs.readFileSync(rcPath, 'utf-8');
+    const result: Record<string, string> = {};
+    for (const line of content.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eqIndex = trimmed.indexOf('=');
+      if (eqIndex === -1) continue;
+      const key = trimmed.slice(0, eqIndex).trim();
+      const value = trimmed.slice(eqIndex + 1).trim();
+      result[key] = value;
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
 export function getApiKey(): string | null {
-  const config = readConfig();
-  return config?.apiKey ?? null;
+  // Priority: env var > .picarc > ~/.pica/config.json
+  if (process.env.PICA_SECRET) return process.env.PICA_SECRET;
+
+  const rc = readPicaRc();
+  if (rc.PICA_SECRET) return rc.PICA_SECRET;
+
+  return readConfig()?.apiKey ?? null;
+}
+
+export function getAccessControlFromAllSources(): AccessControlSettings {
+  const rc = readPicaRc();
+  const fileAc = getAccessControl();
+
+  // .picarc overrides take priority over config file
+  const merged: AccessControlSettings = { ...fileAc };
+
+  if (rc.PICA_PERMISSIONS) {
+    merged.permissions = rc.PICA_PERMISSIONS as PermissionLevel;
+  }
+  if (rc.PICA_CONNECTION_KEYS) {
+    merged.connectionKeys = rc.PICA_CONNECTION_KEYS.split(',').map(s => s.trim()).filter(Boolean);
+  }
+  if (rc.PICA_ACTION_IDS) {
+    merged.actionIds = rc.PICA_ACTION_IDS.split(',').map(s => s.trim()).filter(Boolean);
+  }
+  if (rc.PICA_KNOWLEDGE_AGENT) {
+    merged.knowledgeAgent = rc.PICA_KNOWLEDGE_AGENT === 'true';
+  }
+
+  return merged;
 }
 
 export function updateInstalledAgents(agentIds: string[]): void {

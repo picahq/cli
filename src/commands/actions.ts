@@ -1,7 +1,6 @@
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
-import { getApiKey } from '../lib/config.js';
-import { getAccessControl } from '../lib/config.js';
+import { getApiKey, getAccessControlFromAllSources } from '../lib/config.js';
 import {
   PicaApi,
   filterByPermissions,
@@ -19,7 +18,7 @@ function getConfig() {
     process.exit(1);
   }
 
-  const ac = getAccessControl();
+  const ac = getAccessControlFromAllSources();
   const permissions: PermissionLevel = ac.permissions || 'admin';
   const connectionKeys: string[] = ac.connectionKeys || ['*'];
   const actionIds: string[] = ac.actionIds || ['*'];
