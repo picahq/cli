@@ -1,185 +1,234 @@
-# pica
+# Pica CLI
 
-CLI for managing Pica integrations. Connect to 200+ platforms, discover their APIs, and execute actions from the terminal.
+One CLI to connect AI agents to every API on the internet.
+
+Pica gives your AI agent authenticated access to 200+ platforms — Gmail, Slack, Shopify, HubSpot, Stripe, Notion, and everything else — through a single interface. No API keys to juggle, no OAuth flows to build, no request formats to memorize. Connect a platform once, and your agent can search for actions, read the docs, and execute API calls in seconds.
 
 ## Install
 
 ```bash
-npm install
-npm run build
-npm link
+npx @picahq/cli@latest init
 ```
+
+Or install globally:
+
+```bash
+npm install -g @picahq/cli
+pica init
+```
+
+`pica init` walks you through setup: enter your [API key](https://app.picaos.com/settings/api-keys), pick your AI agents, and you're done. The MCP server gets installed automatically.
 
 Requires Node.js 18+.
 
-## Setup
+## Quick start
+
+```bash
+# Connect a platform
+pica add gmail
+
+# See what you're connected to
+pica list
+
+# Search for actions you can take
+pica actions search gmail "send email" -t execute
+
+# Read the docs for an action
+pica actions knowledge gmail <actionId>
+
+# Execute it
+pica actions execute gmail <actionId> <connectionKey> \
+  -d '{"to": "jane@example.com", "subject": "Hello", "body": "Sent from my AI agent"}'
+```
+
+That's it. Five commands to go from zero to sending an email through Gmail's API — fully authenticated, correctly formatted, without touching a single OAuth token.
+
+## How it works
+
+```
+Your AI Agent
+    ↓
+  Pica CLI
+    ↓
+  Pica API (api.picaos.com/v1/passthrough)
+    ↓
+  Gmail / Slack / Shopify / HubSpot / Stripe / ...
+```
+
+Every API call routes through Pica's passthrough proxy. Pica injects the right credentials, handles rate limiting, and normalizes responses. You never see or manage raw OAuth tokens — your connection key is all you need.
+
+## Commands
+
+### `pica init`
+
+Set up your API key and install the MCP server into your AI agents.
 
 ```bash
 pica init
 ```
 
-This walks you through:
-1. Entering your Pica API key (validates it)
-2. Choosing which AI agents to install the MCP server into
-3. Choosing global vs project-level installation
+Supports Claude Code, Claude Desktop, Cursor, Windsurf, Codex, and Kiro. Installs globally by default, or per-project with `-p` so your team can share configs (each person uses their own API key).
 
-Get your API key at [app.picaos.com/settings/api-keys](https://app.picaos.com/settings/api-keys).
+If you've already set up, `pica init` shows your current status and lets you update your key, install to more agents, or reconfigure.
 
-Config is saved to `~/.pica/config.json`.
+| Flag | What it does |
+|------|-------------|
+| `-y` | Skip confirmations |
+| `-g` | Install globally (default) |
+| `-p` | Install for current project only |
 
-### Re-running init
+### `pica add <platform>`
 
-If you already have a config, `pica init` shows your current setup instead of starting over:
-
-```
- Pica
-
-  Current Setup
-  ──────────────────────────────────────────
-  API Key:  sk_test_...9j-Y
-  Config:   ~/.pica/config.json
-
-  Agent           Global  Project
-  ──────────────  ──────  ───────
-  Claude Code     ● yes   ● yes
-  Claude Desktop  ● yes   -
-  Cursor          ○ no    ○ no
-  Windsurf        -       -
-  Codex           ● yes   ○ no
-  Kiro            ○ no    ○ no
-
-  - = not detected on this machine
-```
-
-Then it offers targeted actions based on what's missing:
-
-- **Update API key** -- validates the new key, then re-installs to every agent that currently has the MCP (preserving global/project scopes)
-- **Install MCP to more agents** -- only shows detected agents missing the MCP
-- **Install MCP for this project** -- creates `.mcp.json` / `.cursor/mcp.json` / `.codex/config.toml` / `.kiro/settings/mcp.json` in cwd for agents that support project scope
-- **Configure access control** -- launches the `pica config` flow (see below)
-- **Start fresh** -- full setup flow from scratch
-
-Options that don't apply are hidden. If every detected agent already has the MCP globally, "Install MCP to more agents" won't appear.
-
-### Init flags
-
-| Flag | Effect |
-|------|--------|
-| `-y, --yes` | Skip confirmations |
-| `-g, --global` | Install MCP globally (default, available in all projects) |
-| `-p, --project` | Install MCP for this project only (creates config files in cwd) |
-
-## Access control
+Connect a new platform via OAuth.
 
 ```bash
-pica config
-```
-
-Configure what the MCP server is allowed to do. This is optional -- by default, agents have full access.
-
-| Setting | Description | Default |
-|---------|-------------|---------|
-| Permission level | `admin` (full), `write` (no DELETE), `read` (GET only) | `admin` |
-| Connection keys | Restrict to specific connections | All (`*`) |
-| Action IDs | Restrict to specific action IDs | All (`*`) |
-| Knowledge-only mode | Disable action execution (read docs only) | Off |
-
-Settings are saved to `~/.pica/config.json` and propagated as environment variables (`PICA_PERMISSIONS`, `PICA_CONNECTION_KEYS`, `PICA_ACTION_IDS`, `PICA_KNOWLEDGE_AGENT`) to all installed agent configs. Selecting all defaults removes the extra env vars entirely.
-
-You can also access this from `pica init` → "Configure access control".
-
-## Usage
-
-### Connect a platform
-
-```bash
+pica add shopify
+pica add hub-spot
 pica add gmail
 ```
 
-Opens a browser to complete OAuth. The CLI polls until the connection is live.
+Opens your browser, you authorize, done. The CLI polls until the connection is live. Platform names are kebab-case — run `pica platforms` to see them all.
 
-### List connections
+### `pica list`
+
+List your active connections with their status and connection keys.
 
 ```bash
 pica list
 ```
 
 ```
-  ● gmail      operational
-    live::gmail::default::abc123
-  ● slack      operational
-    live::slack::default::def456
+  ● gmail       operational   live::gmail::default::abc123
+  ● slack       operational   live::slack::default::def456
+  ● shopify     operational   live::shopify::default::ghi789
 ```
 
-### Browse platforms
+You need the connection key (rightmost column) when executing actions.
+
+### `pica platforms`
+
+Browse all 200+ available platforms.
 
 ```bash
-pica platforms
-pica platforms -c "CRM"
+pica platforms              # all platforms
+pica platforms -c "CRM"     # filter by category
+pica platforms --json       # machine-readable output
 ```
 
-## Commands
+### `pica actions search <platform> <query>`
 
-| Command | Description |
-|---------|-------------|
-| `pica init` | Set up API key and install MCP |
-| `pica config` | Configure MCP access control |
-| `pica add <platform>` | Connect a platform via OAuth |
-| `pica list` | List connections with keys |
-| `pica platforms` | Browse available platforms |
+Search for API actions on a connected platform using natural language.
 
-Every command supports `--json` for machine-readable output.
+```bash
+pica actions search shopify "list products"
+pica actions search hub-spot "create contact" -t execute
+pica actions search gmail "send email"
+```
 
-### Aliases
+Returns the top 5 matching actions with their action IDs, HTTP methods, and paths. Use `-t execute` when you intend to run the action, or `-t knowledge` (default) when you want to learn about it or write code against it.
 
-| Short | Full |
-|-------|------|
-| `pica ls` | `pica list` |
-| `pica p` | `pica platforms` |
+### `pica actions knowledge <platform> <actionId>`
 
-## How it works
+Get the full documentation for an action — parameters, validation rules, request/response structure, examples, and the exact API request format.
 
-All API calls route through Pica's passthrough proxy (`api.picaos.com/v1/passthrough`), which injects auth credentials, handles rate limiting, and normalizes responses. Your connection keys tell Pica which credentials to use. You never touch raw OAuth tokens.
+```bash
+pica actions knowledge shopify 67890abcdef
+```
 
-## MCP installation
+Always read the knowledge before executing. It tells you exactly what parameters are required, what format they need, and any platform-specific quirks.
 
-`pica init` writes MCP server configs into the following locations:
+### `pica actions execute <platform> <actionId> <connectionKey>`
 
-| Agent | Global config | Project config |
-|-------|--------------|----------------|
+Execute an API action on a connected platform.
+
+```bash
+# Simple GET
+pica actions execute shopify <actionId> <connectionKey>
+
+# POST with data
+pica actions execute hub-spot <actionId> <connectionKey> \
+  -d '{"properties": {"email": "jane@example.com", "firstname": "Jane"}}'
+
+# With path variables
+pica actions execute shopify <actionId> <connectionKey> \
+  --path-vars '{"order_id": "12345"}'
+
+# With query params
+pica actions execute stripe <actionId> <connectionKey> \
+  --query-params '{"limit": "10"}'
+```
+
+| Option | What it does |
+|--------|-------------|
+| `-d, --data <json>` | Request body (POST, PUT, PATCH) |
+| `--path-vars <json>` | Replace `{variables}` in the URL path |
+| `--query-params <json>` | Query string parameters |
+| `--headers <json>` | Additional request headers |
+| `--form-data` | Send as multipart/form-data |
+| `--form-url-encoded` | Send as application/x-www-form-urlencoded |
+
+### `pica config`
+
+Configure access control for the MCP server. Optional — full access is the default.
+
+```bash
+pica config
+```
+
+| Setting | Options | Default |
+|---------|---------|---------|
+| Permission level | `admin` / `write` / `read` | `admin` |
+| Connection scope | All or specific connections | All |
+| Action scope | All or specific action IDs | All |
+| Knowledge-only mode | Enable/disable execution | Off |
+
+Settings propagate automatically to all installed agent configs.
+
+## The workflow
+
+The power of Pica is in the workflow. Every interaction follows the same pattern:
+
+```
+pica list                    → What am I connected to?
+pica actions search          → What can I do?
+pica actions knowledge       → How do I do it?
+pica actions execute         → Do it.
+```
+
+This is the same workflow whether you're sending emails, creating CRM contacts, processing payments, managing inventory, or posting to Slack. One pattern, any platform.
+
+## For AI agents
+
+If you're an AI agent using the Pica MCP server, the tools map directly:
+
+| MCP Tool | CLI Command |
+|----------|------------|
+| `list_pica_integrations` | `pica list` + `pica platforms` |
+| `search_pica_platform_actions` | `pica actions search` |
+| `get_pica_action_knowledge` | `pica actions knowledge` |
+| `execute_pica_action` | `pica actions execute` |
+
+The workflow is the same: list → search → knowledge → execute. Never skip the knowledge step — it contains required parameter info and platform-specific details that are critical for building correct requests.
+
+## MCP server installation
+
+`pica init` handles this automatically. Here's where configs go:
+
+| Agent | Global | Project |
+|-------|--------|---------|
 | Claude Code | `~/.claude.json` | `.mcp.json` |
-| Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json` | n/a |
+| Claude Desktop | Platform-specific app support dir | — |
 | Cursor | `~/.cursor/mcp.json` | `.cursor/mcp.json` |
-| Windsurf | `~/.codeium/windsurf/mcp_config.json` | n/a |
+| Windsurf | `~/.codeium/windsurf/mcp_config.json` | — |
 | Codex | `~/.codex/config.toml` | `.codex/config.toml` |
 | Kiro | `~/.kiro/settings/mcp.json` | `.kiro/settings/mcp.json` |
 
-Global installs make the MCP available everywhere. Project installs create config files in your current directory that can be committed and shared with your team (each team member needs their own API key).
+Project configs can be committed to your repo. Each team member runs `pica init` with their own API key.
 
 ## Development
 
 ```bash
 npm run dev        # watch mode
 npm run build      # production build
-npm run typecheck  # type check without emitting
-```
-
-## Project structure
-
-```
-src/
-  index.ts              # Commander setup and command registration
-  commands/
-    init.ts             # pica init (setup, status display, targeted actions)
-    config.ts           # pica config (access control settings)
-    connection.ts       # pica add, pica list
-    platforms.ts        # pica platforms
-  lib/
-    api.ts              # HTTP client for Pica API
-    types.ts            # TypeScript interfaces
-    config.ts           # ~/.pica/config.json read/write
-    agents.ts           # Agent detection, MCP config, status reporting
-    platforms.ts        # Platform search and fuzzy matching
-    browser.ts          # Open browser for OAuth and API key pages
-    table.ts            # Formatted table output
+npm run typecheck  # type check
 ```

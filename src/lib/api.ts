@@ -3,6 +3,12 @@ import type {
   ConnectionsResponse,
   Platform,
   PlatformsResponse,
+  AvailableAction,
+  ActionDetails,
+  ActionKnowledgeResponse,
+  ExecuteActionArgs,
+  ExecutePassthroughResponse,
+  SanitizedRequestConfig,
 } from './types.js';
 
 const API_BASE = 'https://api.picaos.com/v1';
@@ -91,6 +97,174 @@ export class PicaApi {
     return allPlatforms;
   }
 
+  async searchActions(
+    platform: string,
+    query: string,
+    agentType?: 'execute' | 'knowledge'
+  ): Promise<AvailableAction[]> {
+    const isKnowledgeAgent = !agentType || agentType === 'knowledge';
+    const queryParams: Record<string, string> = {
+      query,
+      limit: '5',
+    };
+    if (isKnowledgeAgent) {
+      queryParams.knowledgeAgent = 'true';
+    } else {
+      queryParams.executeAgent = 'true';
+    }
+
+    const response = await this.requestFull<AvailableAction[]>({
+      path: `/available-actions/search/${platform}`,
+      queryParams,
+    });
+    return response || [];
+  }
+
+  async getActionDetails(actionId: string): Promise<ActionDetails> {
+    const response = await this.requestFull<{ rows: ActionDetails[] }>({
+      path: '/knowledge',
+      queryParams: { _id: actionId },
+    });
+
+    const actions = response?.rows || [];
+    if (actions.length === 0) {
+      throw new ApiError(404, `Action with ID ${actionId} not found`);
+    }
+
+    return actions[0];
+  }
+
+  async getActionKnowledge(actionId: string): Promise<ActionKnowledgeResponse> {
+    const action = await this.getActionDetails(actionId);
+
+    if (!action.knowledge || !action.method) {
+      return {
+        knowledge: 'No knowledge was found',
+        method: 'No method was found',
+      };
+    }
+
+    return {
+      knowledge: action.knowledge,
+      method: action.method,
+    };
+  }
+
+  async executePassthroughRequest(
+    args: ExecuteActionArgs,
+    preloadedAction?: ActionDetails
+  ): Promise<ExecutePassthroughResponse> {
+    const action = preloadedAction ?? await this.getActionDetails(args.actionId);
+
+    const method = action.method;
+    const contentType = args.isFormData
+      ? 'multipart/form-data'
+      : args.isFormUrlEncoded
+        ? 'application/x-www-form-urlencoded'
+        : 'application/json';
+
+    const requestHeaders: Record<string, string> = {
+      'x-pica-secret': this.apiKey,
+      'x-pica-connection-key': args.connectionKey,
+      'x-pica-action-id': action._id,
+      'Content-Type': contentType,
+      ...args.headers,
+    };
+
+    const finalActionPath = args.pathVariables
+      ? replacePathVariables(action.path, args.pathVariables)
+      : action.path;
+
+    const normalizedPath = finalActionPath.startsWith('/') ? finalActionPath : `/${finalActionPath}`;
+    const url = `${API_BASE.replace('/v1', '')}/v1/passthrough${normalizedPath}`;
+
+    // Check if action has "custom" tag and add connectionKey to body if needed
+    const isCustomAction = action.tags?.includes('custom');
+    let requestData = args.data;
+    if (isCustomAction && method?.toLowerCase() !== 'get') {
+      requestData = {
+        ...args.data,
+        connectionKey: args.connectionKey,
+      };
+    }
+
+    let queryString = '';
+    if (args.queryParams && Object.keys(args.queryParams).length > 0) {
+      const params = new URLSearchParams(
+        Object.entries(args.queryParams).map(([k, v]) => [k, String(v)])
+      );
+      queryString = `?${params.toString()}`;
+    }
+
+    const fullUrl = `${url}${queryString}`;
+
+    const fetchOpts: RequestInit = {
+      method,
+      headers: requestHeaders,
+    };
+
+    if (method?.toLowerCase() !== 'get' && requestData !== undefined) {
+      if (args.isFormUrlEncoded) {
+        const params = new URLSearchParams();
+        if (requestData && typeof requestData === 'object' && !Array.isArray(requestData)) {
+          Object.entries(requestData).forEach(([key, value]) => {
+            if (typeof value === 'object') {
+              params.append(key, JSON.stringify(value));
+            } else {
+              params.append(key, String(value));
+            }
+          });
+        }
+        fetchOpts.body = params.toString();
+      } else if (args.isFormData) {
+        // For form-data in Node.js with fetch, build manually
+        const boundary = `----FormBoundary${Date.now()}`;
+        requestHeaders['Content-Type'] = `multipart/form-data; boundary=${boundary}`;
+        let body = '';
+        if (requestData && typeof requestData === 'object' && !Array.isArray(requestData)) {
+          Object.entries(requestData).forEach(([key, value]) => {
+            body += `--${boundary}\r\n`;
+            body += `Content-Disposition: form-data; name="${key}"\r\n\r\n`;
+            body += typeof value === 'object' ? JSON.stringify(value) : String(value);
+            body += '\r\n';
+          });
+        }
+        body += `--${boundary}--\r\n`;
+        fetchOpts.body = body;
+        fetchOpts.headers = requestHeaders;
+      } else {
+        fetchOpts.body = JSON.stringify(requestData);
+      }
+    }
+
+    const sanitizedConfig: SanitizedRequestConfig = {
+      url: fullUrl,
+      method,
+      headers: {
+        ...requestHeaders,
+        'x-pica-secret': '***REDACTED***',
+      },
+      params: args.queryParams ? Object.fromEntries(
+        Object.entries(args.queryParams).map(([k, v]) => [k, String(v)])
+      ) : undefined,
+      data: requestData,
+    };
+
+    const response = await fetch(fullUrl, fetchOpts);
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new ApiError(response.status, text || `HTTP ${response.status}`);
+    }
+
+    const responseData = await response.json();
+
+    return {
+      requestConfig: sanitizedConfig,
+      responseData,
+    };
+  }
+
   async waitForConnection(
     platform: string,
     timeoutMs = 5 * 60 * 1000,
@@ -128,4 +302,102 @@ export class TimeoutError extends Error {
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+export function replacePathVariables(
+  path: string,
+  variables: Record<string, string | number | boolean>
+): string {
+  if (!path) return path;
+
+  let result = path;
+
+  // First, replace double bracket variables {{variableName}}
+  result = result.replace(/\{\{([^}]+)\}\}/g, (_match, variable) => {
+    const trimmedVariable = variable.trim();
+    const value = variables[trimmedVariable];
+    if (value === undefined || value === null || value === '') {
+      throw new Error(`Missing value for path variable: ${trimmedVariable}`);
+    }
+    return encodeURIComponent(value.toString());
+  });
+
+  // Then, replace single bracket variables {variableName}
+  result = result.replace(/\{([^}]+)\}/g, (_match, variable) => {
+    const trimmedVariable = variable.trim();
+    const value = variables[trimmedVariable];
+    if (value === undefined || value === null || value === '') {
+      throw new Error(`Missing value for path variable: ${trimmedVariable}`);
+    }
+    return encodeURIComponent(value.toString());
+  });
+
+  return result;
+}
+
+import type { PermissionLevel } from './types.js';
+
+const PERMISSION_METHODS: Record<PermissionLevel, string[] | null> = {
+  read: ['GET'],
+  write: ['GET', 'POST', 'PUT', 'PATCH'],
+  admin: null,
+};
+
+export function filterByPermissions<T extends { method: string }>(
+  actions: T[],
+  permissions: PermissionLevel
+): T[] {
+  const allowed = PERMISSION_METHODS[permissions];
+  if (allowed === null) return actions;
+  return actions.filter((a) => allowed.includes(a.method.toUpperCase()));
+}
+
+export function isMethodAllowed(
+  method: string,
+  permissions: PermissionLevel
+): boolean {
+  const allowed = PERMISSION_METHODS[permissions];
+  if (allowed === null) return true;
+  return allowed.includes(method.toUpperCase());
+}
+
+export function isActionAllowed(
+  actionId: string,
+  allowedActionIds: string[]
+): boolean {
+  return allowedActionIds.includes('*') || allowedActionIds.includes(actionId);
+}
+
+export function buildActionKnowledgeWithGuidance(
+  knowledge: string,
+  method: string,
+  platform: string,
+  actionId: string
+): string {
+  const baseUrl = 'https://api.picaos.com';
+
+  return `${knowledge}
+
+API REQUEST STRUCTURE
+======================
+URL: ${baseUrl}/v1/passthrough/{{PATH}}
+
+IMPORTANT: When constructing the URL, only include the API endpoint path after the base URL.
+Do NOT include the full third-party API URL.
+
+Examples:
+  Correct: ${baseUrl}/v1/passthrough/crm/v3/objects/contacts/search
+  Incorrect: ${baseUrl}/v1/passthrough/https://api.hubapi.com/crm/v3/objects/contacts/search
+
+METHOD: ${method}
+
+HEADERS:
+- x-pica-secret: {{process.env.PICA_SECRET}}
+- x-pica-connection-key: {{process.env.PICA_${platform.toUpperCase()}_CONNECTION_KEY}}
+- x-pica-action-id: ${actionId}
+- ... (other headers)
+
+BODY: {{BODY}}
+
+QUERY PARAMS: {{QUERY_PARAMS}}`;
 }

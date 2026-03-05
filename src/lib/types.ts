@@ -57,3 +57,51 @@ export interface ConnectionsResponse {
   page: number;
 }
 
+export interface AvailableAction {
+  systemId: string;
+  title: string;
+  tags?: string[];
+  knowledge?: string;
+  path: string;
+  method: string;
+}
+
+export interface ActionDetails {
+  _id: string;
+  title: string;
+  tags?: string[];
+  knowledge?: string;
+  path: string;
+  method: string;
+}
+
+export interface ActionKnowledgeResponse {
+  knowledge: string;
+  method: string;
+}
+
+export interface ExecuteActionArgs {
+  platform: string;
+  actionId: string;
+  connectionKey: string;
+  data?: any;
+  pathVariables?: Record<string, string | number | boolean>;
+  queryParams?: Record<string, any>;
+  headers?: Record<string, string>;
+  isFormData?: boolean;
+  isFormUrlEncoded?: boolean;
+}
+
+export interface SanitizedRequestConfig {
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+  params?: Record<string, string>;
+  data?: unknown;
+}
+
+export interface ExecutePassthroughResponse {
+  requestConfig: SanitizedRequestConfig;
+  responseData: unknown;
+}
+
