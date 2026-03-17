@@ -43,6 +43,41 @@ pica actions execute gmail <actionId> <connectionKey> \
 
 That's it. Five commands to go from zero to sending an email through Gmail's API — fully authenticated, correctly formatted, without touching a single OAuth token.
 
+### Multi-step flows
+
+Chain actions across platforms into reusable workflows:
+
+```bash
+# Create a flow that looks up a Stripe customer and sends a Gmail welcome email
+pica flow create welcome-customer --definition '{
+  "key": "welcome-customer",
+  "name": "Welcome New Customer",
+  "version": "1",
+  "inputs": {
+    "stripeKey": { "type": "string", "required": true, "connection": { "platform": "stripe" } },
+    "gmailKey": { "type": "string", "required": true, "connection": { "platform": "gmail" } },
+    "email": { "type": "string", "required": true }
+  },
+  "steps": [
+    { "id": "find", "name": "Find customer", "type": "action",
+      "action": { "platform": "stripe", "actionId": "<actionId>", "connectionKey": "$.input.stripeKey",
+        "data": { "query": "email:'\''{{$.input.email}}'\''" } } },
+    { "id": "send", "name": "Send email", "type": "action",
+      "if": "$.steps.find.response.data.length > 0",
+      "action": { "platform": "gmail", "actionId": "<actionId>", "connectionKey": "$.input.gmailKey",
+        "data": { "to": "{{$.input.email}}", "subject": "Welcome!", "body": "Thanks for joining." } } }
+  ]
+}'
+
+# Validate it
+pica flow validate welcome-customer
+
+# Run it — connection keys auto-resolve if you have one connection per platform
+pica flow execute welcome-customer -i email=jane@example.com
+```
+
+Flows are stored as JSON at `.one/flows/<key>.flow.json` and support conditions, loops, parallel steps, transforms, and more. Run `pica guide flows` for the full reference.
+
 ## How it works
 
 ```
@@ -167,6 +202,103 @@ pica actions execute stripe <actionId> <connectionKey> \
 | `--form-data` | Send as multipart/form-data |
 | `--form-url-encoded` | Send as application/x-www-form-urlencoded |
 
+### `pica guide [topic]`
+
+Get the full CLI usage guide, designed for AI agents that only have the binary (no MCP, no IDE skills).
+
+```bash
+pica guide                 # full guide (all topics)
+pica guide overview        # setup, --agent flag, discovery workflow
+pica guide actions         # search, knowledge, execute workflow
+pica guide flows           # multi-step API workflows
+
+pica --agent guide         # full guide as structured JSON
+pica --agent guide flows   # single topic as JSON
+```
+
+Topics: `overview`, `actions`, `flows`, `all` (default).
+
+In agent mode (`--agent`), the JSON response includes the guide content and an `availableTopics` array so agents can discover what sections exist.
+
+### `pica flow create [key]`
+
+Create a flow from a JSON definition. Flows are saved to `.one/flows/<key>.flow.json`.
+
+```bash
+# From a --definition flag
+pica flow create welcome-customer --definition '{"key":"welcome-customer","name":"Welcome","version":"1","inputs":{},"steps":[]}'
+
+# From stdin
+cat flow.json | pica flow create
+
+# Custom output path
+pica flow create my-flow --definition '...' -o ./custom/path.json
+```
+
+| Option | What it does |
+|--------|-------------|
+| `--definition <json>` | Flow definition as a JSON string |
+| `-o, --output <path>` | Custom output path (default: `.one/flows/<key>.flow.json`) |
+
+### `pica flow execute <key>`
+
+Execute a flow by key or file path. Pass inputs with repeatable `-i` flags.
+
+```bash
+# Execute with inputs
+pica flow execute welcome-customer \
+  -i customerEmail=jane@example.com
+
+# Dry run — validate and show plan without executing
+pica flow execute welcome-customer --dry-run -i customerEmail=jane@example.com
+
+# Verbose — show each step as it runs
+pica flow execute welcome-customer -v -i customerEmail=jane@example.com
+```
+
+Connection inputs with a `connection` field in the flow definition are auto-resolved when the user has exactly one connection for that platform.
+
+Press Ctrl+C during execution to pause — the run can be resumed later with `pica flow resume <runId>`.
+
+| Option | What it does |
+|--------|-------------|
+| `-i, --input <name=value>` | Input parameter (repeatable) |
+| `--dry-run` | Validate and show execution plan without running |
+| `-v, --verbose` | Show full request/response for each step |
+
+### `pica flow list`
+
+List all flows saved in `.one/flows/`.
+
+```bash
+pica flow list
+```
+
+### `pica flow validate <key>`
+
+Validate a flow JSON file against the schema.
+
+```bash
+pica flow validate welcome-customer
+```
+
+### `pica flow resume <runId>`
+
+Resume a paused or failed flow run from where it left off.
+
+```bash
+pica flow resume abc123
+```
+
+### `pica flow runs [flowKey]`
+
+List flow runs, optionally filtered by flow key.
+
+```bash
+pica flow runs                    # all runs
+pica flow runs welcome-customer   # runs for a specific flow
+```
+
 ### `pica config`
 
 Configure access control for the MCP server. Optional — full access is the default.
@@ -197,7 +329,20 @@ pica actions execute         → Do it.
 
 This is the same workflow whether you're sending emails, creating CRM contacts, processing payments, managing inventory, or posting to Slack. One pattern, any platform.
 
+For multi-step workflows that chain actions across platforms, use **flows**:
+
+```
+pica actions knowledge       → Learn each action's schema
+pica flow create             → Define the workflow as JSON
+pica flow validate           → Check it
+pica flow execute            → Run it
+```
+
+Flows support conditions, loops, parallel execution, transforms, code steps, and file I/O. Run `pica guide flows` for the full schema reference and examples.
+
 ## For AI agents
+
+If you're an AI agent with only the `pica` binary (no MCP server or IDE skills), start with `pica --agent guide` to get the full usage guide as structured JSON. This teaches you the complete workflow, JSON schemas, selector syntax, and more — everything you need to bootstrap yourself.
 
 If you're an AI agent using the Pica MCP server, the tools map directly:
 

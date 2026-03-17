@@ -7,6 +7,16 @@ import { configCommand } from './commands/config.js';
 import { connectionAddCommand, connectionListCommand } from './commands/connection.js';
 import { platformsCommand } from './commands/platforms.js';
 import { actionsSearchCommand, actionsKnowledgeCommand, actionsExecuteCommand } from './commands/actions.js';
+import {
+  flowCreateCommand,
+  flowExecuteCommand,
+  flowListCommand,
+  flowValidateCommand,
+  flowResumeCommand,
+  flowRunsCommand,
+  collect,
+} from './commands/flow.js';
+import { guideCommand } from './commands/guide.js';
 import { setAgentMode } from './lib/output.js';
 
 const require = createRequire(import.meta.url);
@@ -29,6 +39,15 @@ program
     2. pica actions search <platform> <q>  Search for actions using natural language
     3. pica actions knowledge <plat> <id>  Get full docs for an action (ALWAYS do this before execute)
     4. pica actions execute <p> <id> <key> Execute the action
+
+  Guide:
+    pica guide [topic]                     Full CLI guide (topics: overview, actions, flows, all)
+
+  Flows (multi-step workflows):
+    pica flow list                         List saved flows
+    pica flow create [key]                 Create a flow from JSON
+    pica flow execute <key>                Execute a flow
+    pica flow validate <key>               Validate a flow
 
   Example — send an email through Gmail:
     $ pica list
@@ -141,6 +160,68 @@ actions
       formData: options.formData,
       formUrlEncoded: options.formUrlEncoded,
     });
+  });
+
+// Flow commands
+const flow = program
+  .command('flow')
+  .alias('f')
+  .description('Create, execute, and manage multi-step API workflows');
+
+flow
+  .command('create [key]')
+  .description('Create a new flow from JSON definition')
+  .option('--definition <json>', 'Flow definition as JSON string')
+  .option('-o, --output <path>', 'Custom output path (default: .one/flows/<key>.flow.json)')
+  .action(async (key: string | undefined, options: { definition?: string; output?: string }) => {
+    await flowCreateCommand(key, options);
+  });
+
+flow
+  .command('execute <keyOrPath>')
+  .alias('x')
+  .description('Execute a flow by key or file path')
+  .option('-i, --input <name=value>', 'Input parameter (repeatable)', collect, [])
+  .option('--dry-run', 'Validate and show execution plan without running')
+  .option('-v, --verbose', 'Show full request/response for each step')
+  .action(async (keyOrPath: string, options: { input?: string[]; dryRun?: boolean; verbose?: boolean }) => {
+    await flowExecuteCommand(keyOrPath, options);
+  });
+
+flow
+  .command('list')
+  .alias('ls')
+  .description('List all flows in .one/flows/')
+  .action(async () => {
+    await flowListCommand();
+  });
+
+flow
+  .command('validate <keyOrPath>')
+  .description('Validate a flow JSON file')
+  .action(async (keyOrPath: string) => {
+    await flowValidateCommand(keyOrPath);
+  });
+
+flow
+  .command('resume <runId>')
+  .description('Resume a paused or failed flow run')
+  .action(async (runId: string) => {
+    await flowResumeCommand(runId);
+  });
+
+flow
+  .command('runs [flowKey]')
+  .description('List flow runs (optionally filtered by flow key)')
+  .action(async (flowKey?: string) => {
+    await flowRunsCommand(flowKey);
+  });
+
+program
+  .command('guide [topic]')
+  .description('Full CLI usage guide for agents (topics: overview, actions, flows, all)')
+  .action(async (topic?: string) => {
+    await guideCommand(topic);
   });
 
 // Shortcuts

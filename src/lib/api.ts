@@ -257,7 +257,8 @@ export class PicaApi {
       throw new ApiError(response.status, text || `HTTP ${response.status}`);
     }
 
-    const responseData = await response.json();
+    const responseText = await response.text();
+    const responseData = responseText ? JSON.parse(responseText) : {};
 
     return {
       requestConfig: sanitizedConfig,
