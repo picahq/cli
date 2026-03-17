@@ -1,6 +1,6 @@
 {
   "name": "@picahq/cli",
-  "version": "1.11.0",
+  "version": "1.11.1",
   "description": "CLI for managing One",
   "type": "module",
   "files": [
