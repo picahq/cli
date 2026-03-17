@@ -16,9 +16,14 @@ import { getApiKeyUrl, openApiKeyPage, openConnectionPage, getConnectionUrl } fr
 import { configCommand } from './config.js';
 import open from 'open';
 import { printTable } from '../lib/table.js';
+import * as output from '../lib/output.js';
 import type { Agent } from '../lib/types.js';
 
 export async function initCommand(options: { yes?: boolean; global?: boolean; project?: boolean }): Promise<void> {
+  if (output.isAgentMode()) {
+    output.error('This command requires interactive input. Run without --agent.');
+  }
+
   const existingConfig = readConfig();
 
   if (existingConfig) {

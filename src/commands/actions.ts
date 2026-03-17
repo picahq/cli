@@ -9,13 +9,13 @@ import {
   buildActionKnowledgeWithGuidance,
 } from '../lib/api.js';
 import { printTable } from '../lib/table.js';
+import * as output from '../lib/output.js';
 import type { PermissionLevel } from '../lib/types.js';
 
 function getConfig() {
   const apiKey = getApiKey();
   if (!apiKey) {
-    p.cancel('Not configured. Run `pica init` first.');
-    process.exit(1);
+    output.error('Not configured. Run `pica init` first.');
   }
 
   const ac = getAccessControlFromAllSources();
@@ -27,17 +27,25 @@ function getConfig() {
   return { apiKey, permissions, connectionKeys, actionIds, knowledgeAgent };
 }
 
+function parseJsonArg(value: string, argName: string): any {
+  try {
+    return JSON.parse(value);
+  } catch {
+    output.error(`Invalid JSON for ${argName}: ${value}`);
+  }
+}
+
 export async function actionsSearchCommand(
   platform: string,
   query: string,
   options: { type?: string }
 ): Promise<void> {
-  p.intro(pc.bgCyan(pc.black(' Pica ')));
+  output.intro(pc.bgCyan(pc.black(' Pica ')));
 
   const { apiKey, permissions, actionIds, knowledgeAgent } = getConfig();
   const api = new PicaApi(apiKey);
 
-  const spinner = p.spinner();
+  const spinner = output.createSpinner();
   spinner.start(`Searching actions on ${pc.cyan(platform)} for "${query}"...`);
 
   try {
@@ -60,6 +68,11 @@ export async function actionsSearchCommand(
       method: action.method,
       path: action.path,
     }));
+
+    if (output.isAgentMode()) {
+      output.json({ actions: cleanedActions });
+      return;
+    }
 
     if (cleanedActions.length === 0) {
       spinner.stop('No actions found');
@@ -110,10 +123,9 @@ export async function actionsSearchCommand(
     );
   } catch (error) {
     spinner.stop('Search failed');
-    p.cancel(
+    output.error(
       `Error: ${error instanceof Error ? error.message : 'Unknown error'}`
     );
-    process.exit(1);
   }
 }
 
@@ -121,40 +133,37 @@ export async function actionsKnowledgeCommand(
   platform: string,
   actionId: string
 ): Promise<void> {
-  p.intro(pc.bgCyan(pc.black(' Pica ')));
+  output.intro(pc.bgCyan(pc.black(' Pica ')));
 
   const { apiKey, actionIds, connectionKeys } = getConfig();
   const api = new PicaApi(apiKey);
 
   // Check action allowlist
   if (!isActionAllowed(actionId, actionIds)) {
-    p.cancel(`Action "${actionId}" is not in the allowed action list.`);
-    process.exit(1);
+    output.error(`Action "${actionId}" is not in the allowed action list.`);
   }
 
   // Check connection scoping
   if (!connectionKeys.includes('*')) {
-    const spinner = p.spinner();
+    const spinner = output.createSpinner();
     spinner.start('Checking connections...');
     try {
       const connections = await api.listConnections();
       const connectedPlatforms = connections.map((c) => c.platform);
       if (!connectedPlatforms.includes(platform)) {
         spinner.stop('Platform not connected');
-        p.cancel(`Platform "${platform}" has no allowed connections.`);
-        process.exit(1);
+        output.error(`Platform "${platform}" has no allowed connections.`);
       }
       spinner.stop('Connection verified');
     } catch (error) {
       spinner.stop('Failed to check connections');
-      p.cancel(
+      output.error(
         `Error: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
-      process.exit(1);
     }
   }
 
-  const spinner = p.spinner();
+  const spinner = output.createSpinner();
   spinner.start(`Loading knowledge for action ${pc.dim(actionId)}...`);
 
   try {
@@ -167,6 +176,11 @@ export async function actionsKnowledgeCommand(
       actionId
     );
 
+    if (output.isAgentMode()) {
+      output.json({ knowledge: knowledgeWithGuidance, method });
+      return;
+    }
+
     spinner.stop('Knowledge loaded');
     console.log();
     console.log(knowledgeWithGuidance);
@@ -178,10 +192,9 @@ export async function actionsKnowledgeCommand(
     );
   } catch (error) {
     spinner.stop('Failed to load knowledge');
-    p.cancel(
+    output.error(
       `Error: ${error instanceof Error ? error.message : 'Unknown error'}`
     );
-    process.exit(1);
   }
 }
 
@@ -198,35 +211,31 @@ export async function actionsExecuteCommand(
     formUrlEncoded?: boolean;
   }
 ): Promise<void> {
-  p.intro(pc.bgCyan(pc.black(' Pica ')));
+  output.intro(pc.bgCyan(pc.black(' Pica ')));
 
   const { apiKey, permissions, actionIds, connectionKeys, knowledgeAgent } =
     getConfig();
 
   // Check knowledge-only mode
   if (knowledgeAgent) {
-    p.cancel(
-      'Action execution is disabled (knowledge-only mode).\n' +
-        `Configure with: ${pc.cyan('pica config')}`
+    output.error(
+      'Action execution is disabled (knowledge-only mode).'
     );
-    process.exit(1);
   }
 
   // Check action allowlist
   if (!isActionAllowed(actionId, actionIds)) {
-    p.cancel(`Action "${actionId}" is not in the allowed action list.`);
-    process.exit(1);
+    output.error(`Action "${actionId}" is not in the allowed action list.`);
   }
 
   // Check connection key allowlist
   if (!connectionKeys.includes('*') && !connectionKeys.includes(connectionKey)) {
-    p.cancel(`Connection key "${connectionKey}" is not allowed.`);
-    process.exit(1);
+    output.error(`Connection key "${connectionKey}" is not allowed.`);
   }
 
   const api = new PicaApi(apiKey);
 
-  const spinner = p.spinner();
+  const spinner = output.createSpinner();
   spinner.start('Loading action details...');
 
   try {
@@ -235,10 +244,9 @@ export async function actionsExecuteCommand(
     // Check method permissions
     if (!isMethodAllowed(actionDetails.method, permissions)) {
       spinner.stop('Permission denied');
-      p.cancel(
+      output.error(
         `Method "${actionDetails.method}" is not allowed under "${permissions}" permission level.`
       );
-      process.exit(1);
     }
 
     spinner.stop(`Action: ${actionDetails.title} [${actionDetails.method}]`);
@@ -255,7 +263,7 @@ export async function actionsExecuteCommand(
       ? parseJsonArg(options.headers, '--headers')
       : undefined;
 
-    const execSpinner = p.spinner();
+    const execSpinner = output.createSpinner();
     execSpinner.start('Executing action...');
 
     const result = await api.executePassthroughRequest(
@@ -275,6 +283,17 @@ export async function actionsExecuteCommand(
 
     execSpinner.stop('Action executed successfully');
 
+    if (output.isAgentMode()) {
+      output.json({
+        request: {
+          method: result.requestConfig.method,
+          url: result.requestConfig.url,
+        },
+        response: result.responseData,
+      });
+      return;
+    }
+
     console.log();
     console.log(pc.dim('Request:'));
     console.log(
@@ -287,19 +306,9 @@ export async function actionsExecuteCommand(
     console.log(JSON.stringify(result.responseData, null, 2));
   } catch (error) {
     spinner.stop('Execution failed');
-    p.cancel(
+    output.error(
       `Error: ${error instanceof Error ? error.message : 'Unknown error'}`
     );
-    process.exit(1);
-  }
-}
-
-function parseJsonArg(value: string, argName: string): any {
-  try {
-    return JSON.parse(value);
-  } catch {
-    p.cancel(`Invalid JSON for ${argName}: ${value}`);
-    process.exit(1);
   }
 }
 

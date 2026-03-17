@@ -3,9 +3,14 @@ import pc from 'picocolors';
 import { readConfig, getAccessControl, updateAccessControl } from '../lib/config.js';
 import { getAgentStatuses, installMcpConfig } from '../lib/agents.js';
 import { PicaApi } from '../lib/api.js';
+import * as output from '../lib/output.js';
 import type { AccessControlSettings, PermissionLevel } from '../lib/types.js';
 
 export async function configCommand(): Promise<void> {
+  if (output.isAgentMode()) {
+    output.error('This command requires interactive input. Run without --agent.');
+  }
+
   const config = readConfig();
 
   if (!config) {

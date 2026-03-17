@@ -3,18 +3,23 @@ import pc from 'picocolors';
 import { getApiKey } from '../lib/config.js';
 import { PicaApi } from '../lib/api.js';
 import { printTable } from '../lib/table.js';
+import * as output from '../lib/output.js';
 import type { Platform } from '../lib/types.js';
 
 export async function platformsCommand(options: { category?: string; json?: boolean }): Promise<void> {
   const apiKey = getApiKey();
   if (!apiKey) {
-    p.cancel('Not configured. Run `pica init` first.');
-    process.exit(1);
+    output.error('Not configured. Run `pica init` first.');
+  }
+
+  // In agent mode, force JSON output
+  if (output.isAgentMode()) {
+    options.json = true;
   }
 
   const api = new PicaApi(apiKey);
 
-  const spinner = p.spinner();
+  const spinner = output.createSpinner();
   spinner.start('Loading platforms...');
 
   try {
@@ -22,7 +27,11 @@ export async function platformsCommand(options: { category?: string; json?: bool
     spinner.stop(`${platforms.length} platforms available`);
 
     if (options.json) {
-      console.log(JSON.stringify(platforms, null, 2));
+      if (output.isAgentMode()) {
+        output.json({ platforms });
+      } else {
+        console.log(JSON.stringify(platforms, null, 2));
+      }
       return;
     }
 
@@ -85,8 +94,6 @@ export async function platformsCommand(options: { category?: string; json?: bool
     p.note(`Connect with: ${pc.cyan('pica connection add <platform>')}`, 'Tip');
   } catch (error) {
     spinner.stop('Failed to load platforms');
-    p.cancel(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    process.exit(1);
+    output.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
-

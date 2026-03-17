@@ -7,6 +7,7 @@ import { configCommand } from './commands/config.js';
 import { connectionAddCommand, connectionListCommand } from './commands/connection.js';
 import { platformsCommand } from './commands/platforms.js';
 import { actionsSearchCommand, actionsKnowledgeCommand, actionsExecuteCommand } from './commands/actions.js';
+import { setAgentMode } from './lib/output.js';
 
 const require = createRequire(import.meta.url);
 const { version } = require('../package.json');
@@ -15,6 +16,7 @@ const program = new Command();
 
 program
   .name('pica')
+  .option('--agent', 'Machine-readable JSON output (no colors, spinners, or prompts)')
   .description(`Pica CLI — Connect AI agents to 200+ platforms through one interface.
 
   Setup:
@@ -44,6 +46,13 @@ program
   Platform names are always kebab-case (e.g. hub-spot, ship-station, google-calendar).
   Run 'pica platforms' to browse all 200+ available platforms.`)
   .version(version);
+
+program.hook('preAction', (thisCommand) => {
+  const opts = program.opts();
+  if (opts.agent) {
+    setAgentMode(true);
+  }
+});
 
 program
   .command('init')

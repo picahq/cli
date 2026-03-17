@@ -5,9 +5,14 @@ import { PicaApi, TimeoutError } from '../lib/api.js';
 import { openConnectionPage, getConnectionUrl } from '../lib/browser.js';
 import { findPlatform, findSimilarPlatforms } from '../lib/platforms.js';
 import { printTable } from '../lib/table.js';
+import * as output from '../lib/output.js';
 import type { Connection } from '../lib/types.js';
 
 export async function connectionAddCommand(platformArg?: string): Promise<void> {
+  if (output.isAgentMode()) {
+    output.error('This command requires interactive input. Run without --agent.');
+  }
+
   p.intro(pc.bgCyan(pc.black(' Pica ')));
 
   const apiKey = getApiKey();
@@ -132,17 +137,28 @@ export async function connectionAddCommand(platformArg?: string): Promise<void> 
 export async function connectionListCommand(): Promise<void> {
   const apiKey = getApiKey();
   if (!apiKey) {
-    p.cancel('Not configured. Run `pica init` first.');
-    process.exit(1);
+    output.error('Not configured. Run `pica init` first.');
   }
 
   const api = new PicaApi(apiKey);
 
-  const spinner = p.spinner();
+  const spinner = output.createSpinner();
   spinner.start('Loading connections...');
 
   try {
     const connections = await api.listConnections();
+
+    if (output.isAgentMode()) {
+      output.json({
+        connections: connections.map(conn => ({
+          platform: conn.platform,
+          state: conn.state,
+          key: conn.key,
+        })),
+      });
+      return;
+    }
+
     spinner.stop(`${connections.length} connection${connections.length === 1 ? '' : 's'} found`);
 
     if (connections.length === 0) {
@@ -177,8 +193,7 @@ export async function connectionListCommand(): Promise<void> {
     p.note(`Add more with: ${pc.cyan('pica connection add <platform>')}`, 'Tip');
   } catch (error) {
     spinner.stop('Failed to load connections');
-    p.cancel(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    process.exit(1);
+    output.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
 
