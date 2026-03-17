@@ -1,13 +1,13 @@
 import open from 'open';
 
-const PICA_APP_URL = 'https://app.picaos.com';
+const ONE_APP_URL = 'https://app.withone.ai';
 
 export function getConnectionUrl(platform: string): string {
-  return `${PICA_APP_URL}/connections?#open=${platform}`;
+  return `${ONE_APP_URL}/connections?#open=${platform}`;
 }
 
 export function getApiKeyUrl(): string {
-  return `${PICA_APP_URL}/settings/api-keys`;
+  return `${ONE_APP_URL}/settings/api-keys`;
 }
 
 export async function openConnectionPage(platform: string): Promise<void> {

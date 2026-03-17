@@ -1,7 +1,7 @@
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
 import { getApiKey } from '../lib/config.js';
-import { PicaApi, TimeoutError } from '../lib/api.js';
+import { OneApi, TimeoutError } from '../lib/api.js';
 import { openConnectionPage, getConnectionUrl } from '../lib/browser.js';
 import { findPlatform, findSimilarPlatforms } from '../lib/platforms.js';
 import { printTable } from '../lib/table.js';
@@ -13,15 +13,15 @@ export async function connectionAddCommand(platformArg?: string): Promise<void> 
     output.error('This command requires interactive input. Run without --agent.');
   }
 
-  p.intro(pc.bgCyan(pc.black(' Pica ')));
+  p.intro(pc.bgCyan(pc.black(' One ')));
 
   const apiKey = getApiKey();
   if (!apiKey) {
-    p.cancel('Not configured. Run `pica init` first.');
+    p.cancel('Not configured. Run `one init` first.');
     process.exit(1);
   }
 
-  const api = new PicaApi(apiKey);
+  const api = new OneApi(apiKey);
 
   // Get platform list for validation
   const spinner = p.spinner();
@@ -57,14 +57,14 @@ export async function connectionAddCommand(platformArg?: string): Promise<void> 
         });
 
         if (p.isCancel(suggestion) || suggestion === '__other__') {
-          p.note(`Run ${pc.cyan('pica platforms')} to see all available platforms.`);
+          p.note(`Run ${pc.cyan('one platforms')} to see all available platforms.`);
           p.cancel('Connection cancelled.');
           process.exit(0);
         }
 
         platform = suggestion as string;
       } else {
-        p.cancel(`Unknown platform: ${platformArg}\n\nRun ${pc.cyan('pica platforms')} to see available platforms.`);
+        p.cancel(`Unknown platform: ${platformArg}\n\nRun ${pc.cyan('one platforms')} to see available platforms.`);
         process.exit(1);
       }
     }
@@ -87,7 +87,7 @@ export async function connectionAddCommand(platformArg?: string): Promise<void> 
     if (found) {
       platform = found.platform;
     } else {
-      p.cancel(`Unknown platform: ${platformInput}\n\nRun ${pc.cyan('pica platforms')} to see available platforms.`);
+      p.cancel(`Unknown platform: ${platformInput}\n\nRun ${pc.cyan('one platforms')} to see available platforms.`);
       process.exit(1);
     }
   }
@@ -123,7 +123,7 @@ export async function connectionAddCommand(platformArg?: string): Promise<void> 
         `  - OAuth flow was not completed in the browser\n` +
         `  - Browser popup was blocked\n` +
         `  - Wrong account selected\n\n` +
-        `Try again with: ${pc.cyan(`pica connection add ${platform}`)}`,
+        `Try again with: ${pc.cyan(`one connection add ${platform}`)}`,
         'Timed Out'
       );
     } else {
@@ -137,10 +137,10 @@ export async function connectionAddCommand(platformArg?: string): Promise<void> 
 export async function connectionListCommand(): Promise<void> {
   const apiKey = getApiKey();
   if (!apiKey) {
-    output.error('Not configured. Run `pica init` first.');
+    output.error('Not configured. Run `one init` first.');
   }
 
-  const api = new PicaApi(apiKey);
+  const api = new OneApi(apiKey);
 
   const spinner = output.createSpinner();
   spinner.start('Loading connections...');
@@ -164,7 +164,7 @@ export async function connectionListCommand(): Promise<void> {
     if (connections.length === 0) {
       p.note(
         `No connections yet.\n\n` +
-        `Add one with: ${pc.cyan('pica connection add gmail')}`,
+        `Add one with: ${pc.cyan('one connection add gmail')}`,
         'No Connections'
       );
       return;
@@ -190,7 +190,7 @@ export async function connectionListCommand(): Promise<void> {
     );
 
     console.log();
-    p.note(`Add more with: ${pc.cyan('pica connection add <platform>')}`, 'Tip');
+    p.note(`Add more with: ${pc.cyan('one connection add <platform>')}`, 'Tip');
   } catch (error) {
     spinner.stop('Failed to load connections');
     output.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);

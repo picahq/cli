@@ -7,7 +7,7 @@ export function setAgentMode(value: boolean): void {
 }
 
 export function isAgentMode(): boolean {
-  return _agentMode || process.env.PICA_AGENT === '1';
+  return _agentMode || process.env.ONE_AGENT === '1';
 }
 
 export function createSpinner(): { start(msg: string): void; stop(msg: string): void } {

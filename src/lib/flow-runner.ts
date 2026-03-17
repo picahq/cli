@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import type { PicaApi } from './api.js';
+import type { OneApi } from './api.js';
 import type { PermissionLevel } from './types.js';
 import type {
   Flow,
@@ -123,7 +123,7 @@ export class FlowRunner {
 
   async execute(
     flow: Flow,
-    api: PicaApi,
+    api: OneApi,
     permissions: PermissionLevel,
     allowedActionIds: string[],
     options: FlowExecuteOptions = {},
@@ -164,7 +164,7 @@ export class FlowRunner {
 
   async resume(
     flow: Flow,
-    api: PicaApi,
+    api: OneApi,
     permissions: PermissionLevel,
     allowedActionIds: string[],
     options: FlowExecuteOptions = {},

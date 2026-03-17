@@ -2,7 +2,7 @@ import * as p from '@clack/prompts';
 import pc from 'picocolors';
 import { getApiKey, getAccessControlFromAllSources } from '../lib/config.js';
 import {
-  PicaApi,
+  OneApi,
   filterByPermissions,
   isActionAllowed,
   isMethodAllowed,
@@ -15,7 +15,7 @@ import type { PermissionLevel } from '../lib/types.js';
 function getConfig() {
   const apiKey = getApiKey();
   if (!apiKey) {
-    output.error('Not configured. Run `pica init` first.');
+    output.error('Not configured. Run `one init` first.');
   }
 
   const ac = getAccessControlFromAllSources();
@@ -40,10 +40,10 @@ export async function actionsSearchCommand(
   query: string,
   options: { type?: string }
 ): Promise<void> {
-  output.intro(pc.bgCyan(pc.black(' Pica ')));
+  output.intro(pc.bgCyan(pc.black(' One ')));
 
   const { apiKey, permissions, actionIds, knowledgeAgent } = getConfig();
-  const api = new PicaApi(apiKey);
+  const api = new OneApi(apiKey);
 
   const spinner = output.createSpinner();
   spinner.start(`Searching actions on ${pc.cyan(platform)} for "${query}"...`);
@@ -81,7 +81,7 @@ export async function actionsSearchCommand(
           `Suggestions:\n` +
           `  - Try a more general query (e.g., 'list', 'get', 'search', 'create')\n` +
           `  - Verify the platform name is correct\n` +
-          `  - Check available platforms with ${pc.cyan('pica platforms')}\n\n` +
+          `  - Check available platforms with ${pc.cyan('one platforms')}\n\n` +
           `Examples of good queries:\n` +
           `  - "search contacts"\n` +
           `  - "send email"\n` +
@@ -117,8 +117,8 @@ export async function actionsSearchCommand(
 
     console.log();
     p.note(
-      `Get details: ${pc.cyan(`pica actions knowledge ${platform} <actionId>`)}\n` +
-        `Execute:     ${pc.cyan(`pica actions execute ${platform} <actionId> <connectionKey>`)}`,
+      `Get details: ${pc.cyan(`one actions knowledge ${platform} <actionId>`)}\n` +
+        `Execute:     ${pc.cyan(`one actions execute ${platform} <actionId> <connectionKey>`)}`,
       'Next Steps'
     );
   } catch (error) {
@@ -133,10 +133,10 @@ export async function actionsKnowledgeCommand(
   platform: string,
   actionId: string
 ): Promise<void> {
-  output.intro(pc.bgCyan(pc.black(' Pica ')));
+  output.intro(pc.bgCyan(pc.black(' One ')));
 
   const { apiKey, actionIds, connectionKeys } = getConfig();
-  const api = new PicaApi(apiKey);
+  const api = new OneApi(apiKey);
 
   // Check action allowlist
   if (!isActionAllowed(actionId, actionIds)) {
@@ -187,7 +187,7 @@ export async function actionsKnowledgeCommand(
     console.log();
 
     p.note(
-      `Execute: ${pc.cyan(`pica actions execute ${platform} ${actionId} <connectionKey>`)}`,
+      `Execute: ${pc.cyan(`one actions execute ${platform} ${actionId} <connectionKey>`)}`,
       'Next Step'
     );
   } catch (error) {
@@ -211,7 +211,7 @@ export async function actionsExecuteCommand(
     formUrlEncoded?: boolean;
   }
 ): Promise<void> {
-  output.intro(pc.bgCyan(pc.black(' Pica ')));
+  output.intro(pc.bgCyan(pc.black(' One ')));
 
   const { apiKey, permissions, actionIds, connectionKeys, knowledgeAgent } =
     getConfig();
@@ -233,7 +233,7 @@ export async function actionsExecuteCommand(
     output.error(`Connection key "${connectionKey}" is not allowed.`);
   }
 
-  const api = new PicaApi(apiKey);
+  const api = new OneApi(apiKey);
 
   const spinner = output.createSpinner();
   spinner.start('Loading action details...');

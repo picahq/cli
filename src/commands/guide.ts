@@ -20,7 +20,7 @@ export async function guideCommand(topic: string = 'all'): Promise<void> {
     return;
   }
 
-  output.intro(pc.bgCyan(pc.black(' Pica Guide ')));
+  output.intro(pc.bgCyan(pc.black(' One Guide ')));
   console.log();
   console.log(content);
   console.log(pc.dim('─'.repeat(60)));
@@ -28,5 +28,5 @@ export async function guideCommand(topic: string = 'all'): Promise<void> {
     pc.dim('Available topics: ') +
       availableTopics.map((t) => pc.cyan(t.topic)).join(', ')
   );
-  console.log(pc.dim(`Run ${pc.cyan('pica guide <topic>')} for a specific section.`));
+  console.log(pc.dim(`Run ${pc.cyan('one guide <topic>')} for a specific section.`));
 }

@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { PicaApi } from './api.js';
+import type { OneApi } from './api.js';
 import { isMethodAllowed, isActionAllowed } from './api.js';
 import type { PermissionLevel } from './types.js';
 import type {
@@ -102,7 +102,7 @@ export function evaluateExpression(expr: string, context: FlowContext): unknown 
 async function executeActionStep(
   step: FlowStep,
   context: FlowContext,
-  api: PicaApi,
+  api: OneApi,
   permissions: PermissionLevel,
   allowedActionIds: string[],
 ): Promise<StepResult> {
@@ -158,7 +158,7 @@ async function executeCodeStep(step: FlowStep, context: FlowContext): Promise<St
 async function executeConditionStep(
   step: FlowStep,
   context: FlowContext,
-  api: PicaApi,
+  api: OneApi,
   permissions: PermissionLevel,
   allowedActionIds: string[],
   options: FlowExecuteOptions,
@@ -179,7 +179,7 @@ async function executeConditionStep(
 async function executeLoopStep(
   step: FlowStep,
   context: FlowContext,
-  api: PicaApi,
+  api: OneApi,
   permissions: PermissionLevel,
   allowedActionIds: string[],
   options: FlowExecuteOptions,
@@ -216,7 +216,7 @@ async function executeLoopStep(
 async function executeParallelStep(
   step: FlowStep,
   context: FlowContext,
-  api: PicaApi,
+  api: OneApi,
   permissions: PermissionLevel,
   allowedActionIds: string[],
   options: FlowExecuteOptions,
@@ -275,7 +275,7 @@ function executeFileWriteStep(step: FlowStep, context: FlowContext): StepResult 
 export async function executeSingleStep(
   step: FlowStep,
   context: FlowContext,
-  api: PicaApi,
+  api: OneApi,
   permissions: PermissionLevel,
   allowedActionIds: string[],
   options: FlowExecuteOptions,
@@ -393,7 +393,7 @@ export async function executeSingleStep(
 export async function executeSteps(
   steps: FlowStep[],
   context: FlowContext,
-  api: PicaApi,
+  api: OneApi,
   permissions: PermissionLevel,
   allowedActionIds: string[],
   options: FlowExecuteOptions,
@@ -447,7 +447,7 @@ export async function executeSteps(
 export async function executeFlow(
   flow: Flow,
   inputs: Record<string, unknown>,
-  api: PicaApi,
+  api: OneApi,
   permissions: PermissionLevel,
   allowedActionIds: string[],
   options: FlowExecuteOptions = {},

@@ -1,24 +1,24 @@
 ---
-name: pica-actions
+name: one-actions
 description: |
-  Use the Pica CLI to interact with 200+ third-party platforms (Gmail, Slack, HubSpot, Shopify, etc.) through their APIs. This skill handles the full workflow: listing connections, searching for available actions, reading action documentation, and executing API calls against connected platforms.
+  Use the One CLI to interact with 200+ third-party platforms (Gmail, Slack, HubSpot, Shopify, etc.) through their APIs. This skill handles the full workflow: listing connections, searching for available actions, reading action documentation, and executing API calls against connected platforms.
 
   TRIGGER when the user wants to:
   - List their connected platforms or connections (e.g., "what platforms am I connected to", "show my connections")
   - Search for what they can do on a platform (e.g., "what can I do with Gmail", "find Shopify actions for creating products", "search HubSpot for contacts")
   - Understand how an API action works before using it (e.g., "how do I send an email with Gmail", "show me the docs for this action")
   - Execute an action on a connected platform (e.g., "send an email via Gmail", "create a contact in HubSpot", "list my Shopify orders", "fetch my calendar events")
-  - Anything involving third-party platform integrations, API calls to external services through Pica, or using connected apps
+  - Anything involving third-party platform integrations, API calls to external services through One, or using connected apps
 
   DO NOT TRIGGER for:
-  - Setting up Pica or installing MCP (that's `pica init`)
-  - Configuring access control (that's `pica config`)
-  - Adding new connections (that's `pica connection add`)
+  - Setting up One or installing MCP (that's `one init`)
+  - Configuring access control (that's `one config`)
+  - Adding new connections (that's `one connection add`)
 ---
 
-# Pica Actions CLI Workflow
+# One Actions CLI Workflow
 
-You have access to the Pica CLI which lets you interact with 200+ third-party platforms through their APIs. The CLI handles authentication, request building, and execution through Pica's passthrough proxy.
+You have access to the One CLI which lets you interact with 200+ third-party platforms through their APIs. The CLI handles authentication, request building, and execution through One's passthrough proxy.
 
 ## The Workflow
 
@@ -36,7 +36,7 @@ Never skip the knowledge step before executing — it contains critical informat
 ### 1. List Connections
 
 ```bash
-pica --agent connection list
+one --agent connection list
 ```
 
 Returns JSON with all connected platforms, their status, and connection keys. You need the **connection key** for executing actions, and the **platform name** (kebab-case) for searching actions.
@@ -49,7 +49,7 @@ Output format:
 ### 2. Search Actions
 
 ```bash
-pica --agent actions search <platform> <query>
+one --agent actions search <platform> <query>
 ```
 
 Search for actions on a specific platform using natural language. Returns JSON with up to 5 matching actions including their action IDs, HTTP methods, and paths.
@@ -62,7 +62,7 @@ Options:
 
 Example:
 ```bash
-pica --agent actions search gmail "send email" -t execute
+one --agent actions search gmail "send email" -t execute
 ```
 
 Output format:
@@ -73,7 +73,7 @@ Output format:
 ### 3. Get Action Knowledge
 
 ```bash
-pica --agent actions knowledge <platform> <actionId>
+one --agent actions knowledge <platform> <actionId>
 ```
 
 Get comprehensive documentation for an action including parameters, requirements, validation rules, request/response structure, and examples. Returns JSON with the full API knowledge and HTTP method.
@@ -82,7 +82,7 @@ Always call this before executing — it tells you exactly what parameters are r
 
 Example:
 ```bash
-pica --agent actions knowledge gmail 67890abcdef
+one --agent actions knowledge gmail 67890abcdef
 ```
 
 Output format:
@@ -93,14 +93,14 @@ Output format:
 ### 4. Execute Action
 
 ```bash
-pica --agent actions execute <platform> <actionId> <connectionKey> [options]
+one --agent actions execute <platform> <actionId> <connectionKey> [options]
 ```
 
 Execute an action on a connected platform. Returns JSON with the request details and response data. You must have retrieved the knowledge for this action first.
 
 - `<platform>` — Platform name in kebab-case
 - `<actionId>` — Action ID from the search results
-- `<connectionKey>` — Connection key from `pica connection list`
+- `<connectionKey>` — Connection key from `one connection list`
 
 Options:
 - `-d, --data <json>` — Request body as JSON string (for POST, PUT, PATCH)
@@ -113,14 +113,14 @@ Options:
 Examples:
 ```bash
 # Simple GET request
-pica --agent actions execute shopify <actionId> <connectionKey>
+one --agent actions execute shopify <actionId> <connectionKey>
 
 # POST with data
-pica --agent actions execute hub-spot <actionId> <connectionKey> \
+one --agent actions execute hub-spot <actionId> <connectionKey> \
   -d '{"properties": {"email": "jane@example.com", "firstname": "Jane"}}'
 
 # With path variables and query params
-pica --agent actions execute shopify <actionId> <connectionKey> \
+one --agent actions execute shopify <actionId> <connectionKey> \
   --path-vars '{"order_id": "12345"}' \
   --query-params '{"limit": "10"}'
 ```
@@ -147,4 +147,4 @@ Parse the output as JSON. If the `error` key is present, the command failed — 
 - Always read the knowledge output carefully — it tells you which parameters are required vs optional, what format they need to be in, and any caveats specific to that API
 - JSON values passed to `-d`, `--path-vars`, `--query-params`, and `--headers` must be valid JSON strings (use single quotes around the JSON to avoid shell escaping issues)
 - If search returns no results, try broader queries (e.g., `"list"` instead of `"list active premium customers"`)
-- The execute command respects access control settings configured via `pica config` — if execution is blocked, the user may need to adjust their permissions
+- The execute command respects access control settings configured via `one config` — if execution is blocked, the user may need to adjust their permissions

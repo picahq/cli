@@ -1,14 +1,14 @@
 {
   "name": "@picahq/cli",
   "version": "1.10.0",
-  "description": "CLI for managing Pica",
+  "description": "CLI for managing One",
   "type": "module",
   "files": [
     "bin",
     "dist"
   ],
   "bin": {
-    "pica": "./bin/cli.js"
+    "one": "./bin/cli.js"
   },
   "scripts": {
     "build": "tsup",

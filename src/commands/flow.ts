@@ -1,6 +1,6 @@
 import pc from 'picocolors';
 import { getApiKey, getAccessControlFromAllSources } from '../lib/config.js';
-import { PicaApi } from '../lib/api.js';
+import { OneApi } from '../lib/api.js';
 import * as output from '../lib/output.js';
 import { printTable } from '../lib/table.js';
 import { validateFlow } from '../lib/flow-validator.js';
@@ -12,7 +12,7 @@ import fs from 'node:fs';
 function getConfig() {
   const apiKey = getApiKey();
   if (!apiKey) {
-    output.error('Not configured. Run `pica init` first.');
+    output.error('Not configured. Run `one init` first.');
   }
 
   const ac = getAccessControlFromAllSources();
@@ -52,7 +52,7 @@ export { collect };
 async function autoResolveConnectionInputs(
   flow: Flow,
   inputs: Record<string, unknown>,
-  api: PicaApi,
+  api: OneApi,
 ): Promise<Record<string, unknown>> {
   const resolved = { ...inputs };
   const connectionInputs = Object.entries(flow.inputs).filter(
@@ -84,7 +84,7 @@ export async function flowCreateCommand(
   key: string | undefined,
   options: { definition?: string; output?: string },
 ): Promise<void> {
-  output.intro(pc.bgCyan(pc.black(' Pica Flow ')));
+  output.intro(pc.bgCyan(pc.black(' One Flow ')));
 
   let flow: Flow;
 
@@ -134,17 +134,17 @@ export async function flowCreateCommand(
   }
 
   output.note(`Flow "${flow!.name}" saved to ${flowPath}`, 'Created');
-  output.outro(`Validate: ${pc.cyan(`pica flow validate ${flow!.key}`)}\nExecute:  ${pc.cyan(`pica flow execute ${flow!.key}`)}`);
+  output.outro(`Validate: ${pc.cyan(`one flow validate ${flow!.key}`)}\nExecute:  ${pc.cyan(`one flow execute ${flow!.key}`)}`);
 }
 
 export async function flowExecuteCommand(
   keyOrPath: string,
   options: { input?: string[]; dryRun?: boolean; verbose?: boolean },
 ): Promise<void> {
-  output.intro(pc.bgCyan(pc.black(' Pica Flow ')));
+  output.intro(pc.bgCyan(pc.black(' One Flow ')));
 
   const { apiKey, permissions, actionIds } = getConfig();
-  const api = new PicaApi(apiKey);
+  const api = new OneApi(apiKey);
 
   const spinner = output.createSpinner();
   spinner.start(`Loading flow "${keyOrPath}"...`);
@@ -261,7 +261,7 @@ export async function flowExecuteCommand(
 }
 
 export async function flowListCommand(): Promise<void> {
-  output.intro(pc.bgCyan(pc.black(' Pica Flow ')));
+  output.intro(pc.bgCyan(pc.black(' One Flow ')));
 
   const flows = listFlows();
 
@@ -271,7 +271,7 @@ export async function flowListCommand(): Promise<void> {
   }
 
   if (flows.length === 0) {
-    output.note('No flows found in .one/flows/\n\nCreate one with: pica flow create', 'Flows');
+    output.note('No flows found in .one/flows/\n\nCreate one with: one flow create', 'Flows');
     return;
   }
 
@@ -296,7 +296,7 @@ export async function flowListCommand(): Promise<void> {
 }
 
 export async function flowValidateCommand(keyOrPath: string): Promise<void> {
-  output.intro(pc.bgCyan(pc.black(' Pica Flow ')));
+  output.intro(pc.bgCyan(pc.black(' One Flow ')));
 
   const spinner = output.createSpinner();
   spinner.start(`Validating "${keyOrPath}"...`);
@@ -340,7 +340,7 @@ export async function flowValidateCommand(keyOrPath: string): Promise<void> {
 }
 
 export async function flowResumeCommand(runId: string): Promise<void> {
-  output.intro(pc.bgCyan(pc.black(' Pica Flow ')));
+  output.intro(pc.bgCyan(pc.black(' One Flow ')));
 
   const state = FlowRunner.loadRunState(runId);
   if (!state) {
@@ -352,7 +352,7 @@ export async function flowResumeCommand(runId: string): Promise<void> {
   }
 
   const { apiKey, permissions, actionIds } = getConfig();
-  const api = new PicaApi(apiKey);
+  const api = new OneApi(apiKey);
 
   let flow: Flow;
   try {
@@ -404,7 +404,7 @@ export async function flowResumeCommand(runId: string): Promise<void> {
 }
 
 export async function flowRunsCommand(flowKey?: string): Promise<void> {
-  output.intro(pc.bgCyan(pc.black(' Pica Flow ')));
+  output.intro(pc.bgCyan(pc.black(' One Flow ')));
 
   const runs = FlowRunner.listRuns(flowKey);
 

@@ -11,7 +11,7 @@ import {
   type InstallScope,
   type AgentStatus,
 } from '../lib/agents.js';
-import { PicaApi, TimeoutError } from '../lib/api.js';
+import { OneApi, TimeoutError } from '../lib/api.js';
 import { getApiKeyUrl, openApiKeyPage, openConnectionPage, getConnectionUrl } from '../lib/browser.js';
 import { configCommand } from './config.js';
 import open from 'open';
@@ -27,7 +27,7 @@ export async function initCommand(options: { yes?: boolean; global?: boolean; pr
   const existingConfig = readConfig();
 
   if (existingConfig) {
-    p.intro(pc.bgCyan(pc.black(' Pica ')));
+    p.intro(pc.bgCyan(pc.black(' One ')));
     await handleExistingConfig(existingConfig.apiKey, options);
     return;
   }
@@ -179,7 +179,7 @@ async function handleUpdateKey(statuses: AgentStatus[]): Promise<void> {
   }
 
   const newKey = await p.text({
-    message: 'Enter your new Pica API key:',
+    message: 'Enter your new One API key:',
     placeholder: 'sk_live_...',
     validate: (value) => {
       if (!value) return 'API key is required';
@@ -199,7 +199,7 @@ async function handleUpdateKey(statuses: AgentStatus[]): Promise<void> {
   const spinner = p.spinner();
   spinner.start('Validating API key...');
 
-  const api = new PicaApi(newKey);
+  const api = new OneApi(newKey);
   const isValid = await api.validateApiKey();
 
   if (!isValid) {
@@ -247,7 +247,7 @@ async function handleInstallMore(apiKey: string, missing: AgentStatus[]): Promis
     // Only one option, just confirm
     const agent = missing[0].agent;
     const confirm = await p.confirm({
-      message: `Install Pica MCP to ${agent.name}?`,
+      message: `Install One MCP to ${agent.name}?`,
       initialValue: true,
     });
 
@@ -362,7 +362,7 @@ async function freshSetup(options: { yes?: boolean; global?: boolean; project?: 
   }
 
   const apiKey = await p.text({
-    message: 'Enter your Pica API key:',
+    message: 'Enter your One API key:',
     placeholder: 'sk_live_...',
     validate: (value) => {
       if (!value) return 'API key is required';
@@ -382,7 +382,7 @@ async function freshSetup(options: { yes?: boolean; global?: boolean; project?: 
   const spinner = p.spinner();
   spinner.start('Validating API key...');
 
-  const api = new PicaApi(apiKey);
+  const api = new OneApi(apiKey);
   const isValid = await api.validateApiKey();
 
   if (!isValid) {
@@ -528,7 +528,7 @@ async function freshSetup(options: { yes?: boolean; global?: boolean; project?: 
 
     await promptConnectIntegrations(apiKey);
 
-    p.outro('Your AI agents now have access to Pica integrations!');
+    p.outro('Your AI agents now have access to One integrations!');
     return;
   }
 
@@ -558,7 +558,7 @@ async function freshSetup(options: { yes?: boolean; global?: boolean; project?: 
 
   await promptConnectIntegrations(apiKey);
 
-  p.outro('Your AI agents now have access to Pica integrations!');
+  p.outro('Your AI agents now have access to One integrations!');
 }
 
 // ── Welcome banner & post-setup integration prompt ───────────────────
@@ -587,7 +587,7 @@ const TOP_INTEGRATIONS = [
 ];
 
 async function promptConnectIntegrations(apiKey: string): Promise<void> {
-  const api = new PicaApi(apiKey);
+  const api = new OneApi(apiKey);
   const connected: string[] = [];
 
   // Check which top integrations are already connected
@@ -615,7 +615,7 @@ async function promptConnectIntegrations(apiKey: string): Promise<void> {
         hint: i.hint,
       })),
       { value: 'more', label: 'Browse all 200+ platforms' },
-      { value: 'skip', label: 'Skip for now', hint: 'you can always run pica add later' },
+      { value: 'skip', label: 'Skip for now', hint: 'you can always run one add later' },
     ];
 
     const message = first
@@ -630,12 +630,12 @@ async function promptConnectIntegrations(apiKey: string): Promise<void> {
 
     if (choice === 'more') {
       try {
-        await open('https://app.picaos.com/connections');
-        p.log.info('Opened Pica dashboard in browser.');
+        await open('https://app.withone.ai/connections');
+        p.log.info('Opened One dashboard in browser.');
       } catch {
-        p.note('https://app.picaos.com/connections', 'Open in browser');
+        p.note('https://app.withone.ai/connections', 'Open in browser');
       }
-      p.log.info(`Connect from the dashboard, or use ${pc.cyan('pica add <platform>')}`);
+      p.log.info(`Connect from the dashboard, or use ${pc.cyan('one add <platform>')}`);
       break;
     }
 
@@ -665,7 +665,7 @@ async function promptConnectIntegrations(apiKey: string): Promise<void> {
     } catch (error) {
       spinner.stop('Connection timed out');
       if (error instanceof TimeoutError) {
-        p.log.warn(`No worries. Connect later with: ${pc.cyan(`pica add ${platform}`)}`);
+        p.log.warn(`No worries. Connect later with: ${pc.cyan(`one add ${platform}`)}`);
       }
       first = false;
     }

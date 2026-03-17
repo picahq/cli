@@ -161,21 +161,21 @@ export function writeAgentConfig(agent: Agent, config: Record<string, unknown>, 
 
 export function getMcpServerConfig(apiKey: string, accessControl?: AccessControlSettings): Record<string, unknown> {
   const env: Record<string, string> = {
-    PICA_SECRET: apiKey,
+    ONE_SECRET: apiKey,
   };
 
   if (accessControl) {
     if (accessControl.permissions && accessControl.permissions !== 'admin') {
-      env.PICA_PERMISSIONS = accessControl.permissions;
+      env.ONE_PERMISSIONS = accessControl.permissions;
     }
     if (accessControl.connectionKeys && !(accessControl.connectionKeys.length === 1 && accessControl.connectionKeys[0] === '*')) {
-      env.PICA_CONNECTION_KEYS = accessControl.connectionKeys.join(',');
+      env.ONE_CONNECTION_KEYS = accessControl.connectionKeys.join(',');
     }
     if (accessControl.actionIds && !(accessControl.actionIds.length === 1 && accessControl.actionIds[0] === '*')) {
-      env.PICA_ACTION_IDS = accessControl.actionIds.join(',');
+      env.ONE_ACTION_IDS = accessControl.actionIds.join(',');
     }
     if (accessControl.knowledgeAgent) {
-      env.PICA_KNOWLEDGE_AGENT = 'true';
+      env.ONE_KNOWLEDGE_AGENT = 'true';
     }
   }
 
@@ -191,7 +191,7 @@ export function installMcpConfig(agent: Agent, apiKey: string, scope: InstallSco
   const configKey = agent.configKey;
 
   const mcpServers = (config[configKey] as Record<string, unknown>) || {};
-  mcpServers['pica'] = getMcpServerConfig(apiKey, accessControl);
+  mcpServers['one'] = getMcpServerConfig(apiKey, accessControl);
 
   config[configKey] = mcpServers;
   writeAgentConfig(agent, config, scope);
@@ -201,7 +201,7 @@ export function isMcpInstalled(agent: Agent, scope: InstallScope = 'global'): bo
   const config = readAgentConfig(agent, scope);
   const configKey = agent.configKey;
   const mcpServers = config[configKey] as Record<string, unknown> | undefined;
-  return mcpServers?.['pica'] !== undefined;
+  return mcpServers?.['one'] !== undefined;
 }
 
 export function getProjectConfigPaths(agents: Agent[]): string[] {

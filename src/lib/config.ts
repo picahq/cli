@@ -3,7 +3,7 @@ import path from 'node:path';
 import os from 'node:os';
 import type { Config, AccessControlSettings, PermissionLevel } from './types.js';
 
-const CONFIG_DIR = path.join(os.homedir(), '.pica');
+const CONFIG_DIR = path.join(os.homedir(), '.one');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 
 export function getConfigPath(): string {
@@ -33,8 +33,8 @@ export function writeConfig(config: Config): void {
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), { mode: 0o600 });
 }
 
-function readPicaRc(): Record<string, string> {
-  const rcPath = path.join(process.cwd(), '.picarc');
+function readOneRc(): Record<string, string> {
+  const rcPath = path.join(process.cwd(), '.onerc');
   if (!fs.existsSync(rcPath)) return {};
 
   try {
@@ -56,33 +56,33 @@ function readPicaRc(): Record<string, string> {
 }
 
 export function getApiKey(): string | null {
-  // Priority: env var > .picarc > ~/.pica/config.json
-  if (process.env.PICA_SECRET) return process.env.PICA_SECRET;
+  // Priority: env var > .onerc > ~/.one/config.json
+  if (process.env.ONE_SECRET) return process.env.ONE_SECRET;
 
-  const rc = readPicaRc();
-  if (rc.PICA_SECRET) return rc.PICA_SECRET;
+  const rc = readOneRc();
+  if (rc.ONE_SECRET) return rc.ONE_SECRET;
 
   return readConfig()?.apiKey ?? null;
 }
 
 export function getAccessControlFromAllSources(): AccessControlSettings {
-  const rc = readPicaRc();
+  const rc = readOneRc();
   const fileAc = getAccessControl();
 
-  // .picarc overrides take priority over config file
+  // .onerc overrides take priority over config file
   const merged: AccessControlSettings = { ...fileAc };
 
-  if (rc.PICA_PERMISSIONS) {
-    merged.permissions = rc.PICA_PERMISSIONS as PermissionLevel;
+  if (rc.ONE_PERMISSIONS) {
+    merged.permissions = rc.ONE_PERMISSIONS as PermissionLevel;
   }
-  if (rc.PICA_CONNECTION_KEYS) {
-    merged.connectionKeys = rc.PICA_CONNECTION_KEYS.split(',').map(s => s.trim()).filter(Boolean);
+  if (rc.ONE_CONNECTION_KEYS) {
+    merged.connectionKeys = rc.ONE_CONNECTION_KEYS.split(',').map(s => s.trim()).filter(Boolean);
   }
-  if (rc.PICA_ACTION_IDS) {
-    merged.actionIds = rc.PICA_ACTION_IDS.split(',').map(s => s.trim()).filter(Boolean);
+  if (rc.ONE_ACTION_IDS) {
+    merged.actionIds = rc.ONE_ACTION_IDS.split(',').map(s => s.trim()).filter(Boolean);
   }
-  if (rc.PICA_KNOWLEDGE_AGENT) {
-    merged.knowledgeAgent = rc.PICA_KNOWLEDGE_AGENT === 'true';
+  if (rc.ONE_KNOWLEDGE_AGENT) {
+    merged.knowledgeAgent = rc.ONE_KNOWLEDGE_AGENT === 'true';
   }
 
   return merged;

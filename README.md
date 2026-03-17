@@ -1,8 +1,8 @@
-# Pica CLI
+# One CLI
 
 One CLI to connect AI agents to every API on the internet.
 
-Pica gives your AI agent authenticated access to 200+ platforms — Gmail, Slack, Shopify, HubSpot, Stripe, Notion, and everything else — through a single interface. No API keys to juggle, no OAuth flows to build, no request formats to memorize. Connect a platform once, and your agent can search for actions, read the docs, and execute API calls in seconds.
+One gives your AI agent authenticated access to 200+ platforms — Gmail, Slack, Shopify, HubSpot, Stripe, Notion, and everything else — through a single interface. No API keys to juggle, no OAuth flows to build, no request formats to memorize. Connect a platform once, and your agent can search for actions, read the docs, and execute API calls in seconds.
 
 ## Install
 
@@ -14,10 +14,10 @@ Or install globally:
 
 ```bash
 npm install -g @picahq/cli
-pica init
+one init
 ```
 
-`pica init` walks you through setup: enter your [API key](https://app.picaos.com/settings/api-keys), pick your AI agents, and you're done. The MCP server gets installed automatically.
+`one init` walks you through setup: enter your [API key](https://app.withone.ai/settings/api-keys), pick your AI agents, and you're done. The MCP server gets installed automatically.
 
 Requires Node.js 18+.
 
@@ -25,19 +25,19 @@ Requires Node.js 18+.
 
 ```bash
 # Connect a platform
-pica add gmail
+one add gmail
 
 # See what you're connected to
-pica list
+one list
 
 # Search for actions you can take
-pica actions search gmail "send email" -t execute
+one actions search gmail "send email" -t execute
 
 # Read the docs for an action
-pica actions knowledge gmail <actionId>
+one actions knowledge gmail <actionId>
 
 # Execute it
-pica actions execute gmail <actionId> <connectionKey> \
+one actions execute gmail <actionId> <connectionKey> \
   -d '{"to": "jane@example.com", "subject": "Hello", "body": "Sent from my AI agent"}'
 ```
 
@@ -49,7 +49,7 @@ Chain actions across platforms into reusable workflows:
 
 ```bash
 # Create a flow that looks up a Stripe customer and sends a Gmail welcome email
-pica flow create welcome-customer --definition '{
+one flow create welcome-customer --definition '{
   "key": "welcome-customer",
   "name": "Welcome New Customer",
   "version": "1",
@@ -70,41 +70,41 @@ pica flow create welcome-customer --definition '{
 }'
 
 # Validate it
-pica flow validate welcome-customer
+one flow validate welcome-customer
 
 # Run it — connection keys auto-resolve if you have one connection per platform
-pica flow execute welcome-customer -i email=jane@example.com
+one flow execute welcome-customer -i email=jane@example.com
 ```
 
-Flows are stored as JSON at `.one/flows/<key>.flow.json` and support conditions, loops, parallel steps, transforms, and more. Run `pica guide flows` for the full reference.
+Flows are stored as JSON at `.one/flows/<key>.flow.json` and support conditions, loops, parallel steps, transforms, and more. Run `one guide flows` for the full reference.
 
 ## How it works
 
 ```
 Your AI Agent
     ↓
-  Pica CLI
+  One CLI
     ↓
-  Pica API (api.picaos.com/v1/passthrough)
+  One API (api.withone.ai/v1/passthrough)
     ↓
   Gmail / Slack / Shopify / HubSpot / Stripe / ...
 ```
 
-Every API call routes through Pica's passthrough proxy. Pica injects the right credentials, handles rate limiting, and normalizes responses. You never see or manage raw OAuth tokens — your connection key is all you need.
+Every API call routes through One's passthrough proxy. One injects the right credentials, handles rate limiting, and normalizes responses. You never see or manage raw OAuth tokens — your connection key is all you need.
 
 ## Commands
 
-### `pica init`
+### `one init`
 
 Set up your API key and install the MCP server into your AI agents.
 
 ```bash
-pica init
+one init
 ```
 
 Supports Claude Code, Claude Desktop, Cursor, Windsurf, Codex, and Kiro. Installs globally by default, or per-project with `-p` so your team can share configs (each person uses their own API key).
 
-If you've already set up, `pica init` shows your current status and lets you update your key, install to more agents, or reconfigure.
+If you've already set up, `one init` shows your current status and lets you update your key, install to more agents, or reconfigure.
 
 | Flag | What it does |
 |------|-------------|
@@ -112,24 +112,24 @@ If you've already set up, `pica init` shows your current status and lets you upd
 | `-g` | Install globally (default) |
 | `-p` | Install for current project only |
 
-### `pica add <platform>`
+### `one add <platform>`
 
 Connect a new platform via OAuth.
 
 ```bash
-pica add shopify
-pica add hub-spot
-pica add gmail
+one add shopify
+one add hub-spot
+one add gmail
 ```
 
-Opens your browser, you authorize, done. The CLI polls until the connection is live. Platform names are kebab-case — run `pica platforms` to see them all.
+Opens your browser, you authorize, done. The CLI polls until the connection is live. Platform names are kebab-case — run `one platforms` to see them all.
 
-### `pica list`
+### `one list`
 
 List your active connections with their status and connection keys.
 
 ```bash
-pica list
+one list
 ```
 
 ```
@@ -140,56 +140,56 @@ pica list
 
 You need the connection key (rightmost column) when executing actions.
 
-### `pica platforms`
+### `one platforms`
 
 Browse all 200+ available platforms.
 
 ```bash
-pica platforms              # all platforms
-pica platforms -c "CRM"     # filter by category
-pica platforms --json       # machine-readable output
+one platforms              # all platforms
+one platforms -c "CRM"     # filter by category
+one platforms --json       # machine-readable output
 ```
 
-### `pica actions search <platform> <query>`
+### `one actions search <platform> <query>`
 
 Search for API actions on a connected platform using natural language.
 
 ```bash
-pica actions search shopify "list products"
-pica actions search hub-spot "create contact" -t execute
-pica actions search gmail "send email"
+one actions search shopify "list products"
+one actions search hub-spot "create contact" -t execute
+one actions search gmail "send email"
 ```
 
 Returns the top 5 matching actions with their action IDs, HTTP methods, and paths. Use `-t execute` when you intend to run the action, or `-t knowledge` (default) when you want to learn about it or write code against it.
 
-### `pica actions knowledge <platform> <actionId>`
+### `one actions knowledge <platform> <actionId>`
 
 Get the full documentation for an action — parameters, validation rules, request/response structure, examples, and the exact API request format.
 
 ```bash
-pica actions knowledge shopify 67890abcdef
+one actions knowledge shopify 67890abcdef
 ```
 
 Always read the knowledge before executing. It tells you exactly what parameters are required, what format they need, and any platform-specific quirks.
 
-### `pica actions execute <platform> <actionId> <connectionKey>`
+### `one actions execute <platform> <actionId> <connectionKey>`
 
 Execute an API action on a connected platform.
 
 ```bash
 # Simple GET
-pica actions execute shopify <actionId> <connectionKey>
+one actions execute shopify <actionId> <connectionKey>
 
 # POST with data
-pica actions execute hub-spot <actionId> <connectionKey> \
+one actions execute hub-spot <actionId> <connectionKey> \
   -d '{"properties": {"email": "jane@example.com", "firstname": "Jane"}}'
 
 # With path variables
-pica actions execute shopify <actionId> <connectionKey> \
+one actions execute shopify <actionId> <connectionKey> \
   --path-vars '{"order_id": "12345"}'
 
 # With query params
-pica actions execute stripe <actionId> <connectionKey> \
+one actions execute stripe <actionId> <connectionKey> \
   --query-params '{"limit": "10"}'
 ```
 
@@ -202,37 +202,37 @@ pica actions execute stripe <actionId> <connectionKey> \
 | `--form-data` | Send as multipart/form-data |
 | `--form-url-encoded` | Send as application/x-www-form-urlencoded |
 
-### `pica guide [topic]`
+### `one guide [topic]`
 
 Get the full CLI usage guide, designed for AI agents that only have the binary (no MCP, no IDE skills).
 
 ```bash
-pica guide                 # full guide (all topics)
-pica guide overview        # setup, --agent flag, discovery workflow
-pica guide actions         # search, knowledge, execute workflow
-pica guide flows           # multi-step API workflows
+one guide                 # full guide (all topics)
+one guide overview        # setup, --agent flag, discovery workflow
+one guide actions         # search, knowledge, execute workflow
+one guide flows           # multi-step API workflows
 
-pica --agent guide         # full guide as structured JSON
-pica --agent guide flows   # single topic as JSON
+one --agent guide         # full guide as structured JSON
+one --agent guide flows   # single topic as JSON
 ```
 
 Topics: `overview`, `actions`, `flows`, `all` (default).
 
 In agent mode (`--agent`), the JSON response includes the guide content and an `availableTopics` array so agents can discover what sections exist.
 
-### `pica flow create [key]`
+### `one flow create [key]`
 
 Create a flow from a JSON definition. Flows are saved to `.one/flows/<key>.flow.json`.
 
 ```bash
 # From a --definition flag
-pica flow create welcome-customer --definition '{"key":"welcome-customer","name":"Welcome","version":"1","inputs":{},"steps":[]}'
+one flow create welcome-customer --definition '{"key":"welcome-customer","name":"Welcome","version":"1","inputs":{},"steps":[]}'
 
 # From stdin
-cat flow.json | pica flow create
+cat flow.json | one flow create
 
 # Custom output path
-pica flow create my-flow --definition '...' -o ./custom/path.json
+one flow create my-flow --definition '...' -o ./custom/path.json
 ```
 
 | Option | What it does |
@@ -240,25 +240,25 @@ pica flow create my-flow --definition '...' -o ./custom/path.json
 | `--definition <json>` | Flow definition as a JSON string |
 | `-o, --output <path>` | Custom output path (default: `.one/flows/<key>.flow.json`) |
 
-### `pica flow execute <key>`
+### `one flow execute <key>`
 
 Execute a flow by key or file path. Pass inputs with repeatable `-i` flags.
 
 ```bash
 # Execute with inputs
-pica flow execute welcome-customer \
+one flow execute welcome-customer \
   -i customerEmail=jane@example.com
 
 # Dry run — validate and show plan without executing
-pica flow execute welcome-customer --dry-run -i customerEmail=jane@example.com
+one flow execute welcome-customer --dry-run -i customerEmail=jane@example.com
 
 # Verbose — show each step as it runs
-pica flow execute welcome-customer -v -i customerEmail=jane@example.com
+one flow execute welcome-customer -v -i customerEmail=jane@example.com
 ```
 
 Connection inputs with a `connection` field in the flow definition are auto-resolved when the user has exactly one connection for that platform.
 
-Press Ctrl+C during execution to pause — the run can be resumed later with `pica flow resume <runId>`.
+Press Ctrl+C during execution to pause — the run can be resumed later with `one flow resume <runId>`.
 
 | Option | What it does |
 |--------|-------------|
@@ -266,45 +266,45 @@ Press Ctrl+C during execution to pause — the run can be resumed later with `pi
 | `--dry-run` | Validate and show execution plan without running |
 | `-v, --verbose` | Show full request/response for each step |
 
-### `pica flow list`
+### `one flow list`
 
 List all flows saved in `.one/flows/`.
 
 ```bash
-pica flow list
+one flow list
 ```
 
-### `pica flow validate <key>`
+### `one flow validate <key>`
 
 Validate a flow JSON file against the schema.
 
 ```bash
-pica flow validate welcome-customer
+one flow validate welcome-customer
 ```
 
-### `pica flow resume <runId>`
+### `one flow resume <runId>`
 
 Resume a paused or failed flow run from where it left off.
 
 ```bash
-pica flow resume abc123
+one flow resume abc123
 ```
 
-### `pica flow runs [flowKey]`
+### `one flow runs [flowKey]`
 
 List flow runs, optionally filtered by flow key.
 
 ```bash
-pica flow runs                    # all runs
-pica flow runs welcome-customer   # runs for a specific flow
+one flow runs                    # all runs
+one flow runs welcome-customer   # runs for a specific flow
 ```
 
-### `pica config`
+### `one config`
 
 Configure access control for the MCP server. Optional — full access is the default.
 
 ```bash
-pica config
+one config
 ```
 
 | Setting | Options | Default |
@@ -318,13 +318,13 @@ Settings propagate automatically to all installed agent configs.
 
 ## The workflow
 
-The power of Pica is in the workflow. Every interaction follows the same pattern:
+The power of One is in the workflow. Every interaction follows the same pattern:
 
 ```
-pica list                    → What am I connected to?
-pica actions search          → What can I do?
-pica actions knowledge       → How do I do it?
-pica actions execute         → Do it.
+one list                    → What am I connected to?
+one actions search          → What can I do?
+one actions knowledge       → How do I do it?
+one actions execute         → Do it.
 ```
 
 This is the same workflow whether you're sending emails, creating CRM contacts, processing payments, managing inventory, or posting to Slack. One pattern, any platform.
@@ -332,32 +332,32 @@ This is the same workflow whether you're sending emails, creating CRM contacts, 
 For multi-step workflows that chain actions across platforms, use **flows**:
 
 ```
-pica actions knowledge       → Learn each action's schema
-pica flow create             → Define the workflow as JSON
-pica flow validate           → Check it
-pica flow execute            → Run it
+one actions knowledge       → Learn each action's schema
+one flow create             → Define the workflow as JSON
+one flow validate           → Check it
+one flow execute            → Run it
 ```
 
-Flows support conditions, loops, parallel execution, transforms, code steps, and file I/O. Run `pica guide flows` for the full schema reference and examples.
+Flows support conditions, loops, parallel execution, transforms, code steps, and file I/O. Run `one guide flows` for the full schema reference and examples.
 
 ## For AI agents
 
-If you're an AI agent with only the `pica` binary (no MCP server or IDE skills), start with `pica --agent guide` to get the full usage guide as structured JSON. This teaches you the complete workflow, JSON schemas, selector syntax, and more — everything you need to bootstrap yourself.
+If you're an AI agent with only the `one` binary (no MCP server or IDE skills), start with `one --agent guide` to get the full usage guide as structured JSON. This teaches you the complete workflow, JSON schemas, selector syntax, and more — everything you need to bootstrap yourself.
 
-If you're an AI agent using the Pica MCP server, the tools map directly:
+If you're an AI agent using the One MCP server, the tools map directly:
 
 | MCP Tool | CLI Command |
 |----------|------------|
-| `list_pica_integrations` | `pica list` + `pica platforms` |
-| `search_pica_platform_actions` | `pica actions search` |
-| `get_pica_action_knowledge` | `pica actions knowledge` |
-| `execute_pica_action` | `pica actions execute` |
+| `list_one_integrations` | `one list` + `one platforms` |
+| `search_one_platform_actions` | `one actions search` |
+| `get_one_action_knowledge` | `one actions knowledge` |
+| `execute_one_action` | `one actions execute` |
 
 The workflow is the same: list → search → knowledge → execute. Never skip the knowledge step — it contains required parameter info and platform-specific details that are critical for building correct requests.
 
 ## MCP server installation
 
-`pica init` handles this automatically. Here's where configs go:
+`one init` handles this automatically. Here's where configs go:
 
 | Agent | Global | Project |
 |-------|--------|---------|
@@ -368,7 +368,7 @@ The workflow is the same: list → search → knowledge → execute. Never skip 
 | Codex | `~/.codex/config.toml` | `.codex/config.toml` |
 | Kiro | `~/.kiro/settings/mcp.json` | `.kiro/settings/mcp.json` |
 
-Project configs can be committed to your repo. Each team member runs `pica init` with their own API key.
+Project configs can be committed to your repo. Each team member runs `one init` with their own API key.
 
 ## Development
 

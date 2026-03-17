@@ -25,45 +25,45 @@ const { version } = require('../package.json');
 const program = new Command();
 
 program
-  .name('pica')
+  .name('one')
   .option('--agent', 'Machine-readable JSON output (no colors, spinners, or prompts)')
-  .description(`Pica CLI — Connect AI agents to 200+ platforms through one interface.
+  .description(`One CLI — Connect AI agents to 200+ platforms through one interface.
 
   Setup:
-    pica init                              Set up API key and install MCP server
-    pica add <platform>                    Connect a platform via OAuth (e.g. gmail, slack, shopify)
-    pica config                            Configure access control (permissions, scoping)
+    one init                              Set up API key and install MCP server
+    one add <platform>                    Connect a platform via OAuth (e.g. gmail, slack, shopify)
+    one config                            Configure access control (permissions, scoping)
 
   Workflow (use these in order):
-    1. pica list                           List your connected platforms and connection keys
-    2. pica actions search <platform> <q>  Search for actions using natural language
-    3. pica actions knowledge <plat> <id>  Get full docs for an action (ALWAYS do this before execute)
-    4. pica actions execute <p> <id> <key> Execute the action
+    1. one list                           List your connected platforms and connection keys
+    2. one actions search <platform> <q>  Search for actions using natural language
+    3. one actions knowledge <plat> <id>  Get full docs for an action (ALWAYS do this before execute)
+    4. one actions execute <p> <id> <key> Execute the action
 
   Guide:
-    pica guide [topic]                     Full CLI guide (topics: overview, actions, flows, all)
+    one guide [topic]                     Full CLI guide (topics: overview, actions, flows, all)
 
   Flows (multi-step workflows):
-    pica flow list                         List saved flows
-    pica flow create [key]                 Create a flow from JSON
-    pica flow execute <key>                Execute a flow
-    pica flow validate <key>               Validate a flow
+    one flow list                         List saved flows
+    one flow create [key]                 Create a flow from JSON
+    one flow execute <key>                Execute a flow
+    one flow validate <key>               Validate a flow
 
   Example — send an email through Gmail:
-    $ pica list
+    $ one list
     # Find: gmail  operational  live::gmail::default::abc123
 
-    $ pica actions search gmail "send email" -t execute
+    $ one actions search gmail "send email" -t execute
     # Find: POST  Send Email  conn_mod_def::xxx::yyy
 
-    $ pica actions knowledge gmail conn_mod_def::xxx::yyy
+    $ one actions knowledge gmail conn_mod_def::xxx::yyy
     # Read the docs: required fields are to, subject, body, connectionKey
 
-    $ pica actions execute gmail conn_mod_def::xxx::yyy live::gmail::default::abc123 \\
+    $ one actions execute gmail conn_mod_def::xxx::yyy live::gmail::default::abc123 \\
         -d '{"to":"j@example.com","subject":"Hello","body":"Hi!","connectionKey":"live::gmail::default::abc123"}'
 
   Platform names are always kebab-case (e.g. hub-spot, ship-station, google-calendar).
-  Run 'pica platforms' to browse all 200+ available platforms.`)
+  Run 'one platforms' to browse all 200+ available platforms.`)
   .version(version);
 
 program.hook('preAction', (thisCommand) => {
@@ -75,7 +75,7 @@ program.hook('preAction', (thisCommand) => {
 
 program
   .command('init')
-  .description('Set up Pica and install MCP to your AI agents')
+  .description('Set up One and install MCP to your AI agents')
   .option('-y, --yes', 'Skip confirmations')
   .option('-g, --global', 'Install MCP globally (available in all projects)')
   .option('-p, --project', 'Install MCP for this project only (creates .mcp.json)')
@@ -127,7 +127,7 @@ const actions = program
 
 actions
   .command('search <platform> <query>')
-  .description('Search for actions on a platform (e.g. pica actions search gmail "send email")')
+  .description('Search for actions on a platform (e.g. one actions search gmail "send email")')
   .option('-t, --type <type>', 'execute (to run it) or knowledge (to learn about it). Default: knowledge')
   .action(async (platform: string, query: string, options: { type?: string }) => {
     await actionsSearchCommand(platform, query, options);
@@ -144,7 +144,7 @@ actions
 actions
   .command('execute <platform> <actionId> <connectionKey>')
   .alias('x')
-  .description('Execute an action — pass connectionKey from "pica list", actionId from "actions search"')
+  .description('Execute an action — pass connectionKey from "one list", actionId from "actions search"')
   .option('-d, --data <json>', 'Request body as JSON')
   .option('--path-vars <json>', 'Path variables as JSON')
   .option('--query-params <json>', 'Query parameters as JSON')
@@ -172,7 +172,7 @@ flow
   .command('create [key]')
   .description('Create a new flow from JSON definition')
   .option('--definition <json>', 'Flow definition as JSON string')
-  .option('-o, --output <path>', 'Custom output path (default: .one/flows/<key>.flow.json)')
+  .option('-o, --output <path>', 'Custom output path (default .one/flows/<key>.flow.json)')
   .action(async (key: string | undefined, options: { definition?: string; output?: string }) => {
     await flowCreateCommand(key, options);
   });

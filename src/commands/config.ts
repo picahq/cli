@@ -2,7 +2,7 @@ import * as p from '@clack/prompts';
 import pc from 'picocolors';
 import { readConfig, getAccessControl, updateAccessControl } from '../lib/config.js';
 import { getAgentStatuses, installMcpConfig } from '../lib/agents.js';
-import { PicaApi } from '../lib/api.js';
+import { OneApi } from '../lib/api.js';
 import * as output from '../lib/output.js';
 import type { AccessControlSettings, PermissionLevel } from '../lib/types.js';
 
@@ -14,11 +14,11 @@ export async function configCommand(): Promise<void> {
   const config = readConfig();
 
   if (!config) {
-    p.log.error(`No Pica config found. Run ${pc.cyan('pica init')} first.`);
+    p.log.error(`No One config found. Run ${pc.cyan('one init')} first.`);
     return;
   }
 
-  p.intro(pc.bgCyan(pc.black(' Pica Access Control ')));
+  p.intro(pc.bgCyan(pc.black(' One Access Control ')));
 
   const current = getAccessControl();
 
@@ -73,7 +73,7 @@ export async function configCommand(): Promise<void> {
       return;
     }
     if (connectionKeys.length === 0) {
-      p.log.info(`No connections found. Defaulting to all. Use ${pc.cyan('pica add')} to connect platforms.`);
+      p.log.info(`No connections found. Defaulting to all. Use ${pc.cyan('one add')} to connect platforms.`);
       connectionKeys = undefined;
     }
   }
@@ -166,7 +166,7 @@ async function selectConnections(apiKey: string): Promise<string[] | undefined> 
   let connections: { platform: string; key: string }[];
 
   try {
-    const api = new PicaApi(apiKey);
+    const api = new OneApi(apiKey);
     const rawConnections = await api.listConnections();
     connections = rawConnections.map(c => ({ platform: c.platform, key: c.key }));
     spinner.stop(`Found ${connections.length} connection(s)`);

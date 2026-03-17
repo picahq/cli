@@ -11,7 +11,7 @@ import type {
   SanitizedRequestConfig,
 } from './types.js';
 
-const API_BASE = 'https://api.picaos.com/v1';
+const API_BASE = 'https://api.withone.ai/v1';
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -20,7 +20,7 @@ export class ApiError extends Error {
   }
 }
 
-export class PicaApi {
+export class OneApi {
   constructor(private apiKey: string) {}
 
   private async request<T>(path: string): Promise<T> {
@@ -41,7 +41,7 @@ export class PicaApi {
     }
 
     const headers: Record<string, string> = {
-      'x-pica-secret': this.apiKey,
+      'x-one-secret': this.apiKey,
       'Content-Type': 'application/json',
       ...opts.headers,
     };
@@ -164,9 +164,9 @@ export class PicaApi {
         : 'application/json';
 
     const requestHeaders: Record<string, string> = {
-      'x-pica-secret': this.apiKey,
-      'x-pica-connection-key': args.connectionKey,
-      'x-pica-action-id': action._id,
+      'x-one-secret': this.apiKey,
+      'x-one-connection-key': args.connectionKey,
+      'x-one-action-id': action._id,
       'Content-Type': contentType,
       ...args.headers,
     };
@@ -242,7 +242,7 @@ export class PicaApi {
       method,
       headers: {
         ...requestHeaders,
-        'x-pica-secret': '***REDACTED***',
+        'x-one-secret': '***REDACTED***',
       },
       params: args.queryParams ? Object.fromEntries(
         Object.entries(args.queryParams).map(([k, v]) => [k, String(v)])
@@ -375,7 +375,7 @@ export function buildActionKnowledgeWithGuidance(
   platform: string,
   actionId: string
 ): string {
-  const baseUrl = 'https://api.picaos.com';
+  const baseUrl = 'https://api.withone.ai';
 
   return `${knowledge}
 
@@ -393,9 +393,9 @@ Examples:
 METHOD: ${method}
 
 HEADERS:
-- x-pica-secret: {{process.env.PICA_SECRET}}
-- x-pica-connection-key: {{process.env.PICA_${platform.toUpperCase()}_CONNECTION_KEY}}
-- x-pica-action-id: ${actionId}
+- x-one-secret: {{process.env.ONE_SECRET}}
+- x-one-connection-key: {{process.env.ONE_${platform.toUpperCase()}_CONNECTION_KEY}}
+- x-one-action-id: ${actionId}
 - ... (other headers)
 
 BODY: {{BODY}}

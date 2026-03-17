@@ -1,5 +1,5 @@
 ---
-name: pica-flow
+name: one-flow
 description: |
   Build and execute multi-step API workflows (flows) that chain actions across platforms — like n8n/Zapier but file-based. Flows are JSON files stored at `.one/flows/<key>.flow.json`.
 
@@ -12,21 +12,21 @@ description: |
   - Schedule or orchestrate a series of actions
 
   DO NOT TRIGGER for:
-  - Single action execution (use pica-actions skill instead)
-  - Setting up Pica or installing MCP (that's `pica init`)
-  - Adding new connections (that's `pica connection add`)
+  - Single action execution (use one-actions skill instead)
+  - Setting up One or installing MCP (that's `one init`)
+  - Adding new connections (that's `one connection add`)
 ---
 
-# Pica Flow — Multi-Step API Workflows
+# One Flow — Multi-Step API Workflows
 
-You have access to the Pica CLI's flow engine, which lets you create and execute multi-step API workflows as JSON files. Flows chain actions across platforms — e.g., look up a Stripe customer, then send them a welcome email via Gmail.
+You have access to the One CLI's flow engine, which lets you create and execute multi-step API workflows as JSON files. Flows chain actions across platforms — e.g., look up a Stripe customer, then send them a welcome email via Gmail.
 
 ## 1. Overview
 
 - Flows are JSON files stored at `.one/flows/<key>.flow.json`
 - All dynamic values (including connection keys) are declared as **inputs**
 - Each flow has a unique **key** used to reference and execute it
-- Executed via `pica --agent flow execute <key> -i name=value`
+- Executed via `one --agent flow execute <key> -i name=value`
 
 ## 2. Building a Flow — Step-by-Step Process
 
@@ -35,7 +35,7 @@ You have access to the Pica CLI's flow engine, which lets you create and execute
 ### Step 1: Discover connections
 
 ```bash
-pica --agent connection list
+one --agent connection list
 ```
 
 Find out which platforms are connected and get their connection keys.
@@ -44,13 +44,13 @@ Find out which platforms are connected and get their connection keys.
 
 ```bash
 # Find the action ID
-pica --agent actions search <platform> "<query>" -t execute
+one --agent actions search <platform> "<query>" -t execute
 
 # Read the full docs — REQUIRED before adding to a flow
-pica --agent actions knowledge <platform> <actionId>
+one --agent actions knowledge <platform> <actionId>
 ```
 
-**CRITICAL:** You MUST call `pica actions knowledge` for every action you include in the flow. The knowledge output tells you the exact request body structure, required fields, path variables, and query parameters. Without this, your flow JSON will have incorrect data shapes.
+**CRITICAL:** You MUST call `one actions knowledge` for every action you include in the flow. The knowledge output tells you the exact request body structure, required fields, path variables, and query parameters. Without this, your flow JSON will have incorrect data shapes.
 
 ### Step 3: Construct the flow JSON
 
@@ -62,7 +62,7 @@ Using the knowledge gathered, build the flow JSON with:
 ### Step 4: Write the flow file
 
 ```bash
-pica --agent flow create <key> --definition '<json>'
+one --agent flow create <key> --definition '<json>'
 ```
 
 Or write directly to `.one/flows/<key>.flow.json`.
@@ -70,13 +70,13 @@ Or write directly to `.one/flows/<key>.flow.json`.
 ### Step 5: Validate
 
 ```bash
-pica --agent flow validate <key>
+one --agent flow validate <key>
 ```
 
 ### Step 6: Execute
 
 ```bash
-pica --agent flow execute <key> -i connectionKey=xxx -i param=value
+one --agent flow execute <key> -i connectionKey=xxx -i param=value
 ```
 
 ## 3. Flow JSON Schema Reference
@@ -91,13 +91,13 @@ pica --agent flow execute <key> -i connectionKey=xxx -i param=value
     "stripeConnectionKey": {
       "type": "string",
       "required": true,
-      "description": "Stripe connection key from pica connection list",
+      "description": "Stripe connection key from one connection list",
       "connection": { "platform": "stripe" }
     },
     "gmailConnectionKey": {
       "type": "string",
       "required": true,
-      "description": "Gmail connection key from pica connection list",
+      "description": "Gmail connection key from one connection list",
       "connection": { "platform": "gmail" }
     },
     "customerEmail": {
@@ -158,7 +158,7 @@ pica --agent flow execute <key> -i connectionKey=xxx -i param=value
 
 ## 5. Step Types Reference
 
-### `action` — Execute a Pica API action
+### `action` — Execute a One API action
 
 ```json
 {
@@ -344,10 +344,10 @@ To modify an existing flow:
 
 1. Read the flow JSON file at `.one/flows/<key>.flow.json`
 2. Understand its current structure
-3. Use `pica --agent actions knowledge <platform> <actionId>` for any new actions
+3. Use `one --agent actions knowledge <platform> <actionId>` for any new actions
 4. Modify the JSON (add/remove/update steps, change data mappings, add inputs)
 5. Write back the updated flow file
-6. Validate: `pica --agent flow validate <key>`
+6. Validate: `one --agent flow validate <key>`
 
 ## 8. Complete Examples
 
@@ -566,35 +566,35 @@ To modify an existing flow:
 
 ```bash
 # Create a flow
-pica --agent flow create <key> --definition '<json>'
+one --agent flow create <key> --definition '<json>'
 
 # List all flows
-pica --agent flow list
+one --agent flow list
 
 # Validate a flow
-pica --agent flow validate <key>
+one --agent flow validate <key>
 
 # Execute a flow
-pica --agent flow execute <key> -i connectionKey=value -i param=value
+one --agent flow execute <key> -i connectionKey=value -i param=value
 
 # Execute with dry run (validate only)
-pica --agent flow execute <key> --dry-run -i connectionKey=value
+one --agent flow execute <key> --dry-run -i connectionKey=value
 
 # Execute with verbose output
-pica --agent flow execute <key> -v -i connectionKey=value
+one --agent flow execute <key> -v -i connectionKey=value
 
 # List flow runs
-pica --agent flow runs [flowKey]
+one --agent flow runs [flowKey]
 
 # Resume a paused/failed run
-pica --agent flow resume <runId>
+one --agent flow resume <runId>
 ```
 
 ## Important Notes
 
 - **Always use `--agent` flag** for structured JSON output
-- **Always call `pica actions knowledge`** before adding an action step to a flow
+- **Always call `one actions knowledge`** before adding an action step to a flow
 - Platform names are **kebab-case** (e.g., `hub-spot`, not `HubSpot`)
 - Connection keys are **inputs**, not hardcoded — makes flows portable and shareable
 - Use `$.input.*` for input values, `$.steps.*` for step results
-- Action IDs in examples (like `STRIPE_SEARCH_CUSTOMERS_ACTION_ID`) are placeholders — always use `pica actions search` to find the real IDs
+- Action IDs in examples (like `STRIPE_SEARCH_CUSTOMERS_ACTION_ID`) are placeholders — always use `one actions search` to find the real IDs

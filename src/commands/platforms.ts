@@ -1,7 +1,7 @@
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
 import { getApiKey } from '../lib/config.js';
-import { PicaApi } from '../lib/api.js';
+import { OneApi } from '../lib/api.js';
 import { printTable } from '../lib/table.js';
 import * as output from '../lib/output.js';
 import type { Platform } from '../lib/types.js';
@@ -9,7 +9,7 @@ import type { Platform } from '../lib/types.js';
 export async function platformsCommand(options: { category?: string; json?: boolean }): Promise<void> {
   const apiKey = getApiKey();
   if (!apiKey) {
-    output.error('Not configured. Run `pica init` first.');
+    output.error('Not configured. Run `one init` first.');
   }
 
   // In agent mode, force JSON output
@@ -17,7 +17,7 @@ export async function platformsCommand(options: { category?: string; json?: bool
     options.json = true;
   }
 
-  const api = new PicaApi(apiKey);
+  const api = new OneApi(apiKey);
 
   const spinner = output.createSpinner();
   spinner.start('Loading platforms...');
@@ -91,7 +91,7 @@ export async function platformsCommand(options: { category?: string; json?: bool
     }
 
     console.log();
-    p.note(`Connect with: ${pc.cyan('pica connection add <platform>')}`, 'Tip');
+    p.note(`Connect with: ${pc.cyan('one connection add <platform>')}`, 'Tip');
   } catch (error) {
     spinner.stop('Failed to load platforms');
     output.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
