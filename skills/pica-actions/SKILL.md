@@ -36,18 +36,23 @@ Never skip the knowledge step before executing — it contains critical informat
 ### 1. List Connections
 
 ```bash
-pica connection list
+pica --agent connection list
 ```
 
-Shows all connected platforms with their status and connection keys. You need the **connection key** for executing actions, and the **platform name** (kebab-case) for searching actions.
+Returns JSON with all connected platforms, their status, and connection keys. You need the **connection key** for executing actions, and the **platform name** (kebab-case) for searching actions.
+
+Output format:
+```json
+{"connections": [{"platform": "gmail", "state": "active", "key": "conn_abc123"}, ...]}
+```
 
 ### 2. Search Actions
 
 ```bash
-pica actions search <platform> <query>
+pica --agent actions search <platform> <query>
 ```
 
-Search for actions on a specific platform using natural language. Returns up to 5 matching actions with their action IDs, HTTP methods, and paths.
+Search for actions on a specific platform using natural language. Returns JSON with up to 5 matching actions including their action IDs, HTTP methods, and paths.
 
 - `<platform>` — Platform name in kebab-case exactly as shown in the connections list (e.g., `gmail`, `shopify`, `hub-spot`)
 - `<query>` — Natural language description of what you want to do (e.g., `"send email"`, `"list contacts"`, `"create order"`)
@@ -57,31 +62,41 @@ Options:
 
 Example:
 ```bash
-pica actions search gmail "send email" -t execute
+pica --agent actions search gmail "send email" -t execute
+```
+
+Output format:
+```json
+{"actions": [{"_id": "abc123", "title": "Send Email", "tags": [...], "method": "POST", "path": "/messages/send"}, ...]}
 ```
 
 ### 3. Get Action Knowledge
 
 ```bash
-pica actions knowledge <platform> <actionId>
+pica --agent actions knowledge <platform> <actionId>
 ```
 
-Get comprehensive documentation for an action including parameters, requirements, validation rules, request/response structure, and examples. The output includes the full API request structure guidance.
+Get comprehensive documentation for an action including parameters, requirements, validation rules, request/response structure, and examples. Returns JSON with the full API knowledge and HTTP method.
 
 Always call this before executing — it tells you exactly what parameters are required and how to structure the request.
 
 Example:
 ```bash
-pica actions knowledge gmail 67890abcdef
+pica --agent actions knowledge gmail 67890abcdef
+```
+
+Output format:
+```json
+{"knowledge": "...full API documentation and guidance...", "method": "POST"}
 ```
 
 ### 4. Execute Action
 
 ```bash
-pica actions execute <platform> <actionId> <connectionKey> [options]
+pica --agent actions execute <platform> <actionId> <connectionKey> [options]
 ```
 
-Execute an action on a connected platform. You must have retrieved the knowledge for this action first.
+Execute an action on a connected platform. Returns JSON with the request details and response data. You must have retrieved the knowledge for this action first.
 
 - `<platform>` — Platform name in kebab-case
 - `<actionId>` — Action ID from the search results
@@ -98,20 +113,35 @@ Options:
 Examples:
 ```bash
 # Simple GET request
-pica actions execute shopify <actionId> <connectionKey>
+pica --agent actions execute shopify <actionId> <connectionKey>
 
 # POST with data
-pica actions execute hub-spot <actionId> <connectionKey> \
+pica --agent actions execute hub-spot <actionId> <connectionKey> \
   -d '{"properties": {"email": "jane@example.com", "firstname": "Jane"}}'
 
 # With path variables and query params
-pica actions execute shopify <actionId> <connectionKey> \
+pica --agent actions execute shopify <actionId> <connectionKey> \
   --path-vars '{"order_id": "12345"}' \
   --query-params '{"limit": "10"}'
 ```
 
+Output format:
+```json
+{"request": {"method": "POST", "url": "https://..."}, "response": {...}}
+```
+
+## Error Handling
+
+All errors return JSON in agent mode:
+```json
+{"error": "Error message here"}
+```
+
+Parse the output as JSON. If the `error` key is present, the command failed — report the error message to the user.
+
 ## Important Notes
 
+- **Always use `--agent` flag** — it produces structured JSON output without spinners, colors, or interactive prompts
 - Platform names are always **kebab-case** (e.g., `hub-spot` not `HubSpot`, `ship-station` not `ShipStation`)
 - Always use the **exact action ID** from search results — don't guess or construct them
 - Always read the knowledge output carefully — it tells you which parameters are required vs optional, what format they need to be in, and any caveats specific to that API
