@@ -76,7 +76,7 @@ one flow validate welcome-customer
 one flow execute welcome-customer -i email=jane@example.com
 ```
 
-Flows are stored as JSON at `.one/flows/<key>.flow.json` and support conditions, loops, parallel steps, transforms, and more. Run `one guide flows` for the full reference.
+Workflows are stored as JSON at `.one/flows/<key>.flow.json` and support conditions, loops, parallel steps, transforms, and more. Run `one guide flows` for the full reference.
 
 ## How it works
 
@@ -223,7 +223,7 @@ In agent mode (`--agent`), the JSON response includes the guide content and an `
 
 ### `one flow create [key]`
 
-Create a flow from a JSON definition. Flows are saved to `.one/flows/<key>.flow.json`.
+Create a workflow from a JSON definition. Workflows are saved to `.one/flows/<key>.flow.json`.
 
 ```bash
 # From a --definition flag
@@ -238,12 +238,12 @@ one flow create my-flow --definition '...' -o ./custom/path.json
 
 | Option | What it does |
 |--------|-------------|
-| `--definition <json>` | Flow definition as a JSON string |
+| `--definition <json>` | Workflow definition as a JSON string |
 | `-o, --output <path>` | Custom output path (default: `.one/flows/<key>.flow.json`) |
 
 ### `one flow execute <key>`
 
-Execute a flow by key or file path. Pass inputs with repeatable `-i` flags.
+Execute a workflow by key or file path. Pass inputs with repeatable `-i` flags.
 
 ```bash
 # Execute with inputs
@@ -257,7 +257,7 @@ one flow execute welcome-customer --dry-run -i customerEmail=jane@example.com
 one flow execute welcome-customer -v -i customerEmail=jane@example.com
 ```
 
-Connection inputs with a `connection` field in the flow definition are auto-resolved when the user has exactly one connection for that platform.
+Connection inputs with a `connection` field in the workflow definition are auto-resolved when the user has exactly one connection for that platform.
 
 Press Ctrl+C during execution to pause — the run can be resumed later with `one flow resume <runId>`.
 
@@ -269,7 +269,7 @@ Press Ctrl+C during execution to pause — the run can be resumed later with `on
 
 ### `one flow list`
 
-List all flows saved in `.one/flows/`.
+List all workflows saved in `.one/flows/`.
 
 ```bash
 one flow list
@@ -277,7 +277,7 @@ one flow list
 
 ### `one flow validate <key>`
 
-Validate a flow JSON file against the schema.
+Validate a workflow JSON file against the schema.
 
 ```bash
 one flow validate welcome-customer
@@ -285,7 +285,7 @@ one flow validate welcome-customer
 
 ### `one flow resume <runId>`
 
-Resume a paused or failed flow run from where it left off.
+Resume a paused or failed workflow run from where it left off.
 
 ```bash
 one flow resume abc123
@@ -293,11 +293,11 @@ one flow resume abc123
 
 ### `one flow runs [flowKey]`
 
-List flow runs, optionally filtered by flow key.
+List workflow runs, optionally filtered by workflow key.
 
 ```bash
 one flow runs                    # all runs
-one flow runs welcome-customer   # runs for a specific flow
+one flow runs welcome-customer   # runs for a specific workflow
 ```
 
 ### `one config`
@@ -330,7 +330,7 @@ one actions execute         → Do it.
 
 This is the same workflow whether you're sending emails, creating CRM contacts, processing payments, managing inventory, or posting to Slack. One pattern, any platform.
 
-For multi-step workflows that chain actions across platforms, use **flows**:
+For multi-step workflows that chain actions across platforms:
 
 ```
 one actions knowledge       → Learn each action's schema
@@ -339,7 +339,7 @@ one flow validate           → Check it
 one flow execute            → Run it
 ```
 
-Flows support conditions, loops, parallel execution, transforms, code steps, and file I/O. Run `one guide flows` for the full schema reference and examples.
+Workflows support conditions, loops, parallel execution, transforms, code steps, and file I/O. Run `one guide flows` for the full schema reference and examples.
 
 ## For AI agents
 

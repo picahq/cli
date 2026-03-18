@@ -1,13 +1,13 @@
 ---
 name: one-flow
 description: |
-  Build and execute multi-step API workflows (flows) that chain actions across platforms — like n8n/Zapier but file-based. Flows are JSON files stored at `.one/flows/<key>.flow.json`.
+  Build and execute multi-step API workflows that chain actions across platforms — like n8n/Zapier but file-based. Workflows are JSON files stored at `.one/flows/<key>.flow.json`.
 
   TRIGGER when the user wants to:
-  - Create a multi-step workflow or automation (e.g., "create a flow that looks up a customer in Stripe and sends them an email")
+  - Create a multi-step workflow or automation (e.g., "create a workflow that looks up a customer in Stripe and sends them an email")
   - Chain multiple API actions together across platforms
   - Build a pipeline or sequence of API calls
-  - Execute, validate, or manage existing flows
+  - Execute, validate, or manage existing workflows
   - Automate a process involving multiple connected platforms
   - Schedule or orchestrate a series of actions
 
@@ -17,20 +17,20 @@ description: |
   - Adding new connections (that's `one connection add`)
 ---
 
-# One Flow — Multi-Step API Workflows
+# One Workflows — Multi-Step API Workflows
 
-You have access to the One CLI's flow engine, which lets you create and execute multi-step API workflows as JSON files. Flows chain actions across platforms — e.g., look up a Stripe customer, then send them a welcome email via Gmail.
+You have access to the One CLI's workflow engine, which lets you create and execute multi-step API workflows as JSON files. Workflows chain actions across platforms — e.g., look up a Stripe customer, then send them a welcome email via Gmail.
 
 ## 1. Overview
 
-- Flows are JSON files stored at `.one/flows/<key>.flow.json`
+- Workflows are JSON files stored at `.one/flows/<key>.flow.json`
 - All dynamic values (including connection keys) are declared as **inputs**
-- Each flow has a unique **key** used to reference and execute it
+- Each workflow has a unique **key** used to reference and execute it
 - Executed via `one --agent flow execute <key> -i name=value`
 
-## 2. Building a Flow — Step-by-Step Process
+## 2. Building a Workflow — Step-by-Step Process
 
-**You MUST follow this process to build a correct flow:**
+**You MUST follow this process to build a correct workflow:**
 
 ### Step 1: Discover connections
 
@@ -46,20 +46,20 @@ Find out which platforms are connected and get their connection keys.
 # Find the action ID
 one --agent actions search <platform> "<query>" -t execute
 
-# Read the full docs — REQUIRED before adding to a flow
+# Read the full docs — REQUIRED before adding to a workflow
 one --agent actions knowledge <platform> <actionId>
 ```
 
-**CRITICAL:** You MUST call `one actions knowledge` for every action you include in the flow. The knowledge output tells you the exact request body structure, required fields, path variables, and query parameters. Without this, your flow JSON will have incorrect data shapes.
+**CRITICAL:** You MUST call `one actions knowledge` for every action you include in the workflow. The knowledge output tells you the exact request body structure, required fields, path variables, and query parameters. Without this, your workflow JSON will have incorrect data shapes.
 
-### Step 3: Construct the flow JSON
+### Step 3: Construct the workflow JSON
 
-Using the knowledge gathered, build the flow JSON with:
+Using the knowledge gathered, build the workflow JSON with:
 - All inputs declared (connection keys + user parameters)
 - Each step with the correct actionId, platform, and data structure (from knowledge)
 - Data wired between steps using `$.input.*` and `$.steps.*` selectors
 
-### Step 4: Write the flow file
+### Step 4: Write the workflow file
 
 ```bash
 one --agent flow create <key> --definition '<json>'
@@ -79,7 +79,7 @@ one --agent flow validate <key>
 one --agent flow execute <key> -i connectionKey=xxx -i param=value
 ```
 
-## 3. Flow JSON Schema Reference
+## 3. Workflow JSON Schema Reference
 
 ```json
 {
@@ -135,7 +135,7 @@ one --agent flow execute <key> -i connectionKey=xxx -i param=value
 | `description` | string | Human-readable description |
 | `connection` | object | Connection metadata: `{ "platform": "gmail" }` — enables auto-resolution |
 
-**Connection inputs** have a `connection` field. If the user has exactly one connection for that platform, the engine auto-resolves it.
+**Connection inputs** have a `connection` field. If the user has exactly one connection for that platform, the workflow engine auto-resolves it.
 
 ## 4. Selector Syntax Reference
 
@@ -341,15 +341,15 @@ Skip a step based on previous results:
 }
 ```
 
-## 7. Updating Existing Flows
+## 7. Updating Existing Workflows
 
-To modify an existing flow:
+To modify an existing workflow:
 
-1. Read the flow JSON file at `.one/flows/<key>.flow.json`
+1. Read the workflow JSON file at `.one/flows/<key>.flow.json`
 2. Understand its current structure
 3. Use `one --agent actions knowledge <platform> <actionId>` for any new actions
 4. Modify the JSON (add/remove/update steps, change data mappings, add inputs)
-5. Write back the updated flow file
+5. Write back the updated workflow file
 6. Validate: `one --agent flow validate <key>`
 
 ## 8. Complete Examples
@@ -568,16 +568,16 @@ To modify an existing flow:
 ## CLI Commands Reference
 
 ```bash
-# Create a flow
+# Create a workflow
 one --agent flow create <key> --definition '<json>'
 
-# List all flows
+# List all workflows
 one --agent flow list
 
-# Validate a flow
+# Validate a workflow
 one --agent flow validate <key>
 
-# Execute a flow
+# Execute a workflow
 one --agent flow execute <key> -i connectionKey=value -i param=value
 
 # Execute with dry run (validate only)
@@ -586,7 +586,7 @@ one --agent flow execute <key> --dry-run -i connectionKey=value
 # Execute with verbose output
 one --agent flow execute <key> -v -i connectionKey=value
 
-# List flow runs
+# List workflow runs
 one --agent flow runs [flowKey]
 
 # Resume a paused/failed run
@@ -596,8 +596,8 @@ one --agent flow resume <runId>
 ## Important Notes
 
 - **Always use `--agent` flag** for structured JSON output
-- **Always call `one actions knowledge`** before adding an action step to a flow
+- **Always call `one actions knowledge`** before adding an action step to a workflow
 - Platform names are **kebab-case** (e.g., `hub-spot`, not `HubSpot`)
-- Connection keys are **inputs**, not hardcoded — makes flows portable and shareable
+- Connection keys are **inputs**, not hardcoded — makes workflows portable and shareable
 - Use `$.input.*` for input values, `$.steps.*` for step results
 - Action IDs in examples (like `STRIPE_SEARCH_CUSTOMERS_ACTION_ID`) are placeholders — always use `one actions search` to find the real IDs

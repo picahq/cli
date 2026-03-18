@@ -41,12 +41,12 @@ program
     4. one actions execute <p> <id> <key> Execute the action
 
   Guide:
-    one guide [topic]                     Full CLI guide (topics: overview, actions, flows, all)
+    one guide [topic]                     Full CLI guide (topics: overview, actions, workflows, all)
 
-  Flows (multi-step workflows):
-    one flow list                         List saved flows
-    one flow create [key]                 Create a flow from JSON
-    one flow execute <key>                Execute a flow
+  Workflows (multi-step):
+    one flow list                         List saved workflows
+    one flow create [key]                 Create a workflow from JSON
+    one flow execute <key>                Execute a workflow
     one flow validate <key>               Validate a flow
 
   Example — send an email through Gmail:
@@ -168,12 +168,12 @@ actions
 const flow = program
   .command('flow')
   .alias('f')
-  .description('Create, execute, and manage multi-step API workflows');
+  .description('Create, execute, and manage multi-step workflows');
 
 flow
   .command('create [key]')
-  .description('Create a new flow from JSON definition')
-  .option('--definition <json>', 'Flow definition as JSON string')
+  .description('Create a new workflow from JSON definition')
+  .option('--definition <json>', 'Workflow definition as JSON string')
   .option('-o, --output <path>', 'Custom output path (default .one/flows/<key>.flow.json)')
   .action(async (key: string | undefined, options: { definition?: string; output?: string }) => {
     await flowCreateCommand(key, options);
@@ -182,7 +182,7 @@ flow
 flow
   .command('execute <keyOrPath>')
   .alias('x')
-  .description('Execute a flow by key or file path')
+  .description('Execute a workflow by key or file path')
   .option('-i, --input <name=value>', 'Input parameter (repeatable)', collect, [])
   .option('--dry-run', 'Validate and show execution plan without running')
   .option('-v, --verbose', 'Show full request/response for each step')
@@ -193,28 +193,28 @@ flow
 flow
   .command('list')
   .alias('ls')
-  .description('List all flows in .one/flows/')
+  .description('List all workflows in .one/flows/')
   .action(async () => {
     await flowListCommand();
   });
 
 flow
   .command('validate <keyOrPath>')
-  .description('Validate a flow JSON file')
+  .description('Validate a workflow JSON file')
   .action(async (keyOrPath: string) => {
     await flowValidateCommand(keyOrPath);
   });
 
 flow
   .command('resume <runId>')
-  .description('Resume a paused or failed flow run')
+  .description('Resume a paused or failed workflow run')
   .action(async (runId: string) => {
     await flowResumeCommand(runId);
   });
 
 flow
   .command('runs [flowKey]')
-  .description('List flow runs (optionally filtered by flow key)')
+  .description('List workflow runs (optionally filtered by flow key)')
   .action(async (flowKey?: string) => {
     await flowRunsCommand(flowKey);
   });

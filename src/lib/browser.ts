@@ -3,7 +3,7 @@ import open from 'open';
 const ONE_APP_URL = 'https://app.withone.ai';
 
 export function getConnectionUrl(platform: string): string {
-  return `${ONE_APP_URL}/connections?#open=${platform}`;
+  return `${ONE_APP_URL}/?#open=${platform}`;
 }
 
 export function getApiKeyUrl(): string {

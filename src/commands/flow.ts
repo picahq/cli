@@ -84,7 +84,7 @@ export async function flowCreateCommand(
   key: string | undefined,
   options: { definition?: string; output?: string },
 ): Promise<void> {
-  output.intro(pc.bgCyan(pc.black(' One Flow ')));
+  output.intro(pc.bgCyan(pc.black(' One Workflow ')));
 
   let flow: Flow;
 
@@ -108,7 +108,7 @@ export async function flowCreateCommand(
       output.error('Invalid JSON from stdin');
     }
   } else {
-    output.error('Interactive flow creation not yet supported. Use --definition <json> or pipe JSON via stdin.');
+    output.error('Interactive workflow creation not yet supported. Use --definition <json> or pipe JSON via stdin.');
   }
 
   // Override key if provided as arg
@@ -133,7 +133,7 @@ export async function flowCreateCommand(
     return;
   }
 
-  output.note(`Flow "${flow!.name}" saved to ${flowPath}`, 'Created');
+  output.note(`Workflow "${flow!.name}" saved to ${flowPath}`, 'Created');
   output.outro(`Validate: ${pc.cyan(`one flow validate ${flow!.key}`)}\nExecute:  ${pc.cyan(`one flow execute ${flow!.key}`)}`);
 }
 
@@ -141,24 +141,24 @@ export async function flowExecuteCommand(
   keyOrPath: string,
   options: { input?: string[]; dryRun?: boolean; verbose?: boolean },
 ): Promise<void> {
-  output.intro(pc.bgCyan(pc.black(' One Flow ')));
+  output.intro(pc.bgCyan(pc.black(' One Workflow ')));
 
   const { apiKey, permissions, actionIds } = getConfig();
   const api = new OneApi(apiKey);
 
   const spinner = output.createSpinner();
-  spinner.start(`Loading flow "${keyOrPath}"...`);
+  spinner.start(`Loading workflow "${keyOrPath}"...`);
 
   let flow: Flow;
   try {
     flow = loadFlow(keyOrPath);
   } catch (err) {
-    spinner.stop('Flow not found');
+    spinner.stop('Workflow not found');
     output.error(err instanceof Error ? err.message : String(err));
     return; // unreachable — output.error exits
   }
 
-  spinner.stop(`Flow: ${flow.name} (${flow.steps.length} steps)`);
+  spinner.stop(`Workflow: ${flow.name} (${flow.steps.length} steps)`);
 
   const inputs = parseInputs(options.input || []);
   const resolvedInputs = await autoResolveConnectionInputs(flow, inputs, api);
@@ -194,7 +194,7 @@ export async function flowExecuteCommand(
 
   const execSpinner = output.createSpinner();
   if (!options.verbose && !output.isAgentMode()) {
-    execSpinner.start('Executing flow...');
+    execSpinner.start('Executing workflow...');
   }
 
   try {
@@ -207,12 +207,12 @@ export async function flowExecuteCommand(
     process.off('SIGINT', sigintHandler);
 
     if (!options.verbose && !output.isAgentMode()) {
-      execSpinner.stop('Flow completed');
+      execSpinner.stop('Workflow completed');
     }
 
     if (output.isAgentMode()) {
       output.json({
-        event: 'flow:result',
+        event: 'workflow:result',
         runId,
         logFile: logPath,
         status: 'success',
@@ -238,14 +238,14 @@ export async function flowExecuteCommand(
   } catch (error) {
     process.off('SIGINT', sigintHandler);
     if (!options.verbose && !output.isAgentMode()) {
-      execSpinner.stop('Flow failed');
+      execSpinner.stop('Workflow failed');
     }
 
     const errorMsg = error instanceof Error ? error.message : String(error);
 
     if (output.isAgentMode()) {
       output.json({
-        event: 'flow:result',
+        event: 'workflow:result',
         runId,
         logFile: logPath,
         status: 'failed',
@@ -256,22 +256,22 @@ export async function flowExecuteCommand(
 
     console.log(`  ${pc.dim(`Run ID: ${runId}`)}`);
     console.log(`  ${pc.dim(`Log: ${logPath}`)}`);
-    output.error(`Flow failed: ${errorMsg}`);
+    output.error(`Workflow failed: ${errorMsg}`);
   }
 }
 
 export async function flowListCommand(): Promise<void> {
-  output.intro(pc.bgCyan(pc.black(' One Flow ')));
+  output.intro(pc.bgCyan(pc.black(' One Workflow ')));
 
   const flows = listFlows();
 
   if (output.isAgentMode()) {
-    output.json({ flows });
+    output.json({ workflows: flows });
     return;
   }
 
   if (flows.length === 0) {
-    output.note('No flows found in .one/flows/\n\nCreate one with: one flow create', 'Flows');
+    output.note('No workflows found in .one/flows/\n\nCreate one with: one flow create', 'Workflows');
     return;
   }
 
@@ -296,7 +296,7 @@ export async function flowListCommand(): Promise<void> {
 }
 
 export async function flowValidateCommand(keyOrPath: string): Promise<void> {
-  output.intro(pc.bgCyan(pc.black(' One Flow ')));
+  output.intro(pc.bgCyan(pc.black(' One Workflow ')));
 
   const spinner = output.createSpinner();
   spinner.start(`Validating "${keyOrPath}"...`);
@@ -308,7 +308,7 @@ export async function flowValidateCommand(keyOrPath: string): Promise<void> {
     flowData = JSON.parse(content);
   } catch (err) {
     spinner.stop('Validation failed');
-    output.error(`Could not read flow: ${err instanceof Error ? err.message : String(err)}`);
+    output.error(`Could not read workflow: ${err instanceof Error ? err.message : String(err)}`);
   }
 
   const errors = validateFlow(flowData);
@@ -329,18 +329,18 @@ export async function flowValidateCommand(keyOrPath: string): Promise<void> {
     output.error(`${errors.length} validation error(s) found`);
   }
 
-  spinner.stop('Flow is valid');
+  spinner.stop('Workflow is valid');
 
   if (output.isAgentMode()) {
     output.json({ valid: true, key: (flowData as Flow).key });
     return;
   }
 
-  output.note(`Flow "${(flowData as Flow).key}" passed all validation checks`, 'Valid');
+  output.note(`Workflow "${(flowData as Flow).key}" passed all validation checks`, 'Valid');
 }
 
 export async function flowResumeCommand(runId: string): Promise<void> {
-  output.intro(pc.bgCyan(pc.black(' One Flow ')));
+  output.intro(pc.bgCyan(pc.black(' One Workflow ')));
 
   const state = FlowRunner.loadRunState(runId);
   if (!state) {
@@ -358,7 +358,7 @@ export async function flowResumeCommand(runId: string): Promise<void> {
   try {
     flow = loadFlow(state!.flowKey);
   } catch (err) {
-    output.error(`Could not load flow "${state!.flowKey}": ${err instanceof Error ? err.message : String(err)}`);
+    output.error(`Could not load workflow "${state!.flowKey}": ${err instanceof Error ? err.message : String(err)}`);
     return;
   }
 
@@ -375,11 +375,11 @@ export async function flowResumeCommand(runId: string): Promise<void> {
 
   try {
     const context = await runner.resume(flow, api, permissions, actionIds, { onEvent });
-    spinner.stop('Flow completed');
+    spinner.stop('Workflow completed');
 
     if (output.isAgentMode()) {
       output.json({
-        event: 'flow:result',
+        event: 'workflow:result',
         runId,
         logFile: runner.getLogPath(),
         status: 'success',
@@ -395,7 +395,7 @@ export async function flowResumeCommand(runId: string): Promise<void> {
     const errorMsg = error instanceof Error ? error.message : String(error);
 
     if (output.isAgentMode()) {
-      output.json({ event: 'flow:result', runId, status: 'failed', error: errorMsg });
+      output.json({ event: 'workflow:result', runId, status: 'failed', error: errorMsg });
       process.exit(1);
     }
 
@@ -404,7 +404,7 @@ export async function flowResumeCommand(runId: string): Promise<void> {
 }
 
 export async function flowRunsCommand(flowKey?: string): Promise<void> {
-  output.intro(pc.bgCyan(pc.black(' One Flow ')));
+  output.intro(pc.bgCyan(pc.black(' One Workflow ')));
 
   const runs = FlowRunner.listRuns(flowKey);
 
@@ -424,7 +424,7 @@ export async function flowRunsCommand(flowKey?: string): Promise<void> {
   }
 
   if (runs.length === 0) {
-    output.note(flowKey ? `No runs found for flow "${flowKey}"` : 'No flow runs found', 'Runs');
+    output.note(flowKey ? `No runs found for workflow "${flowKey}"` : 'No workflow runs found', 'Runs');
     return;
   }
 
@@ -432,7 +432,7 @@ export async function flowRunsCommand(flowKey?: string): Promise<void> {
   printTable(
     [
       { key: 'runId', label: 'Run ID' },
-      { key: 'flowKey', label: 'Flow' },
+      { key: 'flowKey', label: 'Workflow' },
       { key: 'status', label: 'Status' },
       { key: 'startedAt', label: 'Started' },
       { key: 'steps', label: 'Steps Done' },
