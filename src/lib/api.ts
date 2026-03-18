@@ -327,7 +327,7 @@ export function replacePathVariables(
     if (value === undefined || value === null || value === '') {
       throw new Error(`Missing value for path variable: ${trimmedVariable}`);
     }
-    return encodeURIComponent(value.toString());
+    return encodeURIComponent(value.toString()).replace(/%3A/gi, ':');
   });
 
   // Then, replace single bracket variables {variableName}
@@ -337,7 +337,7 @@ export function replacePathVariables(
     if (value === undefined || value === null || value === '') {
       throw new Error(`Missing value for path variable: ${trimmedVariable}`);
     }
-    return encodeURIComponent(value.toString());
+    return encodeURIComponent(value.toString()).replace(/%3A/gi, ':');
   });
 
   return result;
