@@ -192,13 +192,51 @@ async function executeLoopStep(
   }
 
   const maxIterations = loop.maxIterations || 1000;
-  const results: unknown[] = [];
+  const bounded = items.slice(0, maxIterations);
   const savedLoop = { ...context.loop };
 
-  for (let i = 0; i < Math.min(items.length, maxIterations); i++) {
+  if (loop.maxConcurrency && loop.maxConcurrency > 1) {
+    // Parallel loop: process iterations in batches
+    const results: unknown[] = new Array(bounded.length);
+
+    for (let batchStart = 0; batchStart < bounded.length; batchStart += loop.maxConcurrency) {
+      const batch = bounded.slice(batchStart, batchStart + loop.maxConcurrency);
+      const batchResults = await Promise.all(
+        batch.map(async (item, batchIdx) => {
+          const i = batchStart + batchIdx;
+          // Each concurrent iteration gets its own context clone for loop vars
+          const iterContext: FlowContext = {
+            ...context,
+            loop: {
+              [loop.as]: item,
+              item,
+              i,
+              ...(loop.indexAs ? { [loop.indexAs]: i } : {}),
+            },
+            steps: { ...context.steps },
+          };
+          await executeSteps(loop.steps, iterContext, api, permissions, allowedActionIds, options);
+          // Merge step results back
+          Object.assign(context.steps, iterContext.steps);
+          return iterContext.loop[loop.as];
+        })
+      );
+      for (let j = 0; j < batchResults.length; j++) {
+        results[batchStart + j] = batchResults[j];
+      }
+    }
+
+    context.loop = savedLoop;
+    return { status: 'success', output: results, response: results };
+  }
+
+  // Sequential loop (default)
+  const results: unknown[] = [];
+
+  for (let i = 0; i < bounded.length; i++) {
     context.loop = {
-      [loop.as]: items[i],
-      item: items[i],
+      [loop.as]: bounded[i],
+      item: bounded[i],
       i,
     };
     if (loop.indexAs) {

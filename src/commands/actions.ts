@@ -209,6 +209,7 @@ export async function actionsExecuteCommand(
     headers?: string;
     formData?: boolean;
     formUrlEncoded?: boolean;
+    dryRun?: boolean;
   }
 ): Promise<void> {
   output.intro(pc.bgCyan(pc.black(' One ')));
@@ -264,7 +265,7 @@ export async function actionsExecuteCommand(
       : undefined;
 
     const execSpinner = output.createSpinner();
-    execSpinner.start('Executing action...');
+    execSpinner.start(options.dryRun ? 'Building request...' : 'Executing action...');
 
     const result = await api.executePassthroughRequest(
       {
@@ -277,19 +278,23 @@ export async function actionsExecuteCommand(
         headers,
         isFormData: options.formData,
         isFormUrlEncoded: options.formUrlEncoded,
+        dryRun: options.dryRun,
       },
       actionDetails
     );
 
-    execSpinner.stop('Action executed successfully');
+    execSpinner.stop(options.dryRun ? 'Dry run — request not sent' : 'Action executed successfully');
 
     if (output.isAgentMode()) {
       output.json({
+        dryRun: options.dryRun || false,
         request: {
           method: result.requestConfig.method,
           url: result.requestConfig.url,
+          headers: options.dryRun ? result.requestConfig.headers : undefined,
+          data: options.dryRun ? result.requestConfig.data : undefined,
         },
-        response: result.responseData,
+        response: options.dryRun ? undefined : result.responseData,
       });
       return;
     }
@@ -301,9 +306,20 @@ export async function actionsExecuteCommand(
         `  ${result.requestConfig.method} ${result.requestConfig.url}`
       )
     );
-    console.log();
-    console.log(pc.bold('Response:'));
-    console.log(JSON.stringify(result.responseData, null, 2));
+
+    if (options.dryRun) {
+      if (result.requestConfig.data) {
+        console.log();
+        console.log(pc.dim('Body:'));
+        console.log(pc.dim(JSON.stringify(result.requestConfig.data, null, 2)));
+      }
+      console.log();
+      output.note('Dry run — request was not sent', 'Dry Run');
+    } else {
+      console.log();
+      console.log(pc.bold('Response:'));
+      console.log(JSON.stringify(result.responseData, null, 2));
+    }
   } catch (error) {
     spinner.stop('Execution failed');
     output.error(

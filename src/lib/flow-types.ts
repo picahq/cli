@@ -32,6 +32,7 @@ export interface FlowLoopConfig {
   indexAs?: string;
   steps: FlowStep[];
   maxIterations?: number;
+  maxConcurrency?: number;
 }
 
 export interface FlowParallelConfig {

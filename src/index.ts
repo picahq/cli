@@ -151,6 +151,7 @@ actions
   .option('--headers <json>', 'Additional headers as JSON')
   .option('--form-data', 'Send as multipart/form-data')
   .option('--form-url-encoded', 'Send as application/x-www-form-urlencoded')
+  .option('--dry-run', 'Show request that would be sent without executing')
   .action(async (platform: string, actionId: string, connectionKey: string, options: any) => {
     await actionsExecuteCommand(platform, actionId, connectionKey, {
       data: options.data,
@@ -159,6 +160,7 @@ actions
       headers: options.headers,
       formData: options.formData,
       formUrlEncoded: options.formUrlEncoded,
+      dryRun: options.dryRun,
     });
   });
 

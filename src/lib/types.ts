@@ -90,6 +90,7 @@ export interface ExecuteActionArgs {
   headers?: Record<string, string>;
   isFormData?: boolean;
   isFormUrlEncoded?: boolean;
+  dryRun?: boolean;
 }
 
 export interface SanitizedRequestConfig {

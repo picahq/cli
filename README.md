@@ -201,6 +201,7 @@ one actions execute stripe <actionId> <connectionKey> \
 | `--headers <json>` | Additional request headers |
 | `--form-data` | Send as multipart/form-data |
 | `--form-url-encoded` | Send as application/x-www-form-urlencoded |
+| `--dry-run` | Show the request without executing it |
 
 ### `one guide [topic]`
 

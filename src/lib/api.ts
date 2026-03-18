@@ -250,6 +250,13 @@ export class OneApi {
       data: requestData,
     };
 
+    if (args.dryRun) {
+      return {
+        requestConfig: sanitizedConfig,
+        responseData: null,
+      };
+    }
+
     const response = await fetch(fullUrl, fetchOpts);
 
     if (!response.ok) {

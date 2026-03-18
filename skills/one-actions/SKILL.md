@@ -109,6 +109,7 @@ Options:
 - `--headers <json>` — Additional headers as JSON
 - `--form-data` — Send as multipart/form-data instead of JSON
 - `--form-url-encoded` — Send as application/x-www-form-urlencoded
+- `--dry-run` — Show the request that would be sent without executing it
 
 Examples:
 ```bash

@@ -239,6 +239,7 @@ The `source` field contains a JS function body. The flow context is available as
     "as": "order",
     "indexAs": "i",
     "maxIterations": 1000,
+    "maxConcurrency": 5,
     "steps": [
       {
         "id": "createInvoice",
@@ -255,6 +256,8 @@ The `source` field contains a JS function body. The flow context is available as
   }
 }
 ```
+
+- `maxConcurrency` (optional): When set > 1, loop iterations run in parallel batches of that size. Default is sequential (1).
 
 ### `parallel` — Run steps concurrently
 
