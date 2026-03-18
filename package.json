@@ -1,5 +1,5 @@
 {
-  "name": "@picahq/cli",
+  "name": "@withone/cli",
   "version": "1.12.2",
   "description": "CLI for managing One",
   "type": "module",
