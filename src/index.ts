@@ -17,6 +17,7 @@ import {
   collect,
 } from './commands/flow.js';
 import { guideCommand } from './commands/guide.js';
+import { onboardCommand } from './commands/onboard.js';
 import { setAgentMode } from './lib/output.js';
 
 const require = createRequire(import.meta.url);
@@ -224,6 +225,13 @@ program
   .description('Full CLI usage guide for agents (topics: overview, actions, flows, all)')
   .action(async (topic?: string) => {
     await guideCommand(topic);
+  });
+
+program
+  .command('onboard')
+  .description('Agent onboarding — teaches your agent what the One CLI can do')
+  .action(async () => {
+    await onboardCommand();
   });
 
 // Shortcuts

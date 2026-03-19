@@ -1,5 +1,8 @@
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { writeConfig, readConfig, getConfigPath, getAccessControl } from '../lib/config.js';
 import {
   getAllAgents,
@@ -93,7 +96,7 @@ async function handleExistingConfig(
   }
 
   // Build action menu: only show relevant options
-  type Action = 'update-key' | 'install-more' | 'install-project' | 'access-control' | 'start-fresh';
+  type Action = 'update-key' | 'install-skills' | 'install-more' | 'install-project' | 'access-control' | 'start-fresh';
   const actionOptions: { value: Action; label: string; hint?: string }[] = [];
 
   actionOptions.push({
@@ -101,12 +104,17 @@ async function handleExistingConfig(
     label: 'Update API key',
   });
 
+  actionOptions.push({
+    value: 'install-skills',
+    label: 'Install/update skills',
+  });
+
   const agentsMissingGlobal = statuses.filter(s => s.detected && !s.globalMcp);
   if (agentsMissingGlobal.length > 0) {
     actionOptions.push({
       value: 'install-more',
       label: 'Install MCP to more agents',
-      hint: agentsMissingGlobal.map(s => s.agent.name).join(', '),
+      hint: `${agentsMissingGlobal.map(s => s.agent.name).join(', ')} (not recommended)`,
     });
   }
 
@@ -115,7 +123,7 @@ async function handleExistingConfig(
     actionOptions.push({
       value: 'install-project',
       label: 'Install MCP for this project',
-      hint: agentsMissingProject.map(s => s.agent.name).join(', '),
+      hint: `${agentsMissingProject.map(s => s.agent.name).join(', ')} (not recommended)`,
     });
   }
 
@@ -144,6 +152,18 @@ async function handleExistingConfig(
     case 'update-key':
       await handleUpdateKey(statuses);
       break;
+    case 'install-skills': {
+      const success = await runSkillsInstall();
+      if (success) {
+        p.outro('Skills installed successfully.');
+      } else {
+        const __dirname = path.dirname(fileURLToPath(import.meta.url));
+        const skillsDir = path.resolve(__dirname, '..', 'skills');
+        p.log.warn(`Skills installation failed. You can try manually: ${pc.cyan(`npx skills add ${skillsDir}`)}`);
+        p.outro('Done.');
+      }
+      break;
+    }
     case 'install-more':
       await handleInstallMore(apiKey, agentsMissingGlobal);
       break;
@@ -341,10 +361,162 @@ async function handleInstallProject(apiKey: string, missing: AgentStatus[]): Pro
   p.outro('Done.');
 }
 
+// ── Skills install helper ─────────────────────────────────────────────
+
+async function runSkillsInstall(): Promise<boolean> {
+  const __dirname = path.dirname(fileURLToPath(import.meta.url));
+  const skillsDir = path.resolve(__dirname, '..', 'skills');
+
+  return new Promise((resolve) => {
+    const handler = () => {};
+    process.on('SIGINT', handler);
+
+    const child = spawn('npx', ['skills', 'add', skillsDir], {
+      stdio: 'inherit',
+      shell: true,
+    });
+
+    child.on('close', (code) => {
+      process.removeListener('SIGINT', handler);
+      resolve(code === 0);
+    });
+
+    child.on('error', () => {
+      process.removeListener('SIGINT', handler);
+      resolve(false);
+    });
+  });
+}
+
+// ── MCP install helper (extracted from freshSetup) ────────────────────
+
+async function promptAndInstallMcp(
+  apiKey: string,
+  options: { yes?: boolean; global?: boolean; project?: boolean },
+): Promise<void> {
+  const allAgents = getAllAgents();
+
+  const agentChoice = await p.select({
+    message: 'Where do you want to install the MCP?',
+    options: [
+      {
+        value: 'all',
+        label: 'All agents',
+        hint: allAgents.map(a => a.name).join(', '),
+      },
+      ...allAgents.map(agent => ({
+        value: agent.id,
+        label: agent.name,
+      })),
+    ],
+  });
+
+  if (p.isCancel(agentChoice)) {
+    p.log.info('Skipped MCP installation.');
+    return;
+  }
+
+  const selectedAgents: Agent[] = agentChoice === 'all'
+    ? allAgents
+    : allAgents.filter(a => a.id === agentChoice);
+
+  // Ask about installation scope if any selected agent supports project scope
+  let scope: InstallScope = 'global';
+  const hasProjectScopeAgent = selectedAgents.some(a => supportsProjectScope(a));
+
+  if (options.global) {
+    scope = 'global';
+  } else if (options.project) {
+    scope = 'project';
+  } else if (hasProjectScopeAgent) {
+    const scopeChoice = await p.select({
+      message: 'How do you want to install it?',
+      options: [
+        {
+          value: 'global',
+          label: 'Global (Recommended)',
+          hint: 'Available in all your projects',
+        },
+        {
+          value: 'project',
+          label: 'Project only',
+          hint: 'Creates config files in current directory',
+        },
+      ],
+    });
+
+    if (p.isCancel(scopeChoice)) {
+      p.log.info('Skipped MCP installation.');
+      return;
+    }
+
+    scope = scopeChoice as InstallScope;
+  }
+
+  // Handle project scope installation
+  if (scope === 'project') {
+    const projectAgents = selectedAgents.filter(a => supportsProjectScope(a));
+    const nonProjectAgents = selectedAgents.filter(a => !supportsProjectScope(a));
+
+    if (projectAgents.length === 0) {
+      const supported = allAgents.filter(a => supportsProjectScope(a)).map(a => a.name).join(', ');
+      p.note(
+        `${selectedAgents.map(a => a.name).join(', ')} does not support project-level MCP.\n` +
+        `Project scope is supported by: ${supported}`,
+        'Not Supported'
+      );
+      p.log.warn('Run again and choose global scope or a different agent.');
+      return;
+    }
+
+    for (const agent of projectAgents) {
+      const wasInstalled = isMcpInstalled(agent, 'project');
+      installMcpConfig(agent, apiKey, 'project');
+      const configPath = getAgentConfigPath(agent, 'project');
+      const status = wasInstalled ? 'updated' : 'created';
+      p.log.success(`${agent.name}: ${configPath} ${status}`);
+    }
+
+    if (nonProjectAgents.length > 0) {
+      p.log.info(`Installing globally for agents without project scope support:`);
+      for (const agent of nonProjectAgents) {
+        const wasInstalled = isMcpInstalled(agent, 'global');
+        installMcpConfig(agent, apiKey, 'global');
+        const status = wasInstalled ? 'updated' : 'installed';
+        p.log.success(`${agent.name}: MCP ${status} (global)`);
+      }
+    }
+
+    const allInstalled = [...projectAgents, ...nonProjectAgents];
+    updateConfigAgentsList(allInstalled.map(a => a.id));
+
+    p.note(
+      pc.yellow('Project config files can be committed to share with your team.\n') +
+      pc.yellow('Team members will need their own API key.'),
+      'Tip',
+    );
+    return;
+  }
+
+  // Global scope
+  const installedAgentIds: string[] = [];
+
+  for (const agent of selectedAgents) {
+    const wasInstalled = isMcpInstalled(agent, 'global');
+    installMcpConfig(agent, apiKey, 'global');
+    installedAgentIds.push(agent.id);
+
+    const status = wasInstalled ? 'updated' : 'installed';
+    p.log.success(`${agent.name}: MCP ${status}`);
+  }
+
+  updateConfigAgentsList(installedAgentIds);
+}
+
 // ── First-run setup (no existing config) ─────────────────────────────
 
 async function freshSetup(options: { yes?: boolean; global?: boolean; project?: boolean }): Promise<void> {
-  // Get API key
+  // Step 1: Get API key
   p.note(`Get your API key at:\n${pc.cyan(getApiKeyUrl())}`, 'API Key');
 
   const openBrowser = await p.confirm({
@@ -393,170 +565,52 @@ async function freshSetup(options: { yes?: boolean; global?: boolean; project?: 
 
   spinner.stop('API key validated');
 
-  // Save API key to config first
+  // Save API key to config
   writeConfig({
     apiKey,
     installedAgents: [],
     createdAt: new Date().toISOString(),
   });
 
-  // Ask which agent to install for
-  const allAgents = getAllAgents();
-
-  const agentChoice = await p.select({
-    message: 'Where do you want to install the MCP?',
-    options: [
-      {
-        value: 'all',
-        label: 'All agents',
-        hint: allAgents.map(a => a.name).join(', '),
-      },
-      ...allAgents.map(agent => ({
-        value: agent.id,
-        label: agent.name,
-      })),
-    ],
+  // Step 2: Install skills (recommended)
+  const installSkills = await p.confirm({
+    message: 'Install One skills to your AI agents? (recommended)',
+    initialValue: true,
   });
 
-  if (p.isCancel(agentChoice)) {
-    p.cancel('Setup cancelled.');
-    process.exit(0);
+  if (!p.isCancel(installSkills) && installSkills) {
+    const success = await runSkillsInstall();
+    if (success) {
+      p.log.success('Skills installed successfully.');
+    } else {
+      const __dirname = path.dirname(fileURLToPath(import.meta.url));
+      const skillsDir = path.resolve(__dirname, '..', 'skills');
+      p.log.warn(`Skills installation failed. You can try manually: ${pc.cyan(`npx skills add ${skillsDir}`)}`);
+    }
   }
 
-  const selectedAgents: Agent[] = agentChoice === 'all'
-    ? allAgents
-    : allAgents.filter(a => a.id === agentChoice);
+  // Step 3: Connect integrations
+  await promptConnectIntegrations(apiKey);
 
-  // Ask about installation scope if any selected agent supports project scope
-  let scope: InstallScope = 'global';
-  const hasProjectScopeAgent = selectedAgents.some(a => supportsProjectScope(a));
-
-  if (options.global) {
-    scope = 'global';
-  } else if (options.project) {
-    scope = 'project';
-  } else if (hasProjectScopeAgent) {
-    const scopeChoice = await p.select({
-      message: 'How do you want to install it?',
-      options: [
-        {
-          value: 'global',
-          label: 'Global (Recommended)',
-          hint: 'Available in all your projects',
-        },
-        {
-          value: 'project',
-          label: 'Project only',
-          hint: 'Creates config files in current directory',
-        },
-      ],
-    });
-
-    if (p.isCancel(scopeChoice)) {
-      p.cancel('Setup cancelled.');
-      process.exit(0);
-    }
-
-    scope = scopeChoice as InstallScope;
-  }
-
-  // Handle project scope installation
-  if (scope === 'project') {
-    const projectAgents = selectedAgents.filter(a => supportsProjectScope(a));
-    const nonProjectAgents = selectedAgents.filter(a => !supportsProjectScope(a));
-
-    if (projectAgents.length === 0) {
-      const supported = allAgents.filter(a => supportsProjectScope(a)).map(a => a.name).join(', ');
-      p.note(
-        `${selectedAgents.map(a => a.name).join(', ')} does not support project-level MCP.\n` +
-        `Project scope is supported by: ${supported}`,
-        'Not Supported'
-      );
-      p.cancel('Run again and choose global scope or a different agent.');
-      process.exit(1);
-    }
-
-    // Install project-scoped agents
-    for (const agent of projectAgents) {
-      const wasInstalled = isMcpInstalled(agent, 'project');
-      installMcpConfig(agent, apiKey, 'project');
-      const configPath = getAgentConfigPath(agent, 'project');
-      const status = wasInstalled ? 'updated' : 'created';
-      p.log.success(`${agent.name}: ${configPath} ${status}`);
-    }
-
-    // If "all agents" was selected and some don't support project scope,
-    // install those globally and let the user know
-    if (nonProjectAgents.length > 0) {
-      p.log.info(`Installing globally for agents without project scope support:`);
-      for (const agent of nonProjectAgents) {
-        const wasInstalled = isMcpInstalled(agent, 'global');
-        installMcpConfig(agent, apiKey, 'global');
-        const status = wasInstalled ? 'updated' : 'installed';
-        p.log.success(`${agent.name}: MCP ${status} (global)`);
-      }
-    }
-
-    const allInstalled = [...projectAgents, ...nonProjectAgents];
-
-    // Update config
-    writeConfig({
-      apiKey,
-      installedAgents: allInstalled.map(a => a.id),
-      createdAt: new Date().toISOString(),
-    });
-
-    const configPaths = projectAgents
-      .map(a => `  ${a.name}: ${pc.dim(getAgentConfigPath(a, 'project'))}`)
-      .join('\n');
-
-    let summary = `Config saved to: ${pc.dim(getConfigPath())}\n` +
-      `MCP configs:\n${configPaths}\n\n`;
-
-    if (nonProjectAgents.length > 0) {
-      const globalPaths = nonProjectAgents
-        .map(a => `  ${a.name}: ${pc.dim(getAgentConfigPath(a, 'global'))}`)
-        .join('\n');
-      summary += `Global configs:\n${globalPaths}\n\n`;
-    }
-
-    summary +=
-      pc.yellow('Note: Project config files can be committed to share with your team.\n') +
-      pc.yellow('Team members will need their own API key.');
-
-    p.note(summary, 'Setup Complete');
-
-    await promptConnectIntegrations(apiKey);
-
-    p.outro('Your AI agents now have access to One integrations!');
-    return;
-  }
-
-  // Global scope: install to all selected agents
-  const installedAgentIds: string[] = [];
-
-  for (const agent of selectedAgents) {
-    const wasInstalled = isMcpInstalled(agent, 'global');
-    installMcpConfig(agent, apiKey, 'global');
-    installedAgentIds.push(agent.id);
-
-    const status = wasInstalled ? 'updated' : 'installed';
-    p.log.success(`${agent.name}: MCP ${status}`);
-  }
-
-  // Save config
-  writeConfig({
-    apiKey,
-    installedAgents: installedAgentIds,
-    createdAt: new Date().toISOString(),
+  // Step 4: Optional MCP install (not recommended)
+  const installMcp = await p.confirm({
+    message: 'Install One MCP server to your AI agents? (not recommended)',
+    initialValue: false,
   });
+
+  if (!p.isCancel(installMcp) && installMcp) {
+    await promptAndInstallMcp(apiKey, options);
+  }
 
   p.note(
     `Config saved to: ${pc.dim(getConfigPath())}`,
     'Setup Complete'
   );
 
-  await promptConnectIntegrations(apiKey);
+  p.note(
+    `Tell your agent to run ${pc.cyan('one onboard')} to learn what it can do.`,
+    'Next Step'
+  );
 
   p.outro('Your AI agents now have access to One integrations!');
 }
@@ -692,4 +746,15 @@ function updateConfigAgents(agentId: string): void {
     config.installedAgents.push(agentId);
     writeConfig(config);
   }
+}
+
+function updateConfigAgentsList(agentIds: string[]): void {
+  const config = readConfig();
+  if (!config) return;
+  for (const id of agentIds) {
+    if (!config.installedAgents.includes(id)) {
+      config.installedAgents.push(id);
+    }
+  }
+  writeConfig(config);
 }

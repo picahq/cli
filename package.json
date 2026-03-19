@@ -5,7 +5,8 @@
   "type": "module",
   "files": [
     "bin",
-    "dist"
+    "dist",
+    "skills"
   ],
   "bin": {
     "one": "./bin/cli.js"
