@@ -7,13 +7,13 @@ One gives your AI agent authenticated access to 200+ platforms — Gmail, Slack,
 ## Install
 
 ```bash
-npx @picahq/cli@latest init
+npx @withone/cli@latest init
 ```
 
 Or install globally:
 
 ```bash
-npm install -g @picahq/cli
+npm install -g @withone/cli
 one init
 ```
 

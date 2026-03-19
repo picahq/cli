@@ -181,7 +181,7 @@ export function getMcpServerConfig(apiKey: string, accessControl?: AccessControl
 
   return {
     command: 'npx',
-    args: ['-y', '@picahq/mcp'],
+    args: ['-y', '@withone/mcp'],
     env,
   };
 }
