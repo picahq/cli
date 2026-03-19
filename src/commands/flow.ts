@@ -139,7 +139,7 @@ export async function flowCreateCommand(
 
 export async function flowExecuteCommand(
   keyOrPath: string,
-  options: { input?: string[]; dryRun?: boolean; verbose?: boolean },
+  options: { input?: string[]; dryRun?: boolean; verbose?: boolean; mock?: boolean; allowBash?: boolean },
 ): Promise<void> {
   output.intro(pc.bgCyan(pc.black(' One Workflow ')));
 
@@ -200,7 +200,9 @@ export async function flowExecuteCommand(
   try {
     const context = await runner.execute(flow, api, permissions, actionIds, {
       dryRun: options.dryRun,
+      mock: options.mock,
       verbose: options.verbose,
+      allowBash: options.allowBash,
       onEvent,
     });
 

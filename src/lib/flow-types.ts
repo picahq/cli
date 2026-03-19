@@ -55,6 +55,33 @@ export interface FlowCodeConfig {
   source: string;
 }
 
+export interface FlowWhileConfig {
+  condition: string;
+  maxIterations?: number;
+  steps: FlowStep[];
+}
+
+export interface FlowSubflowConfig {
+  key: string;
+  inputs?: Record<string, unknown>;
+}
+
+export interface FlowPaginateConfig {
+  action: FlowActionConfig;
+  pageTokenField: string;
+  resultsField: string;
+  inputTokenParam: string;
+  maxPages?: number;
+}
+
+export interface FlowBashConfig {
+  command: string;
+  timeout?: number;
+  parseJson?: boolean;
+  cwd?: string;
+  env?: Record<string, string>;
+}
+
 export interface FlowStepErrorConfig {
   strategy: 'fail' | 'continue' | 'retry' | 'fallback';
   retries?: number;
@@ -62,7 +89,7 @@ export interface FlowStepErrorConfig {
   fallbackStepId?: string;
 }
 
-export type FlowStepType = 'action' | 'transform' | 'code' | 'condition' | 'loop' | 'parallel' | 'file-read' | 'file-write';
+export type FlowStepType = 'action' | 'transform' | 'code' | 'condition' | 'loop' | 'parallel' | 'file-read' | 'file-write' | 'while' | 'flow' | 'paginate' | 'bash';
 
 export interface FlowStep {
   id: string;
@@ -79,6 +106,10 @@ export interface FlowStep {
   fileRead?: FlowFileReadConfig;
   fileWrite?: FlowFileWriteConfig;
   code?: FlowCodeConfig;
+  while?: FlowWhileConfig;
+  flow?: FlowSubflowConfig;
+  paginate?: FlowPaginateConfig;
+  bash?: FlowBashConfig;
 }
 
 export interface Flow {
@@ -130,6 +161,8 @@ export interface FlowEvent {
 
 export interface FlowExecuteOptions {
   dryRun?: boolean;
+  mock?: boolean;
   verbose?: boolean;
+  allowBash?: boolean;
   onEvent?: (event: FlowEvent) => void;
 }

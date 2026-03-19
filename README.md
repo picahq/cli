@@ -76,7 +76,7 @@ one flow validate welcome-customer
 one flow execute welcome-customer -i email=jane@example.com
 ```
 
-Workflows are stored as JSON at `.one/flows/<key>.flow.json` and support conditions, loops, parallel steps, transforms, and more. Run `one guide flows` for the full reference.
+Workflows are stored as JSON at `.one/flows/<key>.flow.json` and support conditions, loops, while loops, parallel steps, transforms, sub-flows, pagination, bash steps, and more. Run `one guide flows` for the full reference.
 
 ## How it works
 
@@ -265,6 +265,8 @@ Press Ctrl+C during execution to pause — the run can be resumed later with `on
 |--------|-------------|
 | `-i, --input <name=value>` | Input parameter (repeatable) |
 | `--dry-run` | Validate and show execution plan without running |
+| `--mock` | With `--dry-run`: execute transforms/code with mock API responses |
+| `--allow-bash` | Allow bash step execution (disabled by default for security) |
 | `-v, --verbose` | Show full request/response for each step |
 
 ### `one flow list`
@@ -339,7 +341,7 @@ one flow validate           → Check it
 one flow execute            → Run it
 ```
 
-Workflows support conditions, loops, parallel execution, transforms, code steps, and file I/O. Run `one guide flows` for the full schema reference and examples.
+Workflows support conditions, loops, while loops, parallel execution, transforms, code steps, sub-flows, pagination, bash steps, and file I/O. Run `one guide flows` for the full schema reference and examples.
 
 ## For AI agents
 

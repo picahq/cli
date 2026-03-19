@@ -211,8 +211,10 @@ flow
   .description('Execute a workflow by key or file path')
   .option('-i, --input <name=value>', 'Input parameter (repeatable)', collect, [])
   .option('--dry-run', 'Validate and show execution plan without running')
+  .option('--mock', 'With --dry-run: execute transforms/code with mock API responses')
+  .option('--allow-bash', 'Allow bash step execution (disabled by default for security)')
   .option('-v, --verbose', 'Show full request/response for each step')
-  .action(async (keyOrPath: string, options: { input?: string[]; dryRun?: boolean; verbose?: boolean }) => {
+  .action(async (keyOrPath: string, options: { input?: string[]; dryRun?: boolean; verbose?: boolean; mock?: boolean; allowBash?: boolean }) => {
     await flowExecuteCommand(keyOrPath, options);
   });
 

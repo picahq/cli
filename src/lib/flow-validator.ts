@@ -7,6 +7,7 @@ export interface ValidationError {
 
 const VALID_STEP_TYPES: FlowStepType[] = [
   'action', 'transform', 'code', 'condition', 'loop', 'parallel', 'file-read', 'file-write',
+  'while', 'flow', 'paginate', 'bash',
 ];
 
 const VALID_INPUT_TYPES = ['string', 'number', 'boolean', 'object', 'array'];
@@ -207,6 +208,76 @@ function validateStepsArray(steps: unknown[], pathPrefix: string, errors: Valida
           errors.push({ path: `${path}.fileWrite.content`, message: 'File-write must have "content"' });
         }
       }
+    } else if (type === 'while') {
+      if (!s.while || typeof s.while !== 'object') {
+        errors.push({ path: `${path}.while`, message: 'While step must have a "while" config object' });
+      } else {
+        const w = s.while as Record<string, unknown>;
+        if (!w.condition || typeof w.condition !== 'string') {
+          errors.push({ path: `${path}.while.condition`, message: 'While must have a string "condition"' });
+        }
+        if (!Array.isArray(w.steps)) {
+          errors.push({ path: `${path}.while.steps`, message: 'While must have a "steps" array' });
+        } else {
+          validateStepsArray(w.steps, `${path}.while.steps`, errors);
+        }
+        if (w.maxIterations !== undefined && (typeof w.maxIterations !== 'number' || w.maxIterations <= 0)) {
+          errors.push({ path: `${path}.while.maxIterations`, message: 'maxIterations must be a positive number' });
+        }
+      }
+    } else if (type === 'flow') {
+      if (!s.flow || typeof s.flow !== 'object') {
+        errors.push({ path: `${path}.flow`, message: 'Flow step must have a "flow" config object' });
+      } else {
+        const f = s.flow as Record<string, unknown>;
+        if (!f.key || typeof f.key !== 'string') {
+          errors.push({ path: `${path}.flow.key`, message: 'Flow must have a string "key"' });
+        }
+        if (f.inputs !== undefined && (typeof f.inputs !== 'object' || Array.isArray(f.inputs))) {
+          errors.push({ path: `${path}.flow.inputs`, message: 'Flow inputs must be an object' });
+        }
+      }
+    } else if (type === 'paginate') {
+      if (!s.paginate || typeof s.paginate !== 'object') {
+        errors.push({ path: `${path}.paginate`, message: 'Paginate step must have a "paginate" config object' });
+      } else {
+        const p = s.paginate as Record<string, unknown>;
+        if (!p.action || typeof p.action !== 'object') {
+          errors.push({ path: `${path}.paginate.action`, message: 'Paginate must have an "action" config object' });
+        } else {
+          const a = p.action as Record<string, unknown>;
+          if (!a.platform) errors.push({ path: `${path}.paginate.action.platform`, message: 'Action must have "platform"' });
+          if (!a.actionId) errors.push({ path: `${path}.paginate.action.actionId`, message: 'Action must have "actionId"' });
+          if (!a.connectionKey) errors.push({ path: `${path}.paginate.action.connectionKey`, message: 'Action must have "connectionKey"' });
+        }
+        if (!p.pageTokenField || typeof p.pageTokenField !== 'string') {
+          errors.push({ path: `${path}.paginate.pageTokenField`, message: 'Paginate must have a string "pageTokenField"' });
+        }
+        if (!p.resultsField || typeof p.resultsField !== 'string') {
+          errors.push({ path: `${path}.paginate.resultsField`, message: 'Paginate must have a string "resultsField"' });
+        }
+        if (!p.inputTokenParam || typeof p.inputTokenParam !== 'string') {
+          errors.push({ path: `${path}.paginate.inputTokenParam`, message: 'Paginate must have a string "inputTokenParam"' });
+        }
+        if (p.maxPages !== undefined && (typeof p.maxPages !== 'number' || p.maxPages <= 0)) {
+          errors.push({ path: `${path}.paginate.maxPages`, message: 'maxPages must be a positive number' });
+        }
+      }
+    } else if (type === 'bash') {
+      if (!s.bash || typeof s.bash !== 'object') {
+        errors.push({ path: `${path}.bash`, message: 'Bash step must have a "bash" config object' });
+      } else {
+        const b = s.bash as Record<string, unknown>;
+        if (!b.command || typeof b.command !== 'string') {
+          errors.push({ path: `${path}.bash.command`, message: 'Bash must have a string "command"' });
+        }
+        if (b.timeout !== undefined && (typeof b.timeout !== 'number' || b.timeout <= 0)) {
+          errors.push({ path: `${path}.bash.timeout`, message: 'timeout must be a positive number' });
+        }
+        if (b.parseJson !== undefined && typeof b.parseJson !== 'boolean') {
+          errors.push({ path: `${path}.bash.parseJson`, message: 'parseJson must be a boolean' });
+        }
+      }
     }
   }
 }
@@ -232,6 +303,7 @@ export function validateStepIds(flow: Flow): ValidationError[] {
       }
       if (step.loop?.steps) collectIds(step.loop.steps, `${path}.loop.steps`);
       if (step.parallel?.steps) collectIds(step.parallel.steps, `${path}.parallel.steps`);
+      if (step.while?.steps) collectIds(step.while.steps, `${path}.while.steps`);
     }
   }
 
@@ -258,6 +330,9 @@ export function validateSelectorReferences(flow: Flow): ValidationError[] {
       }
       if (step.parallel?.steps) {
         for (const id of getAllStepIds(step.parallel.steps)) ids.add(id);
+      }
+      if (step.while?.steps) {
+        for (const id of getAllStepIds(step.while.steps)) ids.add(id);
       }
     }
     return ids;
@@ -338,6 +413,27 @@ export function validateSelectorReferences(flow: Flow): ValidationError[] {
     if (step.fileWrite) {
       checkSelectors(extractSelectors(step.fileWrite.path), `${pathPrefix}.fileWrite.path`);
       checkSelectors(extractSelectors(step.fileWrite.content), `${pathPrefix}.fileWrite.content`);
+    }
+    if (step.while) {
+      step.while.steps.forEach((s, i) => checkStep(s, `${pathPrefix}.while.steps[${i}]`));
+    }
+    if (step.flow) {
+      checkSelectors(extractSelectors(step.flow.key), `${pathPrefix}.flow.key`);
+      if (step.flow.inputs) {
+        checkSelectors(extractSelectors(step.flow.inputs), `${pathPrefix}.flow.inputs`);
+      }
+    }
+    if (step.paginate) {
+      checkSelectors(extractSelectors(step.paginate.action), `${pathPrefix}.paginate.action`);
+    }
+    if (step.bash) {
+      checkSelectors(extractSelectors(step.bash.command), `${pathPrefix}.bash.command`);
+      if (step.bash.cwd) {
+        checkSelectors(extractSelectors(step.bash.cwd), `${pathPrefix}.bash.cwd`);
+      }
+      if (step.bash.env) {
+        checkSelectors(extractSelectors(step.bash.env), `${pathPrefix}.bash.env`);
+      }
     }
   }
 

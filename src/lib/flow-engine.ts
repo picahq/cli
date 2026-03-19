@@ -1,5 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { exec } from 'node:child_process';
+import { promisify } from 'node:util';
 import type { OneApi } from './api.js';
 import { isMethodAllowed, isActionAllowed } from './api.js';
 import type { PermissionLevel } from './types.js';
@@ -10,7 +12,10 @@ import type {
   StepResult,
   FlowEvent,
   FlowExecuteOptions,
+  FlowActionConfig,
 } from './flow-types.js';
+
+const execAsync = promisify(exec);
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -97,6 +102,63 @@ export function evaluateExpression(expr: string, context: FlowContext): unknown 
   return fn(context);
 }
 
+// ── Dot-path Helpers (for pagination) ──
+
+function getByDotPath(obj: unknown, dotPath: string): unknown {
+  const parts = dotPath.split('.');
+  let current: unknown = obj;
+  for (const part of parts) {
+    if (current === null || current === undefined) return undefined;
+    if (typeof current === 'object') {
+      current = (current as Record<string, unknown>)[part];
+    } else {
+      return undefined;
+    }
+  }
+  return current;
+}
+
+function setByDotPath(obj: Record<string, unknown>, dotPath: string, value: unknown): void {
+  const parts = dotPath.split('.');
+  let current: Record<string, unknown> = obj;
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (current[parts[i]] === undefined || current[parts[i]] === null) {
+      current[parts[i]] = {};
+    }
+    current = current[parts[i]] as Record<string, unknown>;
+  }
+  current[parts[parts.length - 1]] = value;
+}
+
+// ── Code Sandbox ──
+
+const ALLOWED_MODULES: Record<string, () => Promise<unknown>> = {
+  buffer: () => import('node:buffer'),
+  crypto: () => import('node:crypto'),
+  url: () => import('node:url'),
+  path: () => import('node:path'),
+};
+
+const BLOCKED_MODULES = new Set([
+  'fs', 'http', 'https', 'net', 'child_process', 'process', 'os',
+  'cluster', 'dgram', 'tls', 'vm', 'worker_threads',
+]);
+
+function createSandboxedRequire() {
+  const cache: Record<string, unknown> = {};
+  return async (moduleName: string) => {
+    const clean = moduleName.replace(/^node:/, '');
+    if (BLOCKED_MODULES.has(clean)) {
+      throw new Error(`Module "${moduleName}" is blocked in code steps`);
+    }
+    if (!ALLOWED_MODULES[clean]) {
+      throw new Error(`Module "${moduleName}" not available. Allowed: ${Object.keys(ALLOWED_MODULES).join(', ')}`);
+    }
+    if (!cache[clean]) cache[clean] = await ALLOWED_MODULES[clean]();
+    return cache[clean];
+  };
+}
+
 // ── Step Executors ──
 
 async function executeActionStep(
@@ -150,8 +212,9 @@ function executeTransformStep(step: FlowStep, context: FlowContext): StepResult 
 async function executeCodeStep(step: FlowStep, context: FlowContext): Promise<StepResult> {
   const source = step.code!.source;
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-  const fn = new AsyncFunction('$', source);
-  const output = await fn(context);
+  const sandboxedRequire = createSandboxedRequire();
+  const fn = new AsyncFunction('$', 'require', source);
+  const output = await fn(context, sandboxedRequire);
   return { status: 'success', output, response: output };
 }
 
@@ -162,12 +225,13 @@ async function executeConditionStep(
   permissions: PermissionLevel,
   allowedActionIds: string[],
   options: FlowExecuteOptions,
+  flowStack: string[],
 ): Promise<StepResult> {
   const condition = step.condition!;
   const result = evaluateExpression(condition.expression, context);
 
   const branch = result ? condition.then : (condition.else || []);
-  const branchResults = await executeSteps(branch, context, api, permissions, allowedActionIds, options);
+  const branchResults = await executeSteps(branch, context, api, permissions, allowedActionIds, options, undefined, flowStack);
 
   return {
     status: 'success',
@@ -183,6 +247,7 @@ async function executeLoopStep(
   permissions: PermissionLevel,
   allowedActionIds: string[],
   options: FlowExecuteOptions,
+  flowStack: string[],
 ): Promise<StepResult> {
   const loop = step.loop!;
   const items = resolveValue(loop.over, context);
@@ -194,6 +259,7 @@ async function executeLoopStep(
   const maxIterations = loop.maxIterations || 1000;
   const bounded = items.slice(0, maxIterations);
   const savedLoop = { ...context.loop };
+  const iterationResults: Record<string, StepResult>[] = [];
 
   if (loop.maxConcurrency && loop.maxConcurrency > 1) {
     // Parallel loop: process iterations in batches
@@ -215,7 +281,16 @@ async function executeLoopStep(
             },
             steps: { ...context.steps },
           };
-          await executeSteps(loop.steps, iterContext, api, permissions, allowedActionIds, options);
+          const beforeKeys = new Set(Object.keys(iterContext.steps));
+          await executeSteps(loop.steps, iterContext, api, permissions, allowedActionIds, options, undefined, flowStack);
+          // Collect new/changed step results for this iteration
+          const iterResult: Record<string, StepResult> = {};
+          for (const [key, val] of Object.entries(iterContext.steps)) {
+            if (!beforeKeys.has(key) || iterContext.steps[key] !== context.steps[key]) {
+              iterResult[key] = val;
+            }
+          }
+          iterationResults[i] = iterResult;
           // Merge step results back
           Object.assign(context.steps, iterContext.steps);
           return iterContext.loop[loop.as];
@@ -227,7 +302,11 @@ async function executeLoopStep(
     }
 
     context.loop = savedLoop;
-    return { status: 'success', output: results, response: results };
+    return {
+      status: 'success',
+      output: results,
+      response: { items: results, iterations: iterationResults },
+    };
   }
 
   // Sequential loop (default)
@@ -243,12 +322,25 @@ async function executeLoopStep(
       context.loop[loop.indexAs] = i;
     }
 
-    await executeSteps(loop.steps, context, api, permissions, allowedActionIds, options);
+    const beforeKeys = new Set(Object.keys(context.steps));
+    await executeSteps(loop.steps, context, api, permissions, allowedActionIds, options, undefined, flowStack);
+    // Collect new/changed step results for this iteration
+    const iterResult: Record<string, StepResult> = {};
+    for (const [key, val] of Object.entries(context.steps)) {
+      if (!beforeKeys.has(key) || context.steps[key] !== (beforeKeys.has(key) ? undefined : val)) {
+        iterResult[key] = val;
+      }
+    }
+    iterationResults.push(iterResult);
     results.push(context.loop[loop.as]);
   }
 
   context.loop = savedLoop;
-  return { status: 'success', output: results, response: results };
+  return {
+    status: 'success',
+    output: results,
+    response: { items: results, iterations: iterationResults },
+  };
 }
 
 async function executeParallelStep(
@@ -258,6 +350,7 @@ async function executeParallelStep(
   permissions: PermissionLevel,
   allowedActionIds: string[],
   options: FlowExecuteOptions,
+  flowStack: string[],
 ): Promise<StepResult> {
   const parallel = step.parallel!;
   const maxConcurrency = parallel.maxConcurrency || 5;
@@ -268,8 +361,12 @@ async function executeParallelStep(
   for (let i = 0; i < steps.length; i += maxConcurrency) {
     const batch = steps.slice(i, i + maxConcurrency);
     const batchResults = await Promise.all(
-      batch.map(s => executeSingleStep(s, context, api, permissions, allowedActionIds, options))
+      batch.map(s => executeSingleStep(s, context, api, permissions, allowedActionIds, options, flowStack))
     );
+    // Feature 1: Explicit keying of parallel substep outputs by ID
+    for (let j = 0; j < batch.length; j++) {
+      context.steps[batch[j].id] = batchResults[j];
+    }
     results.push(...batchResults);
   }
 
@@ -308,6 +405,195 @@ function executeFileWriteStep(step: FlowStep, context: FlowContext): StepResult 
   return { status: 'success', output: { path: resolvedPath, bytesWritten: stringContent.length }, response: { path: resolvedPath } };
 }
 
+// Feature 2: While loop
+async function executeWhileStep(
+  step: FlowStep,
+  context: FlowContext,
+  api: OneApi,
+  permissions: PermissionLevel,
+  allowedActionIds: string[],
+  options: FlowExecuteOptions,
+  flowStack: string[],
+): Promise<StepResult> {
+  const config = step.while!;
+  const maxIterations = config.maxIterations ?? 100;
+  const results: unknown[] = [];
+
+  // Initialize step output so condition can reference it
+  context.steps[step.id] = {
+    status: 'success',
+    output: { lastResult: undefined, iteration: 0, results: [] },
+  };
+
+  for (let iteration = 0; iteration < maxIterations; iteration++) {
+    // Do-while: skip condition check on iteration 0
+    if (iteration > 0) {
+      const conditionResult = evaluateExpression(config.condition, context);
+      if (!conditionResult) break;
+    }
+
+    await executeSteps(config.steps, context, api, permissions, allowedActionIds, options, undefined, flowStack);
+
+    // Capture last step's output as lastResult
+    const lastStepId = config.steps[config.steps.length - 1]?.id;
+    const lastResult = lastStepId ? context.steps[lastStepId]?.output : undefined;
+    results.push(lastResult);
+
+    // Update step output so next condition evaluation can reference it
+    context.steps[step.id] = {
+      status: 'success',
+      output: { lastResult, iteration, results },
+    };
+  }
+
+  return {
+    status: 'success',
+    output: { lastResult: results[results.length - 1], iteration: results.length, results },
+    response: { iterations: results.length, results },
+  };
+}
+
+// Feature 3: Sub-flow
+async function executeSubflowStep(
+  step: FlowStep,
+  context: FlowContext,
+  api: OneApi,
+  permissions: PermissionLevel,
+  allowedActionIds: string[],
+  options: FlowExecuteOptions,
+  flowStack: string[],
+): Promise<StepResult> {
+  const config = step.flow!;
+  const resolvedKey = resolveValue(config.key, context) as string;
+  const resolvedInputs = config.inputs
+    ? resolveValue(config.inputs, context) as Record<string, unknown>
+    : {};
+
+  // Circular flow detection
+  if (flowStack.includes(resolvedKey)) {
+    throw new Error(`Circular flow detected: ${[...flowStack, resolvedKey].join(' → ')}`);
+  }
+
+  // Dynamic import to avoid circular dependency at module level
+  const { loadFlow } = await import('./flow-runner.js');
+  const subFlow = loadFlow(resolvedKey);
+
+  const subContext = await executeFlow(
+    subFlow,
+    resolvedInputs,
+    api,
+    permissions,
+    allowedActionIds,
+    options,
+    undefined,
+    [...flowStack, resolvedKey],
+  );
+
+  return {
+    status: 'success',
+    output: subContext.steps,
+    response: subContext,
+  };
+}
+
+// Feature 6: Pagination primitive
+async function executePaginateStep(
+  step: FlowStep,
+  context: FlowContext,
+  api: OneApi,
+  permissions: PermissionLevel,
+  allowedActionIds: string[],
+  options: FlowExecuteOptions,
+): Promise<StepResult> {
+  const config = step.paginate!;
+  const maxPages = config.maxPages ?? 10;
+  const allResults: unknown[] = [];
+  let pageToken: unknown = undefined;
+  let pages = 0;
+
+  for (let page = 0; page < maxPages; page++) {
+    // Clone the action config and inject page token
+    const actionConfig: FlowActionConfig = JSON.parse(JSON.stringify(config.action));
+    if (pageToken !== undefined && pageToken !== null) {
+      const resolved = resolveValue(actionConfig, context) as Record<string, unknown>;
+      setByDotPath(resolved, config.inputTokenParam, pageToken);
+      // Build a synthetic action step
+      const syntheticStep: FlowStep = {
+        id: `${step.id}__page${page}`,
+        name: `${step.id} page ${page}`,
+        type: 'action',
+        action: resolved as any,
+      };
+      const result = await executeActionStep(syntheticStep, context, api, permissions, allowedActionIds);
+      const response = result.response as Record<string, unknown>;
+      const pageResults = getByDotPath(response, config.resultsField);
+      if (Array.isArray(pageResults)) allResults.push(...pageResults);
+      pageToken = getByDotPath(response, config.pageTokenField);
+      pages++;
+
+      options.onEvent?.({ event: 'step:page', stepId: step.id, page: pages });
+
+      if (pageToken === undefined || pageToken === null) break;
+    } else if (page === 0) {
+      // First page — no token yet
+      const resolvedAction = resolveValue(actionConfig, context) as any;
+      const syntheticStep: FlowStep = {
+        id: `${step.id}__page0`,
+        name: `${step.id} page 0`,
+        type: 'action',
+        action: resolvedAction,
+      };
+      const result = await executeActionStep(syntheticStep, context, api, permissions, allowedActionIds);
+      const response = result.response as Record<string, unknown>;
+      const pageResults = getByDotPath(response, config.resultsField);
+      if (Array.isArray(pageResults)) allResults.push(...pageResults);
+      pageToken = getByDotPath(response, config.pageTokenField);
+      pages++;
+
+      options.onEvent?.({ event: 'step:page', stepId: step.id, page: pages });
+
+      if (pageToken === undefined || pageToken === null) break;
+    }
+  }
+
+  return {
+    status: 'success',
+    output: allResults,
+    response: { pages, totalResults: allResults.length, results: allResults },
+  };
+}
+
+// Feature 9: Bash step
+async function executeBashStep(
+  step: FlowStep,
+  context: FlowContext,
+  options: FlowExecuteOptions,
+): Promise<StepResult> {
+  if (!options.allowBash) {
+    throw new Error('Bash steps require --allow-bash flag for security');
+  }
+  const config = step.bash!;
+  const command = resolveValue(config.command, context) as string;
+  const cwd = config.cwd ? resolveValue(config.cwd, context) as string : process.cwd();
+  const env = config.env
+    ? { ...process.env, ...resolveValue(config.env, context) as Record<string, string> }
+    : process.env;
+
+  const { stdout, stderr } = await execAsync(command, {
+    timeout: config.timeout || 30000,
+    cwd,
+    env,
+    maxBuffer: 10 * 1024 * 1024,
+  });
+
+  const output = config.parseJson ? JSON.parse(stdout) : stdout.trim();
+  return {
+    status: 'success',
+    output,
+    response: { stdout: stdout.trim(), stderr: stderr.trim(), exitCode: 0 },
+  };
+}
+
 // ── Core Execution ──
 
 export async function executeSingleStep(
@@ -317,6 +603,7 @@ export async function executeSingleStep(
   permissions: PermissionLevel,
   allowedActionIds: string[],
   options: FlowExecuteOptions,
+  flowStack: string[] = [],
 ): Promise<StepResult> {
   // Conditional execution
   if (step.if) {
@@ -353,6 +640,20 @@ export async function executeSingleStep(
         await sleep(delay);
       }
 
+      // Feature 7: Mock mode — mock external steps, run logic steps normally
+      if (options.mock && (step.type === 'action' || step.type === 'paginate' || step.type === 'bash')) {
+        const resolvedConfig = step[step.type] ? resolveValue(step[step.type], context) : {};
+        options.onEvent?.({ event: 'step:mock', stepId: step.id, type: step.type, config: resolvedConfig });
+        const result: StepResult = {
+          status: 'success',
+          output: { _mock: true, ...resolvedConfig as Record<string, unknown> },
+          response: { _mock: true },
+          durationMs: Date.now() - startTime,
+        };
+        context.steps[step.id] = result;
+        return result;
+      }
+
       let result: StepResult;
 
       switch (step.type) {
@@ -366,19 +667,31 @@ export async function executeSingleStep(
           result = await executeCodeStep(step, context);
           break;
         case 'condition':
-          result = await executeConditionStep(step, context, api, permissions, allowedActionIds, options);
+          result = await executeConditionStep(step, context, api, permissions, allowedActionIds, options, flowStack);
           break;
         case 'loop':
-          result = await executeLoopStep(step, context, api, permissions, allowedActionIds, options);
+          result = await executeLoopStep(step, context, api, permissions, allowedActionIds, options, flowStack);
           break;
         case 'parallel':
-          result = await executeParallelStep(step, context, api, permissions, allowedActionIds, options);
+          result = await executeParallelStep(step, context, api, permissions, allowedActionIds, options, flowStack);
           break;
         case 'file-read':
           result = executeFileReadStep(step, context);
           break;
         case 'file-write':
           result = executeFileWriteStep(step, context);
+          break;
+        case 'while':
+          result = await executeWhileStep(step, context, api, permissions, allowedActionIds, options, flowStack);
+          break;
+        case 'flow':
+          result = await executeSubflowStep(step, context, api, permissions, allowedActionIds, options, flowStack);
+          break;
+        case 'paginate':
+          result = await executePaginateStep(step, context, api, permissions, allowedActionIds, options);
+          break;
+        case 'bash':
+          result = await executeBashStep(step, context, options);
           break;
         default:
           throw new Error(`Unknown step type: ${step.type}`);
@@ -436,6 +749,7 @@ export async function executeSteps(
   allowedActionIds: string[],
   options: FlowExecuteOptions,
   completedStepIds?: Set<string>,
+  flowStack: string[] = [],
 ): Promise<StepResult[]> {
   const results: StepResult[] = [];
 
@@ -455,7 +769,7 @@ export async function executeSteps(
     });
 
     try {
-      const result = await executeSingleStep(step, context, api, permissions, allowedActionIds, options);
+      const result = await executeSingleStep(step, context, api, permissions, allowedActionIds, options, flowStack);
       results.push(result);
 
       options.onEvent?.({
@@ -490,6 +804,7 @@ export async function executeFlow(
   allowedActionIds: string[],
   options: FlowExecuteOptions = {},
   resumeState?: { context: FlowContext; completedSteps: string[] },
+  flowStack: string[] = [],
 ): Promise<FlowContext> {
   // Validate required inputs
   for (const [name, decl] of Object.entries(flow.inputs)) {
@@ -520,7 +835,8 @@ export async function executeFlow(
     ? new Set(resumeState.completedSteps)
     : undefined;
 
-  if (options.dryRun) {
+  // Feature 7: dry-run without mock — existing behavior
+  if (options.dryRun && !options.mock) {
     options.onEvent?.({
       event: 'flow:dry-run',
       flowKey: flow.key,
@@ -532,7 +848,7 @@ export async function executeFlow(
   }
 
   options.onEvent?.({
-    event: 'flow:start',
+    event: options.mock ? 'flow:mock-start' : 'flow:start',
     flowKey: flow.key,
     totalSteps: flow.steps.length,
     timestamp: new Date().toISOString(),
@@ -541,7 +857,7 @@ export async function executeFlow(
   const flowStart = Date.now();
 
   try {
-    await executeSteps(flow.steps, context, api, permissions, allowedActionIds, options, completedStepIds);
+    await executeSteps(flow.steps, context, api, permissions, allowedActionIds, options, completedStepIds, flowStack);
 
     const stepEntries = Object.values(context.steps);
     const completed = stepEntries.filter(s => s.status === 'success').length;

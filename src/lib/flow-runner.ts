@@ -99,10 +99,11 @@ export class FlowRunner {
         event,
       );
 
-      // Track completed steps
+      // Track completed steps and persist state incrementally
       if (event.event === 'step:complete' && event.stepId) {
         this.state.completedSteps.push(event.stepId as string);
         this.state.currentStepId = undefined;
+        this.saveState();
       }
       if (event.event === 'step:start' && event.stepId) {
         this.state.currentStepId = event.stepId as string;
@@ -130,6 +131,15 @@ export class FlowRunner {
   ): Promise<FlowContext> {
     this.log('info', 'Flow started', { flowKey: this.flowKey, runId: this.runId });
     this.state.status = 'running';
+
+    // Pre-create live context so state persistence captures progress
+    const liveContext: FlowContext = {
+      input: this.state.inputs,
+      env: process.env as Record<string, string | undefined>,
+      steps: {},
+      loop: {},
+    };
+    this.state.context = liveContext;
     this.saveState();
 
     const eventHandler = this.createEventHandler(options.onEvent);
@@ -142,6 +152,7 @@ export class FlowRunner {
         permissions,
         allowedActionIds,
         { ...options, onEvent: eventHandler },
+        { context: liveContext, completedSteps: [] },
       );
 
       this.state.status = 'completed';
@@ -172,6 +183,9 @@ export class FlowRunner {
     this.log('info', 'Flow resumed', { flowKey: this.flowKey, runId: this.runId });
     this.state.status = 'running';
     this.state.pausedAt = undefined;
+
+    // Re-populate env from current process.env (don't rely on saved env)
+    this.state.context.env = process.env as Record<string, string | undefined>;
     this.saveState();
 
     const eventHandler = this.createEventHandler(options.onEvent);

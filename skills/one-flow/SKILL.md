@@ -302,6 +302,134 @@ The `source` field contains a JS function body. The flow context is available as
 }
 ```
 
+### `while` — Condition-driven loop (do-while)
+
+Iterates until a condition becomes falsy. The first iteration always runs (do-while semantics), then the condition is checked before each subsequent iteration. Useful for pagination.
+
+```json
+{
+  "id": "paginate",
+  "name": "Paginate through all pages",
+  "type": "while",
+  "while": {
+    "condition": "$.steps.paginate.output.lastResult.nextPageToken != null",
+    "maxIterations": 50,
+    "steps": [
+      {
+        "id": "fetchPage",
+        "name": "Fetch next page",
+        "type": "action",
+        "action": {
+          "platform": "gmail",
+          "actionId": "GMAIL_LIST_MESSAGES_ACTION_ID",
+          "connectionKey": "$.input.gmailKey",
+          "queryParams": {
+            "pageToken": "$.steps.paginate.output.lastResult.nextPageToken"
+          }
+        }
+      }
+    ]
+  }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `condition` | string | JS expression evaluated before each iteration (after iteration 0) |
+| `maxIterations` | number | Safety cap, default: 100 |
+| `steps` | FlowStep[] | Steps to execute each iteration |
+
+The step output contains `lastResult` (last step's output from most recent iteration), `iteration` (count), and `results` (array of all iteration outputs). Reference via `$.steps.<id>.output.lastResult`.
+
+### `flow` — Execute a sub-flow
+
+Loads and executes another saved flow, enabling flow composition. Circular flows are detected and blocked.
+
+```json
+{
+  "id": "processCustomer",
+  "name": "Run customer enrichment flow",
+  "type": "flow",
+  "flow": {
+    "key": "enrich-customer",
+    "inputs": {
+      "email": "$.steps.getCustomer.response.email",
+      "connectionKey": "$.input.hubspotConnectionKey"
+    }
+  }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `key` | string | Flow key or path (supports selectors) |
+| `inputs` | object | Input values mapped to the sub-flow's declared inputs (supports selectors) |
+
+The step output contains all sub-flow step results. The full sub-flow context is available via `$.steps.<id>.response`.
+
+### `paginate` — Auto-collect paginated API results
+
+Automatically pages through a paginated API, collecting all results into a single array.
+
+```json
+{
+  "id": "allMessages",
+  "name": "Fetch all Gmail messages",
+  "type": "paginate",
+  "paginate": {
+    "action": {
+      "platform": "gmail",
+      "actionId": "GMAIL_LIST_MESSAGES_ACTION_ID",
+      "connectionKey": "$.input.gmailKey",
+      "queryParams": { "maxResults": 100 }
+    },
+    "pageTokenField": "nextPageToken",
+    "resultsField": "messages",
+    "inputTokenParam": "queryParams.pageToken",
+    "maxPages": 10
+  }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `action` | FlowActionConfig | The API action to call (same format as action steps) |
+| `pageTokenField` | string | Dot-path in the API response to the next page token |
+| `resultsField` | string | Dot-path in the API response to the results array |
+| `inputTokenParam` | string | Dot-path in the action config where the page token is injected |
+| `maxPages` | number | Maximum pages to fetch, default: 10 |
+
+Output is the concatenated results array. Response includes `{ pages, totalResults, results }`.
+
+### `bash` — Execute shell commands
+
+Runs a shell command. **Requires `--allow-bash` flag** for security.
+
+```json
+{
+  "id": "analyzeData",
+  "name": "Analyze data with Claude",
+  "type": "bash",
+  "bash": {
+    "command": "claude --print 'Analyze: {{$.steps.fetchData.response}}' --output-format json",
+    "timeout": 120000,
+    "parseJson": true
+  }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `command` | string | Shell command to execute (supports selectors and interpolation) |
+| `timeout` | number | Timeout in ms, default: 30000 |
+| `parseJson` | boolean | Parse stdout as JSON, default: false |
+| `cwd` | string | Working directory (supports selectors) |
+| `env` | object | Additional environment variables |
+
+Output is stdout (trimmed, or parsed as JSON if `parseJson` is true). Response includes `{ stdout, stderr, exitCode }`.
+
+**Security:** Bash steps are blocked by default. Pass `--allow-bash` to `one flow execute` to enable them.
+
 ## 6. Error Handling
 
 ### `onError` strategies
@@ -583,6 +711,12 @@ one --agent flow execute <key> -i connectionKey=value -i param=value
 # Execute with dry run (validate only)
 one --agent flow execute <key> --dry-run -i connectionKey=value
 
+# Execute with mock mode (dry-run + mock API responses, runs transforms/code normally)
+one --agent flow execute <key> --dry-run --mock -i connectionKey=value
+
+# Execute with bash steps enabled
+one --agent flow execute <key> --allow-bash -i connectionKey=value
+
 # Execute with verbose output
 one --agent flow execute <key> -v -i connectionKey=value
 
@@ -601,3 +735,8 @@ one --agent flow resume <runId>
 - Connection keys are **inputs**, not hardcoded — makes workflows portable and shareable
 - Use `$.input.*` for input values, `$.steps.*` for step results
 - Action IDs in examples (like `STRIPE_SEARCH_CUSTOMERS_ACTION_ID`) are placeholders — always use `one actions search` to find the real IDs
+- **Parallel step outputs** are accessible both by index (`$.steps.parallelStep.output[0]`) and by substep ID (`$.steps.substepId.response`)
+- **Loop step outputs** include iteration details via `$.steps.myLoop.response.iterations[0].innerStepId.response`
+- **Code steps** support `await require('crypto')`, `await require('buffer')`, `await require('url')`, `await require('path')` — `fs`, `http`, `child_process`, etc. are blocked
+- **Bash steps** require `--allow-bash` flag for security
+- **State is persisted** after every step completion — resume picks up where it left off
