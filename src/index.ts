@@ -18,6 +18,7 @@ import {
 } from './commands/flow.js';
 import { guideCommand } from './commands/guide.js';
 import { onboardCommand } from './commands/onboard.js';
+import { updateCommand } from './commands/update.js';
 import { setAgentMode } from './lib/output.js';
 
 const require = createRequire(import.meta.url);
@@ -234,6 +235,13 @@ program
   .description('Agent onboarding — teaches your agent what the One CLI can do')
   .action(async () => {
     await onboardCommand();
+  });
+
+program
+  .command('update')
+  .description('Update the One CLI to the latest version')
+  .action(async () => {
+    await updateCommand();
   });
 
 // Shortcuts
