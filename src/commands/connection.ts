@@ -134,7 +134,7 @@ export async function connectionAddCommand(platformArg?: string): Promise<void> 
   }
 }
 
-export async function connectionListCommand(): Promise<void> {
+export async function connectionListCommand(options?: { search?: string; limit?: string }): Promise<void> {
   const apiKey = getApiKey();
   if (!apiKey) {
     output.error('Not configured. Run `one init` first.');
@@ -146,33 +146,56 @@ export async function connectionListCommand(): Promise<void> {
   spinner.start('Loading connections...');
 
   try {
-    const connections = await api.listConnections();
+    const allConnections = await api.listConnections();
+
+    // Filter by search query if provided
+    const searchQuery = options?.search?.toLowerCase();
+    const filtered = searchQuery
+      ? allConnections.filter(conn => conn.platform.toLowerCase().includes(searchQuery))
+      : allConnections;
 
     if (output.isAgentMode()) {
+      const limit = options?.limit ? parseInt(options.limit, 10) : 20;
+      const limited = filtered.slice(0, limit);
+
       output.json({
-        connections: connections.map(conn => ({
+        total: filtered.length,
+        showing: limited.length,
+        ...(searchQuery && { search: searchQuery }),
+        connections: limited.map(conn => ({
           platform: conn.platform,
           state: conn.state,
           key: conn.key,
         })),
+        ...(limited.length < filtered.length && {
+          hint: `Showing ${limited.length} of ${filtered.length} connections. Use --search <query> to filter by platform or --limit <n> to see more.`,
+        }),
       });
       return;
     }
 
-    spinner.stop(`${connections.length} connection${connections.length === 1 ? '' : 's'} found`);
+    spinner.stop(`${filtered.length} connection${filtered.length === 1 ? '' : 's'} found`);
 
-    if (connections.length === 0) {
-      p.note(
-        `No connections yet.\n\n` +
-        `Add one with: ${pc.cyan('one connection add gmail')}`,
-        'No Connections'
-      );
+    if (filtered.length === 0) {
+      if (searchQuery) {
+        p.note(
+          `No connections matching "${searchQuery}".\n\n` +
+          `Try: ${pc.cyan('one connection list')} to see all connections.`,
+          'No Results'
+        );
+      } else {
+        p.note(
+          `No connections yet.\n\n` +
+          `Add one with: ${pc.cyan('one connection add gmail')}`,
+          'No Connections'
+        );
+      }
       return;
     }
 
     console.log();
 
-    const rows = connections.map(conn => ({
+    const rows = filtered.map(conn => ({
       status: getStatusIndicator(conn.state),
       platform: conn.platform,
       state: conn.state,

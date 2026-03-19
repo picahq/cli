@@ -619,16 +619,16 @@ async function freshSetup(options: { yes?: boolean; global?: boolean; project?: 
 
 function printBanner(): void {
   console.log();
-  console.log(pc.cyan('  ██████████████   ██████     ██████   ██████████████'));
-  console.log(pc.cyan('  ██████████████   ███████    ██████   ██████████████'));
-  console.log(pc.cyan('  ██████    ████   ████████   ██████   ██████       '));
-  console.log(pc.cyan('  ██████    ████   ██████████ ██████   ██████       '));
-  console.log(pc.cyan('  ██████    ████   ██████ ██████████   ██████████   '));
-  console.log(pc.cyan('  ██████    ████   ██████  █████████   ██████████   '));
-  console.log(pc.cyan('  ██████    ████   ██████   ████████   ██████       '));
-  console.log(pc.cyan('  ██████    ████   ██████    ███████   ██████       '));
-  console.log(pc.cyan('  ██████████████   ██████     ██████   ██████████████'));
-  console.log(pc.cyan('  ██████████████   ██████      █████   ██████████████'));
+  console.log(pc.yellow('  ██████████████   ██████     ██████   ██████████████'));
+  console.log(pc.yellow('  ██████████████   ███████    ██████   ██████████████'));
+  console.log(pc.yellow('  ██████    ████   ████████   ██████   ██████       '));
+  console.log(pc.yellow('  ██████    ████   ██████████ ██████   ██████       '));
+  console.log(pc.yellow('  ██████    ████   ██████ ██████████   ██████████   '));
+  console.log(pc.yellow('  ██████    ████   ██████  █████████   ██████████   '));
+  console.log(pc.yellow('  ██████    ████   ██████   ████████   ██████       '));
+  console.log(pc.yellow('  ██████    ████   ██████    ███████   ██████       '));
+  console.log(pc.yellow('  ██████████████   ██████     ██████   ██████████████'));
+  console.log(pc.yellow('  ██████████████   ██████      █████   ██████████████'));
   console.log();
   console.log(pc.dim('  U N I V E R S A L   I N T E G R A T I O N S   F O R   A I'));
   console.log();

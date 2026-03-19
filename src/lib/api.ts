@@ -78,8 +78,18 @@ export class OneApi {
   }
 
   async listConnections(): Promise<Connection[]> {
-    const response = await this.request<ConnectionsResponse>('/vault/connections');
-    return response.rows || [];
+    const allConnections: Connection[] = [];
+    let page = 1;
+    let totalPages = 1;
+
+    do {
+      const response = await this.request<ConnectionsResponse>(`/vault/connections?page=${page}&limit=100`);
+      allConnections.push(...(response.rows || []));
+      totalPages = response.pages || 1;
+      page++;
+    } while (page <= totalPages);
+
+    return allConnections;
   }
 
   async listPlatforms(): Promise<Platform[]> {

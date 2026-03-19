@@ -107,8 +107,10 @@ connection
   .command('list')
   .alias('ls')
   .description('List your connections')
-  .action(async () => {
-    await connectionListCommand();
+  .option('-s, --search <query>', 'Filter connections by platform name')
+  .option('-l, --limit <n>', 'Max connections to return (agent mode default: 20)')
+  .action(async (options) => {
+    await connectionListCommand(options);
   });
 
 program
