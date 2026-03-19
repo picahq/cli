@@ -52,16 +52,28 @@ virtually any integration task across their entire stack.`);
   // How To Use
   sections.push(`## How To Use the CLI
 
+### IMPORTANT: Always use the --agent flag
+Every command supports \`--agent\` which gives you clean, structured JSON
+output instead of human-formatted text. Always use it:
+  one --agent list
+  one --agent actions search gmail "send email"
+  one --agent actions knowledge gmail <actionId>
+  one --agent actions execute gmail <actionId> <connectionKey> -d '{...}'
+  one --agent platforms
+  one --agent guide
+
+The \`--agent\` flag goes right after \`one\`, before the subcommand.
+
 ### Discovery Workflow (follow this every time):
-1. \`one actions search <platform> "<query>"\` — Find the right action
-2. \`one actions knowledge <platform> <actionId>\` — Read the docs (ALWAYS before execute)
-3. \`one actions execute <platform> <actionId> <connectionKey>\` — Execute it
+1. \`one --agent actions search <platform> "<query>"\` — Find the right action
+2. \`one --agent actions knowledge <platform> <actionId>\` — Read the docs (ALWAYS before execute)
+3. \`one --agent actions execute <platform> <actionId> <connectionKey>\` — Execute it
 
 ### Multi-Step Workflows:
 Use \`one flow create\` to build JSON workflows that chain actions across
 platforms with conditions, loops, parallel execution, and transforms.
 
-Run \`one guide\` for the complete reference documentation with examples.`);
+Run \`one --agent guide\` for the complete reference documentation with examples.`);
 
   // Demo Actions
   sections.push(buildDemoActions(connections));
@@ -210,14 +222,19 @@ This project has the One CLI configured. It connects AI agents to 200+
 platforms (Gmail, Slack, Shopify, HubSpot, Stripe, etc.) through a single
 interface.
 
+### IMPORTANT: Always use the --agent flag
+The \`--agent\` flag gives structured JSON output. Always include it right
+after \`one\`:
+  one --agent <command>
+
 ### Quick reference:
-- \`one list\` — See connected platforms and connection keys
-- \`one add <platform>\` — Connect a new platform
-- \`one actions search <platform> "<query>"\` — Find actions
-- \`one actions knowledge <platform> <actionId>\` — Read docs (REQUIRED before execute)
-- \`one actions execute <platform> <actionId> <connectionKey>\` — Execute action
-- \`one flow create\` — Build multi-step workflows
-- \`one guide\` — Full documentation
+- \`one --agent list\` — See connected platforms and connection keys
+- \`one --agent actions search <platform> "<query>"\` — Find actions
+- \`one --agent actions knowledge <platform> <actionId>\` — Read docs (REQUIRED before execute)
+- \`one --agent actions execute <platform> <actionId> <connectionKey>\` — Execute action
+- \`one --agent flow create\` — Build multi-step workflows
+- \`one --agent guide\` — Full documentation
+- \`one add <platform>\` — Connect a new platform (interactive, no --agent)
 
 ### Workflow: search -> knowledge -> execute
 Always read the knowledge before executing. It tells you required parameters,
