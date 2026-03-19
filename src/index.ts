@@ -18,7 +18,7 @@ import {
 } from './commands/flow.js';
 import { guideCommand } from './commands/guide.js';
 import { onboardCommand } from './commands/onboard.js';
-import { updateCommand, checkLatestVersion, getCurrentVersion } from './commands/update.js';
+import { updateCommand, checkLatestVersionCached, getCurrentVersion } from './commands/update.js';
 import { setAgentMode, isAgentMode } from './lib/output.js';
 
 const require = createRequire(import.meta.url);
@@ -79,7 +79,7 @@ program.hook('preAction', (thisCommand) => {
   // Start the fetch early so it resolves by the time the command finishes
   const commandName = thisCommand.args?.[0];
   if (commandName !== 'update') {
-    updateCheckPromise = checkLatestVersion();
+    updateCheckPromise = checkLatestVersionCached();
   }
 });
 

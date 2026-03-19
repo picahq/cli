@@ -1,11 +1,17 @@
 import { createRequire } from 'module';
 import { spawn } from 'node:child_process';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import * as output from '../lib/output.js';
 
 const require = createRequire(import.meta.url);
 const { version: currentVersion } = require('../package.json');
 
-export async function checkLatestVersion(): Promise<string | null> {
+const CACHE_PATH = join(homedir(), '.one', 'update-check.json');
+const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+async function fetchLatestVersion(): Promise<string | null> {
   try {
     const res = await fetch('https://registry.npmjs.org/@withone/cli/latest');
     if (!res.ok) return null;
@@ -14,6 +20,39 @@ export async function checkLatestVersion(): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+function readCache(): { lastCheck: number; latestVersion: string } | null {
+  try {
+    return JSON.parse(readFileSync(CACHE_PATH, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function writeCache(latestVersion: string): void {
+  try {
+    mkdirSync(join(homedir(), '.one'), { recursive: true });
+    writeFileSync(CACHE_PATH, JSON.stringify({ lastCheck: Date.now(), latestVersion }));
+  } catch {
+    // best-effort
+  }
+}
+
+/** Always fetches fresh from npm (used by `one update`). */
+export async function checkLatestVersion(): Promise<string | null> {
+  const version = await fetchLatestVersion();
+  if (version) writeCache(version);
+  return version;
+}
+
+/** Returns cached latest version if checked within 24h, otherwise fetches and caches. */
+export async function checkLatestVersionCached(): Promise<string | null> {
+  const cache = readCache();
+  if (cache && Date.now() - cache.lastCheck < CHECK_INTERVAL_MS) {
+    return cache.latestVersion;
+  }
+  return checkLatestVersion();
 }
 
 export function getCurrentVersion(): string {
