@@ -4,7 +4,7 @@ import { PLATFORM_DEMO_ACTIONS, getWorkflowExamples } from '../lib/platform-meta
 import * as output from '../lib/output.js';
 import type { Connection } from '../lib/types.js';
 
-export async function onboardCommand(): Promise<void> {
+export async function onboardCommand(step?: number): Promise<void> {
   if (!configExists()) {
     output.error('Not configured. Run `one init` first.');
   }
@@ -14,42 +14,116 @@ export async function onboardCommand(): Promise<void> {
     output.error('No API key found. Run `one init` first.');
   }
 
-  // Fetch connections
-  let connections: Connection[] = [];
-  try {
-    const api = new OneApi(apiKey);
-    connections = await api.listConnections();
-  } catch {
-    // Continue with empty connections
+  // Default to step 1 if no step specified
+  const currentStep = step || 1;
+
+  if (currentStep < 1 || currentStep > 3) {
+    output.error('Invalid step. Use --step 1, --step 2, or --step 3.');
+    return;
   }
 
-  const briefing = buildBriefing(connections);
+  // Steps 2 and 3 need connections
+  let connections: Connection[] = [];
+  if (currentStep >= 2) {
+    try {
+      const api = new OneApi(apiKey);
+      connections = await api.listConnections();
+    } catch {
+      // Continue with empty connections
+    }
+  }
+
+  const result = buildStep(currentStep, connections);
 
   if (output.isAgentMode()) {
-    output.json({ onboarding: briefing });
+    output.json(result);
   } else {
-    console.log(briefing);
+    console.log(result.message);
   }
 }
 
-function buildBriefing(connections: Connection[]): string {
+// ── Step 1: Intro + ask to update project instructions ─────────────
+
+function buildStep1(): { step: number; totalSteps: number; message: string; nextCommand: string } {
+  return {
+    step: 1,
+    totalSteps: 3,
+    nextCommand: 'one onboard --step 2',
+    message: `# One CLI — Agent Onboarding
+
+You now have access to the One CLI. It connects you to 200+ platforms
+(Gmail, Slack, Stripe, Notion, etc.) — you'll learn the details shortly.
+
+IMPORTANT: Your only task right now is to send the message below to the
+user. Do not run any other commands yet. Do not explore the CLI yet.
+Do not offer demos yet. Just send this message and wait for their reply:
+
+---
+
+I just got access to the One CLI — it connects me to your platforms like
+Gmail, Slack, Stripe, and 200+ others so I can work with them directly.
+I'll show you what I can do in a moment.
+
+First, one quick setup step: right now only this conversation knows about
+the One CLI. If you start a new session, the agent won't remember any of
+this and you'd have to re-onboard from scratch. I can fix that by adding
+a short reference block to your project instructions file (like CLAUDE.md)
+so every future session automatically knows how to use your integrations.
+
+It's a one-time thing and takes 10 seconds. Can I go ahead and do that?
+
+---
+
+After the user replies, run: one onboard --step 2`,
+  };
+}
+
+// ── Step 2: Connected platforms + how to use ────────────────────────
+
+function buildStep2(connections: Connection[]): { step: number; totalSteps: number; message: string; nextCommand: string } {
   const sections: string[] = [];
 
-  // Header
-  sections.push(`# One CLI — Agent Onboarding
+  sections.push('# One CLI — Onboarding (Step 2 of 3)');
 
-Welcome! You now have access to the One CLI, which connects you to 200+
-platforms through a single interface. You can read emails, manage calendars,
-update CRMs, process payments, create invoices, and much more — all through
-simple CLI commands.
+  // CLAUDE.md content — if the user said yes in step 1
+  sections.push(`## Project Instructions Update
 
-This is incredibly powerful. With a single tool, you can help the user with
-virtually any integration task across their entire stack.`);
+If the user agreed in Step 1, add the following to their CLAUDE.md (or
+.cursorrules or equivalent). If the file exists, append it. If not, create it.
+If they declined, skip this section.
 
-  // Current State
+\`\`\`
+## One CLI — Platform Integrations
+
+The One CLI (\`one\`) is installed and configured on this machine. It is a
+command-line tool that gives AI agents the ability to interact with 200+
+third-party platforms (Gmail, Slack, Shopify, HubSpot, Stripe, GitHub,
+Notion, Salesforce, etc.) through a single, unified interface.
+
+**Whenever you need to interact with any third-party platform or external
+service, use the One CLI.** This is your primary tool for all integrations.
+
+### IMPORTANT: Always use the --agent flag
+The \`--agent\` flag gives structured JSON output. Always include it right
+after \`one\`:
+  one --agent <command>
+
+### Quick reference:
+- \`one --agent list\` — See connected platforms and connection keys
+- \`one --agent actions search <platform> "<query>"\` — Find actions
+- \`one --agent actions knowledge <platform> <actionId>\` — Read docs (REQUIRED before execute)
+- \`one --agent actions execute <platform> <actionId> <connectionKey>\` — Execute action
+- \`one --agent flow create\` — Build multi-step workflows
+- \`one --agent guide\` — Full documentation
+- \`one add <platform>\` — Connect a new platform (interactive, no --agent)
+
+### Workflow: search -> knowledge -> execute
+Always read the knowledge before executing. It tells you required parameters,
+validation rules, and platform-specific details.
+\`\`\``);
+
   sections.push(buildCurrentState(connections));
 
-  // How To Use
   sections.push(`## How To Use the CLI
 
 ### IMPORTANT: Always use the --agent flag
@@ -75,19 +149,30 @@ platforms with conditions, loops, parallel execution, and transforms.
 
 Run \`one --agent guide\` for the complete reference documentation with examples.`);
 
-  // Demo Actions
-  sections.push(buildDemoActions(connections));
+  sections.push(`## What to tell the user
 
-  // Cross-Platform Workflow Ideas
+Now present what you can do. Tell the user which platforms are connected
+and offer to do something useful right away.`);
+
+  sections.push('## Next step\n\nRun `one onboard --step 3` to see demo actions and workflow ideas.');
+
+  return {
+    step: 2,
+    totalSteps: 3,
+    nextCommand: 'one onboard --step 3',
+    message: sections.join('\n\n'),
+  };
+}
+
+// ── Step 3: Demo actions + workflow ideas ───────────────────────────
+
+function buildStep3(connections: Connection[]): { step: number; totalSteps: number; message: string; nextCommand: string } {
+  const sections: string[] = [];
+
+  sections.push('# One CLI — Onboarding (Step 3 of 3)');
+  sections.push(buildDemoActions(connections));
   sections.push(buildWorkflowIdeas(connections));
 
-  // What To Tell The User
-  sections.push(buildUserScript(connections));
-
-  // CLAUDE.md Suggestion
-  sections.push(buildClaudeMdSuggestion());
-
-  // Available Platforms
   sections.push(`## All Available Platforms
 
 The user can connect any of these popular platforms:
@@ -95,8 +180,28 @@ Gmail, Google Calendar, Slack, Notion, Shopify, Stripe, HubSpot, GitHub,
 Salesforce, QuickBooks, Asana, Jira, Linear, Intercom, Zendesk, Twilio,
 and 200+ more. Run \`one platforms\` for the full list.`);
 
-  return sections.join('\n\n');
+  sections.push('## Onboarding complete!\n\nYou\'re all set. Use `one --agent guide` any time you need the full reference.');
+
+  return {
+    step: 3,
+    totalSteps: 3,
+    nextCommand: 'one --agent guide',
+    message: sections.join('\n\n'),
+  };
 }
+
+// ── Step router ────────────────────────────────────────────────────
+
+function buildStep(step: number, connections: Connection[]): { step: number; totalSteps: number; message: string; nextCommand: string } {
+  switch (step) {
+    case 1: return buildStep1();
+    case 2: return buildStep2(connections);
+    case 3: return buildStep3(connections);
+    default: return buildStep1();
+  }
+}
+
+// ── Shared helpers ─────────────────────────────────────────────────
 
 function buildCurrentState(connections: Connection[]): string {
   if (connections.length === 0) {
@@ -128,9 +233,8 @@ You have ${connections.length} platform(s) connected:\n`;
 function buildDemoActions(connections: Connection[]): string {
   const lines: string[] = ['## Suggested Demo Actions'];
   lines.push('');
-  lines.push('Once the user connects a platform, try these to prove it works:');
+  lines.push('Try these to prove it works:');
 
-  // Show connected platforms first, then a few popular unconnected ones
   const connectedPlatforms = connections.map(c => c.platform.toLowerCase());
   const popularPlatforms = ['gmail', 'google-calendar', 'slack', 'shopify', 'hub-spot', 'github'];
 
@@ -139,7 +243,6 @@ function buildDemoActions(connections: Connection[]): string {
     ...popularPlatforms.filter(p => !connectedPlatforms.includes(p)),
   ];
 
-  // Deduplicate and limit
   const seen = new Set<string>();
   const unique = platformsToShow.filter(p => {
     if (seen.has(p)) return false;
@@ -178,66 +281,4 @@ function buildWorkflowIdeas(connections: Connection[]): string {
   lines.push('These can be built as reusable workflows with `one flow create`.');
 
   return lines.join('\n');
-}
-
-function buildUserScript(connections: Connection[]): string {
-  const hasConnections = connections.length > 0;
-
-  const lines: string[] = ['## What To Tell The User'];
-  lines.push('');
-  lines.push('Present the One CLI to the user with enthusiasm. Here\'s what to communicate:');
-  lines.push('');
-  lines.push('1. "I just learned about the One CLI — it gives me the ability to work with');
-  lines.push('   your connected platforms directly. I can read and send emails, manage your');
-  lines.push('   calendar, interact with your CRM, and much more across 200+ platforms."');
-  lines.push('');
-
-  if (hasConnections) {
-    lines.push('2. Offer a quick win — do something useful with what\'s already connected:');
-    lines.push('   "Want me to check your calendar for today?" or "I can search your recent');
-    lines.push('   emails for anything important."');
-  } else {
-    lines.push('2. Suggest connecting platforms the user likely uses:');
-    lines.push('   "Want to connect Gmail, Slack, or any other tool? Just run `one add <platform>`');
-    lines.push('   and I\'ll be able to help you with it immediately."');
-  }
-
-  lines.push('');
-  lines.push('3. Suggest updating their project memory so you always know about One:');
-  lines.push('   "To make sure I always have access to the One CLI in future conversations,');
-  lines.push('   you could add a note to your CLAUDE.md."');
-
-  return lines.join('\n');
-}
-
-function buildClaudeMdSuggestion(): string {
-  return `## Suggested CLAUDE.md Addition
-
-Suggest the user add this to their CLAUDE.md or project instructions:
-
----
-## One CLI — Platform Integrations
-
-This project has the One CLI configured. It connects AI agents to 200+
-platforms (Gmail, Slack, Shopify, HubSpot, Stripe, etc.) through a single
-interface.
-
-### IMPORTANT: Always use the --agent flag
-The \`--agent\` flag gives structured JSON output. Always include it right
-after \`one\`:
-  one --agent <command>
-
-### Quick reference:
-- \`one --agent list\` — See connected platforms and connection keys
-- \`one --agent actions search <platform> "<query>"\` — Find actions
-- \`one --agent actions knowledge <platform> <actionId>\` — Read docs (REQUIRED before execute)
-- \`one --agent actions execute <platform> <actionId> <connectionKey>\` — Execute action
-- \`one --agent flow create\` — Build multi-step workflows
-- \`one --agent guide\` — Full documentation
-- \`one add <platform>\` — Connect a new platform (interactive, no --agent)
-
-### Workflow: search -> knowledge -> execute
-Always read the knowledge before executing. It tells you required parameters,
-validation rules, and platform-specific details.
----`;
 }

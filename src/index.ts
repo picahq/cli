@@ -257,8 +257,9 @@ program
 program
   .command('onboard')
   .description('Agent onboarding — teaches your agent what the One CLI can do')
-  .action(async () => {
-    await onboardCommand();
+  .option('--step <number>', 'Run a specific onboarding step (1, 2, or 3)')
+  .action(async (options: { step?: string }) => {
+    await onboardCommand(options.step ? parseInt(options.step, 10) : undefined);
   });
 
 program
