@@ -400,24 +400,28 @@ export function buildActionKnowledgeWithGuidance(
   platform: string,
   actionId: string
 ): string {
-  return `${knowledge}
+  return `CLI EXECUTION GUIDE (read this FIRST)
+========================================
+To execute this action, use the One CLI with SEPARATE flags for each parameter type.
+Do NOT pass path variables or query parameters in the -d body flag — this causes 403 errors.
 
-CLI PARAMETER MAPPING
-======================
-Use the One CLI to execute this action. Map parameters from the documentation above to CLI flags:
+PARAMETER → FLAG MAPPING:
+- Path variables (URL placeholders like {userId}, {id}) → --path-vars '{"userId": "me"}'
+- Query parameters (filtering, pagination, format) → --query-params '{"key": "value"}'
+  - For repeated params, use arrays: --query-params '{"metadataHeaders": ["From", "Subject"]}'
+- Request body (POST/PUT/PATCH payload) → -d '{"field": "value"}'
 
-- **Path variables** (URL placeholders like {userId}, {id}) → \`--path-vars '{"userId": "me", "id": "123"}'\`
-- **Query parameters** (filtering, pagination, format options) → \`--query-params '{"key": "value"}'\`
-  - For repeated params, use arrays: \`--query-params '{"metadataHeaders": ["From", "Subject"]}'\`
-- **Request body** (POST/PUT/PATCH data) → \`-d '{"field": "value"}'\`
-
-Do NOT pass path variables or query parameters in the -d body flag — they will be ignored.
-
-EXAMPLE COMMAND:
+EXAMPLE:
 one --agent actions execute ${platform} ${actionId} <connectionKey> \\
   --path-vars '{ ... }' \\
   --query-params '{ ... }' \\
   -d '{ ... }'
 
-Replace the JSON objects above with the actual parameters from the documentation. Omit any flag that has no parameters for this action (e.g., omit --path-vars if the URL has no placeholders, omit -d for GET requests).`;
+Omit any flag not needed (e.g., omit --path-vars if URL has no placeholders, omit -d for GET).
+
+Read the API documentation below to identify which parameters are path variables, query parameters, or body fields, then map them to the correct flags above.
+
+========================================
+
+${knowledge}`;
 }
