@@ -83,7 +83,7 @@ export async function updateCommand(): Promise<void> {
   console.log(`Updating @withone/cli: v${currentVersion} → v${latestVersion}...`);
 
   const code = await new Promise<number | null>((resolve) => {
-    const child = spawn('npm', ['install', '-g', '@withone/cli@latest'], {
+    const child = spawn('npm', ['install', '-g', '@withone/cli@latest', '--force'], {
       stdio: output.isAgentMode() ? 'pipe' : 'inherit',
       shell: true,
     });
