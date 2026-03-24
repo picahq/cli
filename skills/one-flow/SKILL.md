@@ -428,7 +428,7 @@ Runs a shell command. **Requires `--allow-bash` flag** for security.
   "type": "bash",
   "bash": {
     "command": "claude --print 'Analyze: {{$.steps.fetchData.response}}' --output-format json",
-    "timeout": 120000,
+    "timeout": 180000,
     "parseJson": true
   }
 }
@@ -763,7 +763,7 @@ This example demonstrates the **file-write → bash → code** pattern. Instead 
       "type": "bash",
       "bash": {
         "command": "cat /tmp/competitor-analysis-deals.json | claude --print 'You are a competitive intelligence analyst. Analyze these CRM deals and return a JSON object with: {\"totalDeals\": number, \"competitorMentions\": [{\"competitor\": \"name\", \"count\": number, \"winRate\": number, \"commonObjections\": [\"...\"]}], \"summary\": \"2-3 paragraph executive summary\", \"recommendations\": [\"actionable items\"]}. Return ONLY valid JSON.' --output-format json",
-        "timeout": 120000,
+        "timeout": 180000,
         "parseJson": true
       }
     },
@@ -828,7 +828,7 @@ Use this pattern whenever raw API data needs analysis, summarization, scoring, c
   "type": "bash",
   "bash": {
     "command": "cat /tmp/{{$.input.flowKey}}-data.json | claude --print 'You are a [domain] analyst. Analyze this data and return JSON with: {\"summary\": \"...\", \"insights\": [...], \"score\": 0-100, \"recommendations\": [...]}. Return ONLY valid JSON, no markdown.' --output-format json",
-    "timeout": 120000,
+    "timeout": 180000,
     "parseJson": true
   }
 }
@@ -859,6 +859,12 @@ Use this pattern whenever raw API data needs analysis, summarization, scoring, c
 - **Be specific about the analysis** — "Score each lead 0-100 based on company size, role seniority, and engagement recency" beats "analyze these leads"
 - **Include domain context** — "You are a B2B sales analyst" produces better results than a generic prompt
 - **Keep prompts focused** — one analysis task per bash step; chain multiple bash steps for multi-stage analysis
+
+### Concurrency and timeout guidance
+
+- **Always set `timeout` to at least `180000` (3 minutes)** for bash steps calling `claude --print`. The default 30s bash timeout will fail on nearly all AI analysis tasks. Claude typically needs 60-90s, and under resource contention this can double.
+- **Run Claude-heavy flows sequentially, not in parallel.** Each `claude --print` spawns a separate process. Running multiple flows with bash+Claude steps concurrently causes resource contention and timeout failures — even when individual prompts are small. If orchestrating multiple AI workflows, execute them one at a time.
+- **If a bash+Claude step times out**, the cause is almost always the timeout value or concurrent execution — not prompt size. Increase the timeout and ensure no other Claude-heavy flows are running before assuming the prompt needs to be reduced.
 
 ## 10. CLI Commands Reference
 
