@@ -44,12 +44,20 @@ export class FlowRunner {
     this.statePath = path.join(RUNS_DIR, `${flow.key}-${this.runId}.state.json`);
     this.logPath = path.join(LOGS_DIR, `${flow.key}-${this.runId}.log`);
 
+    // Resolve default values for optional inputs not provided
+    const resolvedInputs: Record<string, unknown> = { ...inputs };
+    for (const [name, decl] of Object.entries(flow.inputs)) {
+      if (resolvedInputs[name] === undefined && decl.default !== undefined) {
+        resolvedInputs[name] = decl.default;
+      }
+    }
+
     this.state = {
       runId: this.runId,
       flowKey: flow.key,
       status: 'running',
       startedAt: new Date().toISOString(),
-      inputs,
+      inputs: resolvedInputs,
       completedSteps: [],
       context: {
         input: inputs,
