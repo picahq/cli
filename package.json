@@ -1,6 +1,6 @@
 {
   "name": "@withone/cli",
-  "version": "1.13.4",
+  "version": "1.13.5",
   "description": "CLI for managing One",
   "type": "module",
   "files": [
