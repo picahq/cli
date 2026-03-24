@@ -159,6 +159,13 @@ function createSandboxedRequire() {
   };
 }
 
+/** Strip markdown code fences (e.g. ```json\n...\n```) that LLMs wrap around JSON output. */
+function stripCodeFences(text: string): string {
+  const trimmed = text.trim();
+  const match = trimmed.match(/^```(?:\w*)\s*\n([\s\S]*?)\n\s*```\s*$/);
+  return match ? match[1].trim() : trimmed;
+}
+
 // ── Step Executors ──
 
 async function executeActionStep(
@@ -378,7 +385,7 @@ function executeFileReadStep(step: FlowStep, context: FlowContext): StepResult {
   const filePath = resolveValue(config.path, context) as string;
   const resolvedPath = path.resolve(filePath);
   const content = fs.readFileSync(resolvedPath, 'utf-8');
-  const output = config.parseJson ? JSON.parse(content) : content;
+  const output = config.parseJson ? JSON.parse(stripCodeFences(content)) : content;
   return { status: 'success', output, response: output };
 }
 
@@ -586,7 +593,7 @@ async function executeBashStep(
     maxBuffer: 10 * 1024 * 1024,
   });
 
-  const output = config.parseJson ? JSON.parse(stdout) : stdout.trim();
+  const output = config.parseJson ? JSON.parse(stripCodeFences(stdout)) : stdout.trim();
   return {
     status: 'success',
     output,
