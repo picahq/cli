@@ -32,6 +32,22 @@ You have access to the One CLI's workflow engine, which lets you create and exec
 
 **You MUST follow this process to build a correct workflow:**
 
+### Step 0: Design the workflow
+
+Before touching any CLI commands, understand what you are building:
+
+1. **Clarify the end goal.** What output does the user actually need? A report? A notification? An enriched dataset? Do not assume — ask if unclear.
+2. **Map the full value chain.** List every step required to deliver that output at production quality. Fetching raw data is never the final step — ask yourself: "If I handed this raw API response to the user, would they be satisfied?" If no, you need analysis or enrichment steps.
+3. **Identify where AI analysis is needed.** Any time raw data needs summarization, scoring, classification, comparison, or natural-language generation, plan a `bash` step using `claude --print`. See the AI-Augmented Patterns section below.
+4. **Write the step sequence as a plain list** before constructing JSON. Example:
+   - Fetch competitor pricing from API
+   - Write data to temp file
+   - Claude analyzes competitive positioning (bash step)
+   - Parse Claude's JSON output (code step)
+   - Send formatted report via email
+
+**Common mistake:** Jumping straight to `one actions search` and building a workflow that only fetches and pipes raw data. The result is a shallow data dump, not a useful workflow. Always design first.
+
 ### Step 1: Discover connections
 
 ```bash
@@ -693,7 +709,158 @@ To modify an existing workflow:
 }
 ```
 
-## CLI Commands Reference
+### Example 4: AI-Augmented — Fetch CRM data, analyze with Claude, email report
+
+This example demonstrates the **file-write → bash → code** pattern. Instead of just piping raw data, it uses Claude to perform competitive analysis and delivers an actionable report.
+
+```json
+{
+  "key": "competitor-analysis",
+  "name": "AI Competitor Analysis",
+  "description": "Fetch deals from HubSpot, analyze competitive landscape with Claude, email the report",
+  "version": "1",
+  "inputs": {
+    "hubspotConnectionKey": {
+      "type": "string",
+      "required": true,
+      "connection": { "platform": "hub-spot" }
+    },
+    "gmailConnectionKey": {
+      "type": "string",
+      "required": true,
+      "connection": { "platform": "gmail" }
+    },
+    "reportEmail": {
+      "type": "string",
+      "required": true,
+      "description": "Email address to send the analysis report to"
+    }
+  },
+  "steps": [
+    {
+      "id": "fetchDeals",
+      "name": "Fetch recent deals from HubSpot",
+      "type": "action",
+      "action": {
+        "platform": "hub-spot",
+        "actionId": "HUBSPOT_LIST_DEALS_ACTION_ID",
+        "connectionKey": "$.input.hubspotConnectionKey",
+        "queryParams": { "limit": "100" }
+      }
+    },
+    {
+      "id": "writeDeals",
+      "name": "Write deals data for Claude analysis",
+      "type": "file-write",
+      "fileWrite": {
+        "path": "/tmp/competitor-analysis-deals.json",
+        "content": "$.steps.fetchDeals.response"
+      }
+    },
+    {
+      "id": "analyzeCompetitors",
+      "name": "Claude analyzes competitive landscape",
+      "type": "bash",
+      "bash": {
+        "command": "cat /tmp/competitor-analysis-deals.json | claude --print 'You are a competitive intelligence analyst. Analyze these CRM deals and return a JSON object with: {\"totalDeals\": number, \"competitorMentions\": [{\"competitor\": \"name\", \"count\": number, \"winRate\": number, \"commonObjections\": [\"...\"]}], \"summary\": \"2-3 paragraph executive summary\", \"recommendations\": [\"actionable items\"]}. Return ONLY valid JSON.' --output-format json",
+        "timeout": 120000,
+        "parseJson": true
+      }
+    },
+    {
+      "id": "formatReport",
+      "name": "Format analysis into email body",
+      "type": "code",
+      "code": {
+        "source": "const a = $.steps.analyzeCompetitors.output;\nconst competitors = a.competitorMentions.map(c => `- ${c.competitor}: ${c.count} mentions, ${c.winRate}% win rate. Objections: ${c.commonObjections.join(', ')}`).join('\\n');\nreturn {\n  subject: `Competitive Analysis — ${a.totalDeals} deals analyzed`,\n  body: `${a.summary}\\n\\nCompetitor Breakdown:\\n${competitors}\\n\\nRecommendations:\\n${a.recommendations.map((r, i) => `${i+1}. ${r}`).join('\\n')}`\n};"
+      }
+    },
+    {
+      "id": "sendReport",
+      "name": "Email the analysis report",
+      "type": "action",
+      "action": {
+        "platform": "gmail",
+        "actionId": "GMAIL_SEND_EMAIL_ACTION_ID",
+        "connectionKey": "$.input.gmailConnectionKey",
+        "data": {
+          "to": "{{$.input.reportEmail}}",
+          "subject": "{{$.steps.formatReport.output.subject}}",
+          "body": "{{$.steps.formatReport.output.body}}"
+        }
+      }
+    }
+  ]
+}
+```
+
+Execute with:
+```bash
+one --agent flow execute competitor-analysis --allow-bash -i reportEmail=team@company.com
+```
+
+## 9. AI-Augmented Workflow Patterns
+
+Use this pattern whenever raw API data needs analysis, summarization, scoring, classification, or natural-language generation. This is the difference between a shallow data pipe and a workflow that delivers real value.
+
+### The file-write → bash → code pattern
+
+**Step A: `file-write`** — Write raw data to a temp file. API responses are often too large to inline into a shell command.
+
+```json
+{
+  "id": "writeData",
+  "name": "Write raw data for analysis",
+  "type": "file-write",
+  "fileWrite": {
+    "path": "/tmp/{{$.input.flowKey}}-data.json",
+    "content": "$.steps.fetchData.response"
+  }
+}
+```
+
+**Step B: `bash`** — Call `claude --print` to analyze the data. This is where intelligence happens.
+
+```json
+{
+  "id": "analyze",
+  "name": "AI analysis",
+  "type": "bash",
+  "bash": {
+    "command": "cat /tmp/{{$.input.flowKey}}-data.json | claude --print 'You are a [domain] analyst. Analyze this data and return JSON with: {\"summary\": \"...\", \"insights\": [...], \"score\": 0-100, \"recommendations\": [...]}. Return ONLY valid JSON, no markdown.' --output-format json",
+    "timeout": 120000,
+    "parseJson": true
+  }
+}
+```
+
+**Step C: `code`** — Parse and structure the AI output for downstream steps.
+
+```json
+{
+  "id": "formatResult",
+  "name": "Structure analysis for output",
+  "type": "code",
+  "code": {
+    "source": "const analysis = $.steps.analyze.output;\nreturn {\n  report: `Summary: ${analysis.summary}\\n\\nInsights:\\n${analysis.insights.map((insight, i) => `${i+1}. ${insight}`).join('\\n')}`,\n  score: analysis.score\n};"
+  }
+}
+```
+
+### When to use this pattern
+
+- **Use it** when the user expects analysis, not raw data (e.g., "analyze my competitors", "qualify these leads", "summarize these reviews")
+- **Use it** when data from one API needs intelligent transformation before being sent to another (e.g., generating a personalized email based on CRM data)
+- **Don't use it** for simple field mapping or filtering — use `transform` or `code` steps instead
+
+### Prompt engineering tips for bash steps
+
+- **Request JSON output** so downstream code steps can parse it — include `Return ONLY valid JSON, no markdown.` in the prompt and use `--output-format json`
+- **Be specific about the analysis** — "Score each lead 0-100 based on company size, role seniority, and engagement recency" beats "analyze these leads"
+- **Include domain context** — "You are a B2B sales analyst" produces better results than a generic prompt
+- **Keep prompts focused** — one analysis task per bash step; chain multiple bash steps for multi-stage analysis
+
+## 10. CLI Commands Reference
 
 ```bash
 # Create a workflow
