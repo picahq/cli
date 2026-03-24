@@ -1,6 +1,6 @@
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
-import { getApiKey } from '../lib/config.js';
+import { getApiKey, getAccessControlFromAllSources } from '../lib/config.js';
 import { OneApi, TimeoutError } from '../lib/api.js';
 import { openConnectionPage, getConnectionUrl } from '../lib/browser.js';
 import { findPlatform, findSimilarPlatforms } from '../lib/platforms.js';
@@ -148,11 +148,18 @@ export async function connectionListCommand(options?: { search?: string; limit?:
   try {
     const allConnections = await api.listConnections();
 
+    // Filter by access control settings
+    const ac = getAccessControlFromAllSources();
+    const allowedKeys = ac.connectionKeys || ['*'];
+    const accessFiltered = allowedKeys.includes('*')
+      ? allConnections
+      : allConnections.filter(conn => allowedKeys.includes(conn.key));
+
     // Filter by search query if provided
     const searchQuery = options?.search?.toLowerCase();
     const filtered = searchQuery
-      ? allConnections.filter(conn => conn.platform.toLowerCase().includes(searchQuery))
-      : allConnections;
+      ? accessFiltered.filter(conn => conn.platform.toLowerCase().includes(searchQuery))
+      : accessFiltered;
 
     if (output.isAgentMode()) {
       const limit = options?.limit ? parseInt(options.limit, 10) : 20;
