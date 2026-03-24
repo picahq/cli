@@ -392,30 +392,24 @@ export function buildActionKnowledgeWithGuidance(
   platform: string,
   actionId: string
 ): string {
-  const baseUrl = 'https://api.withone.ai';
-
   return `${knowledge}
 
-API REQUEST STRUCTURE
+CLI PARAMETER MAPPING
 ======================
-URL: ${baseUrl}/v1/passthrough/{{PATH}}
+Use the One CLI to execute this action. Map parameters from the documentation above to CLI flags:
 
-IMPORTANT: When constructing the URL, only include the API endpoint path after the base URL.
-Do NOT include the full third-party API URL.
+- **Path variables** (URL placeholders like {userId}, {id}) → \`--path-vars '{"userId": "me", "id": "123"}'\`
+- **Query parameters** (filtering, pagination, format options) → \`--query-params '{"key": "value"}'\`
+  - For repeated params, use arrays: \`--query-params '{"metadataHeaders": ["From", "Subject"]}'\`
+- **Request body** (POST/PUT/PATCH data) → \`-d '{"field": "value"}'\`
 
-Examples:
-  Correct: ${baseUrl}/v1/passthrough/crm/v3/objects/contacts/search
-  Incorrect: ${baseUrl}/v1/passthrough/https://api.hubapi.com/crm/v3/objects/contacts/search
+Do NOT pass path variables or query parameters in the -d body flag — they will be ignored.
 
-METHOD: ${method}
+EXAMPLE COMMAND:
+one --agent actions execute ${platform} ${actionId} <connectionKey> \\
+  --path-vars '{ ... }' \\
+  --query-params '{ ... }' \\
+  -d '{ ... }'
 
-HEADERS:
-- x-one-secret: {{process.env.ONE_SECRET}}
-- x-one-connection-key: {{process.env.ONE_${platform.toUpperCase()}_CONNECTION_KEY}}
-- x-one-action-id: ${actionId}
-- ... (other headers)
-
-BODY: {{BODY}}
-
-QUERY PARAMS: {{QUERY_PARAMS}}`;
+Replace the JSON objects above with the actual parameters from the documentation. Omit any flag that has no parameters for this action (e.g., omit --path-vars if the URL has no placeholders, omit -d for GET requests).`;
 }

@@ -78,7 +78,7 @@ one --agent actions knowledge <platform> <actionId>
 
 Get comprehensive documentation for an action including parameters, requirements, validation rules, request/response structure, and examples. Returns JSON with the full API knowledge and HTTP method.
 
-Always call this before executing — it tells you exactly what parameters are required and how to structure the request.
+Always call this before executing — it tells you exactly what parameters are required, how to structure the request, and which CLI flags to use for path variables, query parameters, and body data. Do NOT pass path or query parameters in the `-d` body flag.
 
 Example:
 ```bash
