@@ -200,9 +200,17 @@ export class OneApi {
 
     let queryString = '';
     if (args.queryParams && Object.keys(args.queryParams).length > 0) {
-      const params = new URLSearchParams(
-        Object.entries(args.queryParams).map(([k, v]) => [k, String(v)])
-      );
+      const entries: [string, string][] = [];
+      for (const [k, v] of Object.entries(args.queryParams)) {
+        if (Array.isArray(v)) {
+          for (const item of v) {
+            entries.push([k, String(item)]);
+          }
+        } else {
+          entries.push([k, String(v)]);
+        }
+      }
+      const params = new URLSearchParams(entries);
       queryString = `?${params.toString()}`;
     }
 

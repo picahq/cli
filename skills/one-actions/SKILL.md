@@ -124,6 +124,11 @@ one --agent actions execute hub-spot <actionId> <connectionKey> \
 one --agent actions execute shopify <actionId> <connectionKey> \
   --path-vars '{"order_id": "12345"}' \
   --query-params '{"limit": "10"}'
+
+# With repeated query params (array values expand to repeated keys)
+one --agent actions execute gmail <actionId> <connectionKey> \
+  --path-vars '{"userId": "me", "id": "msg123"}' \
+  --query-params '{"format": "metadata", "metadataHeaders": ["From", "Subject", "Date"]}'
 ```
 
 Output format:
@@ -147,5 +152,6 @@ Parse the output as JSON. If the `error` key is present, the command failed — 
 - Always use the **exact action ID** from search results — don't guess or construct them
 - Always read the knowledge output carefully — it tells you which parameters are required vs optional, what format they need to be in, and any caveats specific to that API
 - JSON values passed to `-d`, `--path-vars`, `--query-params`, and `--headers` must be valid JSON strings (use single quotes around the JSON to avoid shell escaping issues)
+- **Array query params**: Use JSON arrays for repeated query parameters — `{"metadataHeaders": ["From", "Subject"]}` expands to `metadataHeaders=From&metadataHeaders=Subject`
 - If search returns no results, try broader queries (e.g., `"list"` instead of `"list active premium customers"`)
 - The execute command respects access control settings configured via `one config` — if execution is blocked, the user may need to adjust their permissions
