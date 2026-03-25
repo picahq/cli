@@ -18,9 +18,13 @@
 
 <p align="center">
   <a href="https://npmjs.com/package/@withone/cli"><img src="https://img.shields.io/npm/v/%40withone%2Fcli" alt="npm version"></a>
+  &nbsp;
+  <a href="https://withone.ai/knowledge"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fapi.withone.ai%2Fopen%2Fcount%2Fplatforms" alt="platforms"></a>
+  &nbsp;
+  <a href="https://withone.ai/knowledge"><img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fapi.withone.ai%2Fopen%2Fcount%2Ftools" alt="tools"></a>
 </p>
 
-One gives your AI agent authenticated access to 200+ platforms - Gmail, Slack, Shopify, HubSpot, Stripe, Notion, and everything else - through a single interface. No API keys to juggle, no OAuth flows to build, no request formats to memorize. Connect a platform once, and your agent can search for actions, read the docs, and execute API calls in seconds.
+One gives your AI agent authenticated access to 250+ platforms - Gmail, Slack, Shopify, HubSpot, Stripe, Notion, and everything else - through a single interface. No API keys to juggle, no OAuth flows to build, no request formats to memorize. Connect a platform once, and your agent can search for actions, read the docs, and execute API calls in seconds.
 
 ## Install
 
