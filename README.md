@@ -1,8 +1,26 @@
-# One CLI
+<img src="https://assets.withone.ai/banners/cli.png" alt="One CLI - Connect your agents to every API on the internet." style="border-radius: 5px;">
 
-One CLI to connect AI agents to every API on the internet.
+<h3 align="center">One CLI</h3>
 
-One gives your AI agent authenticated access to 200+ platforms — Gmail, Slack, Shopify, HubSpot, Stripe, Notion, and everything else — through a single interface. No API keys to juggle, no OAuth flows to build, no request formats to memorize. Connect a platform once, and your agent can search for actions, read the docs, and execute API calls in seconds.
+<p align="center">
+  <a href="https://withone.ai"><strong>Website</strong></a>
+  &nbsp;·&nbsp;
+  <a href="https://withone.ai/docs"><strong>Docs</strong></a>
+  &nbsp;·&nbsp;
+  <a href="https://app.withone.ai"><strong>Dashboard</strong></a>
+  &nbsp;·&nbsp;
+  <a href="https://withone.ai/changelog"><strong>Changelog</strong></a>
+  &nbsp;·&nbsp;
+  <a href="https://x.com/withoneai"><strong>X</strong></a>
+  &nbsp;·&nbsp;
+  <a href="https://linkedin.com/company/withoneai"><strong>LinkedIn</strong></a>
+</p>
+
+<p align="center">
+  <a href="https://npmjs.com/package/@withone/cli"><img src="https://img.shields.io/npm/v/%40withone%2Fcli" alt="npm version"></a>
+</p>
+
+One gives your AI agent authenticated access to 200+ platforms - Gmail, Slack, Shopify, HubSpot, Stripe, Notion, and everything else - through a single interface. No API keys to juggle, no OAuth flows to build, no request formats to memorize. Connect a platform once, and your agent can search for actions, read the docs, and execute API calls in seconds.
 
 ## Install
 
@@ -41,7 +59,7 @@ one actions execute gmail <actionId> <connectionKey> \
   -d '{"to": "jane@example.com", "subject": "Hello", "body": "Sent from my AI agent"}'
 ```
 
-That's it. Five commands to go from zero to sending an email through Gmail's API — fully authenticated, correctly formatted, without touching a single OAuth token.
+That's it. Five commands to go from zero to sending an email through Gmail's API - fully authenticated, correctly formatted, without touching a single OAuth token.
 
 ### Multi-step flows
 
@@ -72,7 +90,7 @@ one flow create welcome-customer --definition '{
 # Validate it
 one flow validate welcome-customer
 
-# Run it — connection keys auto-resolve if you have one connection per platform
+# Run it - connection keys auto-resolve if you have one connection per platform
 one flow execute welcome-customer -i email=jane@example.com
 ```
 
@@ -90,7 +108,7 @@ Your AI Agent
   Gmail / Slack / Shopify / HubSpot / Stripe / ...
 ```
 
-Every API call routes through One's passthrough proxy. One injects the right credentials, handles rate limiting, and normalizes responses. You never see or manage raw OAuth tokens — your connection key is all you need.
+Every API call routes through One's passthrough proxy. One injects the right credentials, handles rate limiting, and normalizes responses. You never see or manage raw OAuth tokens - your connection key is all you need.
 
 ## Commands
 
@@ -122,7 +140,7 @@ one add hub-spot
 one add gmail
 ```
 
-Opens your browser, you authorize, done. The CLI polls until the connection is live. Platform names are kebab-case — run `one platforms` to see them all.
+Opens your browser, you authorize, done. The CLI polls until the connection is live. Platform names are kebab-case - run `one platforms` to see them all.
 
 ### `one list`
 
@@ -164,7 +182,7 @@ Returns the top 5 matching actions with their action IDs, HTTP methods, and path
 
 ### `one actions knowledge <platform> <actionId>`
 
-Get the full documentation for an action — parameters, validation rules, request/response structure, examples, and the exact API request format.
+Get the full documentation for an action - parameters, validation rules, request/response structure, examples, and the exact API request format.
 
 ```bash
 one actions knowledge shopify 67890abcdef
@@ -250,16 +268,16 @@ Execute a workflow by key or file path. Pass inputs with repeatable `-i` flags.
 one flow execute welcome-customer \
   -i customerEmail=jane@example.com
 
-# Dry run — validate and show plan without executing
+# Dry run - validate and show plan without executing
 one flow execute welcome-customer --dry-run -i customerEmail=jane@example.com
 
-# Verbose — show each step as it runs
+# Verbose - show each step as it runs
 one flow execute welcome-customer -v -i customerEmail=jane@example.com
 ```
 
 Connection inputs with a `connection` field in the workflow definition are auto-resolved when the user has exactly one connection for that platform.
 
-Press Ctrl+C during execution to pause — the run can be resumed later with `one flow resume <runId>`.
+Press Ctrl+C during execution to pause - the run can be resumed later with `one flow resume <runId>`.
 
 | Option | What it does |
 |--------|-------------|
@@ -304,7 +322,7 @@ one flow runs welcome-customer   # runs for a specific workflow
 
 ### `one config`
 
-Configure access control for the MCP server. Optional — full access is the default.
+Configure access control for the MCP server. Optional - full access is the default.
 
 ```bash
 one config
@@ -345,7 +363,7 @@ Workflows support conditions, loops, while loops, parallel execution, transforms
 
 ## For AI agents
 
-If you're an AI agent with only the `one` binary (no MCP server or IDE skills), start with `one --agent guide` to get the full usage guide as structured JSON. This teaches you the complete workflow, JSON schemas, selector syntax, and more — everything you need to bootstrap yourself.
+If you're an AI agent with only the `one` binary (no MCP server or IDE skills), start with `one --agent guide` to get the full usage guide as structured JSON. This teaches you the complete workflow, JSON schemas, selector syntax, and more - everything you need to bootstrap yourself.
 
 If you're an AI agent using the One MCP server, the tools map directly:
 
@@ -356,7 +374,7 @@ If you're an AI agent using the One MCP server, the tools map directly:
 | `get_one_action_knowledge` | `one actions knowledge` |
 | `execute_one_action` | `one actions execute` |
 
-The workflow is the same: list → search → knowledge → execute. Never skip the knowledge step — it contains required parameter info and platform-specific details that are critical for building correct requests.
+The workflow is the same: list → search → knowledge → execute. Never skip the knowledge step - it contains required parameter info and platform-specific details that are critical for building correct requests.
 
 ## MCP server installation
 
@@ -365,9 +383,9 @@ The workflow is the same: list → search → knowledge → execute. Never skip 
 | Agent | Global | Project |
 |-------|--------|---------|
 | Claude Code | `~/.claude.json` | `.mcp.json` |
-| Claude Desktop | Platform-specific app support dir | — |
+| Claude Desktop | Platform-specific app support dir | - |
 | Cursor | `~/.cursor/mcp.json` | `.cursor/mcp.json` |
-| Windsurf | `~/.codeium/windsurf/mcp_config.json` | — |
+| Windsurf | `~/.codeium/windsurf/mcp_config.json` | - |
 | Codex | `~/.codex/config.toml` | `.codex/config.toml` |
 | Kiro | `~/.kiro/settings/mcp.json` | `.kiro/settings/mcp.json` |
 
