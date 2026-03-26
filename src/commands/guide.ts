@@ -2,7 +2,7 @@ import pc from 'picocolors';
 import * as output from '../lib/output.js';
 import { getGuideContent, getAvailableTopics } from '../lib/guide-content.js';
 
-const VALID_TOPICS = ['overview', 'actions', 'flows', 'all'] as const;
+const VALID_TOPICS = ['overview', 'actions', 'flows', 'relay', 'all'] as const;
 type GuideTopic = (typeof VALID_TOPICS)[number];
 
 export async function guideCommand(topic: string = 'all'): Promise<void> {

@@ -108,18 +108,30 @@ The \`--agent\` flag gives structured JSON output. Always include it right
 after \`one\`:
   one --agent <command>
 
+### IMPORTANT: Learn before you use
+Before using any feature (actions, flows, relay), you MUST read the
+corresponding skill documentation first. The skills are bundled with
+the CLI and teach you the correct workflow, required steps, and
+common mistakes to avoid. Never guess — read the skill, then act.
+
 ### Quick reference:
 - \`one --agent list\` — See connected platforms and connection keys
 - \`one --agent actions search <platform> "<query>"\` — Find actions
 - \`one --agent actions knowledge <platform> <actionId>\` — Read docs (REQUIRED before execute)
 - \`one --agent actions execute <platform> <actionId> <connectionKey>\` — Execute action
 - \`one --agent flow create\` — Build multi-step workflows
+- \`one --agent relay create\` — Set up webhook relay (receive events, forward to other platforms)
 - \`one --agent guide\` — Full documentation
 - \`one add <platform>\` — Connect a new platform (interactive, no --agent)
 
 ### Workflow: search -> knowledge -> execute
 Always read the knowledge before executing. It tells you required parameters,
 validation rules, and platform-specific details.
+
+### Webhook Relay
+Use \`one relay\` to receive webhooks from platforms (Stripe, GitHub, etc.)
+and forward event data to other platforms using passthrough actions with
+Handlebars templates. No middleware needed.
 \`\`\``);
 
   sections.push(buildCurrentState(connections));
@@ -146,6 +158,17 @@ The \`--agent\` flag goes right after \`one\`, before the subcommand.
 ### Multi-Step Workflows:
 Use \`one flow create\` to build JSON workflows that chain actions across
 platforms with conditions, loops, parallel execution, and transforms.
+
+### Webhook Relay:
+Use \`one relay create\` to receive webhooks from platforms (Stripe, GitHub,
+Airtable, Attio, Google Calendar) and forward event data to any connected
+platform using passthrough actions with Handlebars templates.
+
+### IMPORTANT: Learn before you use
+Before using flows or relay, you MUST read the corresponding skill
+documentation first. The skills teach you the correct workflow, template
+syntax, required steps, and common mistakes. Never guess — read the
+skill, then act.
 
 Run \`one --agent guide\` for the complete reference documentation with examples.`);
 

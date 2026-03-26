@@ -291,6 +291,59 @@ export class OneApi {
     };
   }
 
+  // Webhook Relay methods
+
+  async createRelayEndpoint(body: {
+    connectionKey: string;
+    createWebhook?: boolean;
+    description?: string;
+    eventFilters?: string[];
+    tags?: string[];
+    metadata?: Record<string, unknown>;
+  }): Promise<any> {
+    return this.requestFull({ path: '/webhooks/relay', method: 'POST', body });
+  }
+
+  async listRelayEndpoints(query?: Record<string, string>): Promise<any> {
+    return this.requestFull({ path: '/webhooks/relay', queryParams: query });
+  }
+
+  async getRelayEndpoint(id: string): Promise<any> {
+    return this.requestFull({ path: `/webhooks/relay/${id}` });
+  }
+
+  async updateRelayEndpoint(id: string, body: Record<string, unknown>): Promise<any> {
+    return this.requestFull({ path: `/webhooks/relay/${id}`, method: 'PATCH', body });
+  }
+
+  async deleteRelayEndpoint(id: string): Promise<any> {
+    return this.requestFull({ path: `/webhooks/relay/${id}`, method: 'DELETE' });
+  }
+
+  async activateRelayEndpoint(id: string, body: { actions: any[]; webhookSecret?: string }): Promise<any> {
+    return this.requestFull({ path: `/webhooks/relay/${id}/activate`, method: 'POST', body });
+  }
+
+  async listRelayEvents(query?: Record<string, string>): Promise<any> {
+    return this.requestFull({ path: '/webhooks/relay/events', queryParams: query });
+  }
+
+  async getRelayEvent(id: string): Promise<any> {
+    return this.requestFull({ path: `/webhooks/relay/events/${id}` });
+  }
+
+  async listRelayEndpointDeliveries(endpointId: string): Promise<any> {
+    return this.requestFull({ path: `/webhooks/relay/${endpointId}/deliveries` });
+  }
+
+  async listRelayEventDeliveries(eventId: string): Promise<any> {
+    return this.requestFull({ path: `/webhooks/relay/events/${eventId}/deliveries` });
+  }
+
+  async listRelayEventTypes(platform: string): Promise<any> {
+    return this.requestFull({ path: '/webhooks/relay/event-types', queryParams: { platform } });
+  }
+
   async waitForConnection(
     platform: string,
     timeoutMs = 5 * 60 * 1000,

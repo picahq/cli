@@ -16,6 +16,18 @@ import {
   flowRunsCommand,
   collect,
 } from './commands/flow.js';
+import {
+  relayCreateCommand,
+  relayListCommand,
+  relayGetCommand,
+  relayUpdateCommand,
+  relayDeleteCommand,
+  relayActivateCommand,
+  relayEventsCommand,
+  relayEventGetCommand,
+  relayDeliveriesCommand,
+  relayEventTypesCommand,
+} from './commands/relay.js';
 import { guideCommand } from './commands/guide.js';
 import { onboardCommand } from './commands/onboard.js';
 import { updateCommand, checkLatestVersionCached, getCurrentVersion } from './commands/update.js';
@@ -50,6 +62,14 @@ program
     one flow create [key]                 Create a workflow from JSON
     one flow execute <key>                Execute a workflow
     one flow validate <key>               Validate a flow
+
+  Webhook Relay:
+    one relay create                      Create a relay endpoint for a connection
+    one relay list                        List relay endpoints
+    one relay activate <id>               Activate with passthrough actions
+    one relay event-types <platform>      List supported event types
+    one relay events                      List received webhook events
+    one relay deliveries                  List delivery attempts
 
   Example — send an email through Gmail:
     $ one list
@@ -247,9 +267,110 @@ flow
     await flowRunsCommand(flowKey);
   });
 
+// ── Relay Commands ──
+
+const relay = program
+  .command('relay')
+  .alias('r')
+  .description('Receive webhooks from platforms and relay them via passthrough actions');
+
+relay
+  .command('create')
+  .description('Create a new relay endpoint for a connection')
+  .requiredOption('--connection-key <key>', 'Connection key for the source platform')
+  .option('--description <desc>', 'Description of the relay endpoint')
+  .option('--event-filters <json>', 'JSON array of event types to filter (e.g. \'["customer.created"]\')')
+  .option('--tags <json>', 'JSON array of tags')
+  .option('--create-webhook', 'Automatically register the webhook with the source platform')
+  .action(async (options: { connectionKey: string; description?: string; eventFilters?: string; tags?: string; createWebhook?: boolean }) => {
+    await relayCreateCommand(options);
+  });
+
+relay
+  .command('list')
+  .alias('ls')
+  .description('List all relay endpoints')
+  .option('--limit <n>', 'Max results per page')
+  .option('--page <n>', 'Page number')
+  .action(async (options: { limit?: string; page?: string }) => {
+    await relayListCommand(options);
+  });
+
+relay
+  .command('get <id>')
+  .description('Get details of a relay endpoint')
+  .action(async (id: string) => {
+    await relayGetCommand(id);
+  });
+
+relay
+  .command('update <id>')
+  .description('Update a relay endpoint')
+  .option('--description <desc>', 'Update description')
+  .option('--active', 'Set active')
+  .option('--no-active', 'Set inactive')
+  .option('--event-filters <json>', 'JSON array of event types')
+  .option('--tags <json>', 'JSON array of tags')
+  .option('--actions <json>', 'JSON array of actions (url, passthrough, or agent)')
+  .action(async (id: string, options: { description?: string; active?: boolean; eventFilters?: string; tags?: string; actions?: string }) => {
+    await relayUpdateCommand(id, options);
+  });
+
+relay
+  .command('delete <id>')
+  .description('Delete a relay endpoint')
+  .action(async (id: string) => {
+    await relayDeleteCommand(id);
+  });
+
+relay
+  .command('activate <id>')
+  .description('Activate a relay endpoint with forwarding actions')
+  .requiredOption('--actions <json>', 'JSON array of actions (url, passthrough, or agent)')
+  .option('--webhook-secret <secret>', 'Webhook signing secret for signature verification')
+  .action(async (id: string, options: { actions: string; webhookSecret?: string }) => {
+    await relayActivateCommand(id, options);
+  });
+
+relay
+  .command('events')
+  .description('List received webhook events')
+  .option('--limit <n>', 'Max results per page')
+  .option('--page <n>', 'Page number')
+  .option('--platform <platform>', 'Filter by platform')
+  .option('--event-type <type>', 'Filter by event type')
+  .option('--after <iso>', 'Events after this timestamp')
+  .option('--before <iso>', 'Events before this timestamp')
+  .action(async (options: { limit?: string; page?: string; platform?: string; eventType?: string; after?: string; before?: string }) => {
+    await relayEventsCommand(options);
+  });
+
+relay
+  .command('event <id>')
+  .description('Get details of a specific webhook event')
+  .action(async (id: string) => {
+    await relayEventGetCommand(id);
+  });
+
+relay
+  .command('deliveries')
+  .description('List delivery attempts for an endpoint or event')
+  .option('--endpoint-id <id>', 'Relay endpoint ID')
+  .option('--event-id <id>', 'Relay event ID')
+  .action(async (options: { endpointId?: string; eventId?: string }) => {
+    await relayDeliveriesCommand(options);
+  });
+
+relay
+  .command('event-types <platform>')
+  .description('List supported webhook event types for a platform')
+  .action(async (platform: string) => {
+    await relayEventTypesCommand(platform);
+  });
+
 program
   .command('guide [topic]')
-  .description('Full CLI usage guide for agents (topics: overview, actions, flows, all)')
+  .description('Full CLI usage guide for agents (topics: overview, actions, flows, relay, all)')
   .action(async (topic?: string) => {
     await guideCommand(topic);
   });

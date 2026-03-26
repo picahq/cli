@@ -173,6 +173,8 @@ export async function connectionListCommand(options?: { search?: string; limit?:
           platform: conn.platform,
           state: conn.state,
           key: conn.key,
+          ...(conn.name && { name: conn.name }),
+          ...(conn.tags?.length && { tags: conn.tags }),
         })),
         ...(limited.length < filtered.length && {
           hint: `Showing ${limited.length} of ${filtered.length} connections. Use --search <query> to filter by platform or --limit <n> to see more.`,

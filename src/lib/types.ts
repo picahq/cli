@@ -13,6 +13,8 @@ export interface Connection {
   platform: string;
   key: string;
   state: 'operational' | 'degraded' | 'failed' | 'unknown';
+  name?: string;
+  tags?: string[];
   createdAt?: string;
 }
 
@@ -104,5 +106,77 @@ export interface SanitizedRequestConfig {
 export interface ExecutePassthroughResponse {
   requestConfig: SanitizedRequestConfig;
   responseData: unknown;
+}
+
+// Webhook Relay types
+
+export type RelayAction =
+  | { type: 'url'; url: string; secret?: string; eventFilters?: string[]; hasSecret?: boolean }
+  | { type: 'passthrough'; actionId: string; connectionKey: string; body?: unknown; headers?: unknown; query?: unknown; eventFilters?: string[] }
+  | { type: 'agent'; agentId: string; eventFilters?: string[] };
+
+export interface RelayEndpoint {
+  id: string;
+  connectionId: string;
+  userId: string;
+  url: string;
+  active: boolean;
+  deleted: boolean;
+  description?: string;
+  eventFilters?: string[];
+  tags?: string[];
+  metadata?: Record<string, unknown>;
+  actions: RelayAction[];
+  webhookPayload?: unknown;
+  warning?: string;
+  version?: string;
+  changeLog?: Record<string, string>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RelayEvent {
+  id: string;
+  connectionId: string;
+  userId: string;
+  platform: string;
+  eventType: string;
+  payload: unknown;
+  headers?: unknown;
+  metadata?: unknown;
+  signatureValid?: boolean;
+  active: boolean;
+  deleted: boolean;
+  timestamp: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RelayDelivery {
+  id: string;
+  relayEventId: string;
+  endpointId: string;
+  actionIndex: number;
+  status: string;
+  statusCode?: number;
+  responseBody?: string;
+  error?: string;
+  attempt: number;
+  deliveredAt?: string;
+  createdAt: string;
+}
+
+export interface RelayEndpointsResponse {
+  rows: RelayEndpoint[];
+  total: number;
+  pages: number;
+  page: number;
+}
+
+export interface RelayEventsResponse {
+  rows: RelayEvent[];
+  total: number;
+  pages: number;
+  page: number;
 }
 
