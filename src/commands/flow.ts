@@ -89,11 +89,20 @@ export async function flowCreateCommand(
   let flow: Flow;
 
   if (options.definition) {
-    // Parse from JSON string or stdin
+    // Support @file.json syntax (like curl's -d @file)
+    let raw = options.definition;
+    if (raw.startsWith('@')) {
+      const filePath = raw.slice(1);
+      try {
+        raw = fs.readFileSync(filePath, 'utf-8');
+      } catch (err) {
+        output.error(`Cannot read file "${filePath}": ${(err as Error).message}`);
+      }
+    }
     try {
-      flow = JSON.parse(options.definition) as Flow;
+      flow = JSON.parse(raw) as Flow;
     } catch {
-      output.error('Invalid JSON in --definition');
+      output.error('Invalid JSON in --definition. If your JSON contains special characters (like :: in action IDs), try --definition @file.json instead.');
     }
   } else if (!process.stdin.isTTY) {
     // Read from stdin
@@ -458,4 +467,211 @@ function colorStatus(status: string): string {
     case 'failed': return pc.red(status);
     default: return status;
   }
+}
+
+// ── Scaffold ──
+
+const SCAFFOLD_TEMPLATES: Record<string, () => Record<string, unknown>> = {
+  basic: () => ({
+    key: 'my-workflow',
+    name: 'My Workflow',
+    description: 'A basic workflow with a single action step',
+    version: '1',
+    inputs: {
+      connectionKey: {
+        type: 'string',
+        required: true,
+        description: 'Connection key for the platform',
+        connection: { platform: 'PLATFORM_NAME' },
+      },
+    },
+    steps: [
+      {
+        id: 'step1',
+        name: 'Execute action',
+        type: 'action',
+        action: {
+          platform: 'PLATFORM_NAME',
+          actionId: 'ACTION_ID_FROM_SEARCH',
+          connectionKey: '$.input.connectionKey',
+          data: {},
+        },
+      },
+    ],
+  }),
+  conditional: () => ({
+    key: 'my-conditional-workflow',
+    name: 'Conditional Workflow',
+    description: 'Fetch data, then branch based on results',
+    version: '1',
+    inputs: {
+      connectionKey: {
+        type: 'string',
+        required: true,
+        description: 'Connection key',
+        connection: { platform: 'PLATFORM_NAME' },
+      },
+    },
+    steps: [
+      {
+        id: 'fetch',
+        name: 'Fetch data',
+        type: 'action',
+        action: {
+          platform: 'PLATFORM_NAME',
+          actionId: 'ACTION_ID_FROM_SEARCH',
+          connectionKey: '$.input.connectionKey',
+        },
+      },
+      {
+        id: 'decide',
+        name: 'Check results',
+        type: 'condition',
+        condition: {
+          expression: '$.steps.fetch.response.data && $.steps.fetch.response.data.length > 0',
+          then: [
+            {
+              id: 'handleFound',
+              name: 'Handle found',
+              type: 'transform',
+              transform: { expression: '$.steps.fetch.response.data[0]' },
+            },
+          ],
+          else: [
+            {
+              id: 'handleNotFound',
+              name: 'Handle not found',
+              type: 'transform',
+              transform: { expression: "({ error: 'No results found' })" },
+            },
+          ],
+        },
+      },
+    ],
+  }),
+  loop: () => ({
+    key: 'my-loop-workflow',
+    name: 'Loop Workflow',
+    description: 'Fetch a list, then process each item',
+    version: '1',
+    inputs: {
+      connectionKey: {
+        type: 'string',
+        required: true,
+        description: 'Connection key',
+        connection: { platform: 'PLATFORM_NAME' },
+      },
+    },
+    steps: [
+      {
+        id: 'fetchList',
+        name: 'Fetch items',
+        type: 'action',
+        action: {
+          platform: 'PLATFORM_NAME',
+          actionId: 'ACTION_ID_FROM_SEARCH',
+          connectionKey: '$.input.connectionKey',
+        },
+      },
+      {
+        id: 'processItems',
+        name: 'Process each item',
+        type: 'loop',
+        loop: {
+          over: '$.steps.fetchList.response.data',
+          as: 'item',
+          steps: [
+            {
+              id: 'processItem',
+              name: 'Process single item',
+              type: 'transform',
+              transform: { expression: '({ id: $.loop.item.id, processed: true })' },
+            },
+          ],
+        },
+      },
+      {
+        id: 'summary',
+        name: 'Generate summary',
+        type: 'transform',
+        transform: { expression: '({ total: $.steps.fetchList.response.data.length })' },
+      },
+    ],
+  }),
+  ai: () => ({
+    key: 'my-ai-workflow',
+    name: 'AI Analysis Workflow',
+    description: 'Fetch data, analyze with Claude, and send results',
+    version: '1',
+    inputs: {
+      connectionKey: {
+        type: 'string',
+        required: true,
+        description: 'Connection key for data source',
+        connection: { platform: 'PLATFORM_NAME' },
+      },
+    },
+    steps: [
+      {
+        id: 'fetchData',
+        name: 'Fetch raw data',
+        type: 'action',
+        action: {
+          platform: 'PLATFORM_NAME',
+          actionId: 'ACTION_ID_FROM_SEARCH',
+          connectionKey: '$.input.connectionKey',
+        },
+      },
+      {
+        id: 'writeData',
+        name: 'Write data for analysis',
+        type: 'file-write',
+        fileWrite: {
+          path: '/tmp/workflow-data.json',
+          content: '$.steps.fetchData.response',
+        },
+      },
+      {
+        id: 'analyze',
+        name: 'Analyze with Claude',
+        type: 'bash',
+        bash: {
+          command: "cat /tmp/workflow-data.json | claude --print 'Analyze this data and return JSON with: {\"summary\": \"...\", \"insights\": [...], \"recommendations\": [...]}. Return ONLY valid JSON.' --output-format json",
+          timeout: 180000,
+          parseJson: true,
+        },
+      },
+      {
+        id: 'formatResult',
+        name: 'Format analysis output',
+        type: 'code',
+        code: {
+          source: 'const a = $.steps.analyze.output;\nreturn {\n  summary: a.summary,\n  insights: a.insights,\n  recommendations: a.recommendations\n};',
+        },
+      },
+    ],
+  }),
+};
+
+export async function flowScaffoldCommand(template?: string): Promise<void> {
+  const templateName = template || 'basic';
+  const templateFn = SCAFFOLD_TEMPLATES[templateName];
+
+  if (!templateFn) {
+    const available = Object.keys(SCAFFOLD_TEMPLATES).join(', ');
+    if (output.isAgentMode()) {
+      output.json({ error: `Unknown template "${templateName}". Available: ${available}` });
+      process.exit(1);
+    }
+    output.error(`Unknown template "${templateName}". Available: ${available}`);
+  }
+
+  const scaffold = templateFn();
+
+  if (output.isAgentMode()) {
+    output.json(scaffold);
+    return;
+  }
+
+  console.log(JSON.stringify(scaffold, null, 2));
 }

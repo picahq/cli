@@ -14,6 +14,7 @@ import {
   flowValidateCommand,
   flowResumeCommand,
   flowRunsCommand,
+  flowScaffoldCommand,
   collect,
 } from './commands/flow.js';
 import {
@@ -265,6 +266,13 @@ flow
   .description('List workflow runs (optionally filtered by flow key)')
   .action(async (flowKey?: string) => {
     await flowRunsCommand(flowKey);
+  });
+
+flow
+  .command('scaffold [template]')
+  .description('Generate a workflow scaffold (templates: basic, conditional, loop, ai)')
+  .action(async (template?: string) => {
+    await flowScaffoldCommand(template);
   });
 
 // ── Relay Commands ──

@@ -19,6 +19,8 @@ description: |
 
 # One Workflows — Multi-Step API Workflows
 
+<!-- Canonical flow schema: src/lib/flow-schema.ts (drives both validation and guide generation) -->
+
 You have access to the One CLI's workflow engine, which lets you create and execute multi-step API workflows as JSON files. Workflows chain actions across platforms — e.g., look up a Stripe customer, then send them a welcome email via Gmail.
 
 ## 1. Overview

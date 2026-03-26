@@ -1,18 +1,10 @@
 import type { Flow, FlowStep, FlowStepType } from './flow-types.js';
+import { FLOW_SCHEMA, getStepTypeDescriptor, getNestedStepsKeys } from './flow-schema.js';
 
 export interface ValidationError {
   path: string;
   message: string;
 }
-
-const VALID_STEP_TYPES: FlowStepType[] = [
-  'action', 'transform', 'code', 'condition', 'loop', 'parallel', 'file-read', 'file-write',
-  'while', 'flow', 'paginate', 'bash',
-];
-
-const VALID_INPUT_TYPES = ['string', 'number', 'boolean', 'object', 'array'];
-
-const VALID_ERROR_STRATEGIES = ['fail', 'continue', 'retry', 'fallback'];
 
 export function validateFlowSchema(flow: unknown): ValidationError[] {
   const errors: ValidationError[] = [];
@@ -24,9 +16,11 @@ export function validateFlowSchema(flow: unknown): ValidationError[] {
 
   const f = flow as Record<string, unknown>;
 
+  // ── Top-level flow fields ──
+
   if (!f.key || typeof f.key !== 'string') {
     errors.push({ path: 'key', message: 'Flow must have a string "key"' });
-  } else if (!/^[a-z0-9][a-z0-9-]*[a-z0-9]$/.test(f.key) && f.key.length > 1) {
+  } else if (FLOW_SCHEMA.flowFields.key.pattern && !FLOW_SCHEMA.flowFields.key.pattern.test(f.key) && f.key.length > 1) {
     errors.push({ path: 'key', message: 'Flow key must be kebab-case (lowercase letters, numbers, hyphens)' });
   }
 
@@ -42,7 +36,8 @@ export function validateFlowSchema(flow: unknown): ValidationError[] {
     errors.push({ path: 'version', message: '"version" must be a string' });
   }
 
-  // Validate inputs
+  // ── Validate inputs ──
+
   if (!f.inputs || typeof f.inputs !== 'object' || Array.isArray(f.inputs)) {
     errors.push({ path: 'inputs', message: 'Flow must have an "inputs" object' });
   } else {
@@ -54,8 +49,8 @@ export function validateFlowSchema(flow: unknown): ValidationError[] {
         continue;
       }
       const d = decl as Record<string, unknown>;
-      if (!d.type || !VALID_INPUT_TYPES.includes(d.type as string)) {
-        errors.push({ path: `${prefix}.type`, message: `Input type must be one of: ${VALID_INPUT_TYPES.join(', ')}` });
+      if (!d.type || !FLOW_SCHEMA.validInputTypes.includes(d.type as string)) {
+        errors.push({ path: `${prefix}.type`, message: `Input type must be one of: ${FLOW_SCHEMA.validInputTypes.join(', ')}` });
       }
       if (d.connection !== undefined) {
         if (!d.connection || typeof d.connection !== 'object') {
@@ -70,7 +65,8 @@ export function validateFlowSchema(flow: unknown): ValidationError[] {
     }
   }
 
-  // Validate steps
+  // ── Validate steps ──
+
   if (!Array.isArray(f.steps)) {
     errors.push({ path: 'steps', message: 'Flow must have a "steps" array' });
   } else {
@@ -80,7 +76,11 @@ export function validateFlowSchema(flow: unknown): ValidationError[] {
   return errors;
 }
 
+// ── Step validation (descriptor-driven) ──
+
 function validateStepsArray(steps: unknown[], pathPrefix: string, errors: ValidationError[]): void {
+  const validTypes = FLOW_SCHEMA.stepTypes.map(st => st.type);
+
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
     const path = `${pathPrefix}[${i}]`;
@@ -92,199 +92,112 @@ function validateStepsArray(steps: unknown[], pathPrefix: string, errors: Valida
 
     const s = step as Record<string, unknown>;
 
+    // Common fields
     if (!s.id || typeof s.id !== 'string') {
       errors.push({ path: `${path}.id`, message: 'Step must have a string "id"' });
     }
     if (!s.name || typeof s.name !== 'string') {
       errors.push({ path: `${path}.name`, message: 'Step must have a string "name"' });
     }
-    if (!s.type || !VALID_STEP_TYPES.includes(s.type as FlowStepType)) {
-      errors.push({ path: `${path}.type`, message: `Step type must be one of: ${VALID_STEP_TYPES.join(', ')}` });
+    if (!s.type || !validTypes.includes(s.type as FlowStepType)) {
+      errors.push({ path: `${path}.type`, message: `Step type must be one of: ${validTypes.join(', ')}` });
+      continue; // can't validate type-specific config without a valid type
     }
 
+    // onError validation
     if (s.onError && typeof s.onError === 'object') {
       const oe = s.onError as Record<string, unknown>;
-      if (!VALID_ERROR_STRATEGIES.includes(oe.strategy as string)) {
-        errors.push({ path: `${path}.onError.strategy`, message: `Error strategy must be one of: ${VALID_ERROR_STRATEGIES.join(', ')}` });
+      if (!FLOW_SCHEMA.errorStrategies.includes(oe.strategy as string)) {
+        errors.push({ path: `${path}.onError.strategy`, message: `Error strategy must be one of: ${FLOW_SCHEMA.errorStrategies.join(', ')}` });
       }
     }
 
     // Type-specific validation
-    const type = s.type as string;
-    if (type === 'action') {
-      if (!s.action || typeof s.action !== 'object') {
-        errors.push({ path: `${path}.action`, message: 'Action step must have an "action" config object' });
-      } else {
-        const a = s.action as Record<string, unknown>;
-        if (!a.platform) errors.push({ path: `${path}.action.platform`, message: 'Action must have "platform"' });
-        if (!a.actionId) errors.push({ path: `${path}.action.actionId`, message: 'Action must have "actionId"' });
-        if (!a.connectionKey) errors.push({ path: `${path}.action.connectionKey`, message: 'Action must have "connectionKey"' });
+    const descriptor = getStepTypeDescriptor(s.type as string);
+    if (!descriptor) continue;
+
+    const configKey = descriptor.configKey;
+    const configObj = s[configKey];
+
+    if (!configObj || typeof configObj !== 'object') {
+      // Detect common mistake: flat config fields on the step
+      const hint = detectFlatConfigHint(s, descriptor);
+      errors.push({
+        path: `${path}.${configKey}`,
+        message: `${capitalize(descriptor.type)} step must have a "${configKey}" config object${hint}`,
+      });
+      continue;
+    }
+
+    const config = configObj as Record<string, unknown>;
+
+    // Validate each field in the descriptor
+    for (const [fieldName, fd] of Object.entries(descriptor.fields)) {
+      const fieldPath = `${path}.${configKey}.${fieldName}`;
+      const value = config[fieldName];
+
+      if (fd.required && (value === undefined || value === null || value === '')) {
+        errors.push({ path: fieldPath, message: `${capitalize(descriptor.type)} must have ${fd.type === 'string' ? 'a string' : fd.type === 'array' ? 'a' : 'a'} "${fieldName}"` });
+        continue;
       }
-    } else if (type === 'transform') {
-      if (!s.transform || typeof s.transform !== 'object') {
-        errors.push({ path: `${path}.transform`, message: 'Transform step must have a "transform" config object' });
-      } else {
-        const t = s.transform as Record<string, unknown>;
-        if (!t.expression || typeof t.expression !== 'string') {
-          errors.push({ path: `${path}.transform.expression`, message: 'Transform must have a string "expression"' });
-        }
+
+      if (value === undefined) continue;
+
+      // Type checks for specific field types
+      if (fd.type === 'string' && fd.required && typeof value !== 'string') {
+        errors.push({ path: fieldPath, message: `"${fieldName}" must be a string` });
       }
-    } else if (type === 'code') {
-      if (!s.code || typeof s.code !== 'object') {
-        errors.push({ path: `${path}.code`, message: 'Code step must have a "code" config object' });
-      } else {
-        const c = s.code as Record<string, unknown>;
-        if (!c.source || typeof c.source !== 'string') {
-          errors.push({ path: `${path}.code.source`, message: 'Code must have a string "source"' });
-        }
+      if (fd.type === 'number' && value !== undefined && (typeof value !== 'number' || value <= 0)) {
+        errors.push({ path: fieldPath, message: `${fieldName} must be a positive number` });
       }
-    } else if (type === 'condition') {
-      if (!s.condition || typeof s.condition !== 'object') {
-        errors.push({ path: `${path}.condition`, message: 'Condition step must have a "condition" config object' });
-      } else {
-        const c = s.condition as Record<string, unknown>;
-        if (!c.expression || typeof c.expression !== 'string') {
-          errors.push({ path: `${path}.condition.expression`, message: 'Condition must have a string "expression"' });
-        }
-        if (!Array.isArray(c.then)) {
-          errors.push({ path: `${path}.condition.then`, message: 'Condition must have a "then" steps array' });
+      if (fd.type === 'boolean' && value !== undefined && typeof value !== 'boolean') {
+        errors.push({ path: fieldPath, message: `${fieldName} must be a boolean` });
+      }
+
+      // Recurse into steps arrays
+      if (fd.stepsArray) {
+        if (!Array.isArray(value)) {
+          errors.push({ path: fieldPath, message: `"${fieldName}" must be a steps array` });
         } else {
-          validateStepsArray(c.then, `${path}.condition.then`, errors);
-        }
-        if (c.else !== undefined) {
-          if (!Array.isArray(c.else)) {
-            errors.push({ path: `${path}.condition.else`, message: 'Condition "else" must be a steps array' });
-          } else {
-            validateStepsArray(c.else, `${path}.condition.else`, errors);
-          }
+          validateStepsArray(value, fieldPath, errors);
         }
       }
-    } else if (type === 'loop') {
-      if (!s.loop || typeof s.loop !== 'object') {
-        errors.push({ path: `${path}.loop`, message: 'Loop step must have a "loop" config object' });
-      } else {
-        const l = s.loop as Record<string, unknown>;
-        if (!l.over || typeof l.over !== 'string') {
-          errors.push({ path: `${path}.loop.over`, message: 'Loop must have a string "over" selector' });
-        }
-        if (!l.as || typeof l.as !== 'string') {
-          errors.push({ path: `${path}.loop.as`, message: 'Loop must have a string "as" variable name' });
-        }
-        if (!Array.isArray(l.steps)) {
-          errors.push({ path: `${path}.loop.steps`, message: 'Loop must have a "steps" array' });
-        } else {
-          validateStepsArray(l.steps, `${path}.loop.steps`, errors);
-        }
-      }
-    } else if (type === 'parallel') {
-      if (!s.parallel || typeof s.parallel !== 'object') {
-        errors.push({ path: `${path}.parallel`, message: 'Parallel step must have a "parallel" config object' });
-      } else {
-        const par = s.parallel as Record<string, unknown>;
-        if (!Array.isArray(par.steps)) {
-          errors.push({ path: `${path}.parallel.steps`, message: 'Parallel must have a "steps" array' });
-        } else {
-          validateStepsArray(par.steps, `${path}.parallel.steps`, errors);
-        }
-      }
-    } else if (type === 'file-read') {
-      if (!s.fileRead || typeof s.fileRead !== 'object') {
-        errors.push({ path: `${path}.fileRead`, message: 'File-read step must have a "fileRead" config object' });
-      } else {
-        const fr = s.fileRead as Record<string, unknown>;
-        if (!fr.path || typeof fr.path !== 'string') {
-          errors.push({ path: `${path}.fileRead.path`, message: 'File-read must have a string "path"' });
-        }
-      }
-    } else if (type === 'file-write') {
-      if (!s.fileWrite || typeof s.fileWrite !== 'object') {
-        errors.push({ path: `${path}.fileWrite`, message: 'File-write step must have a "fileWrite" config object' });
-      } else {
-        const fw = s.fileWrite as Record<string, unknown>;
-        if (!fw.path || typeof fw.path !== 'string') {
-          errors.push({ path: `${path}.fileWrite.path`, message: 'File-write must have a string "path"' });
-        }
-        if (fw.content === undefined) {
-          errors.push({ path: `${path}.fileWrite.content`, message: 'File-write must have "content"' });
-        }
-      }
-    } else if (type === 'while') {
-      if (!s.while || typeof s.while !== 'object') {
-        errors.push({ path: `${path}.while`, message: 'While step must have a "while" config object' });
-      } else {
-        const w = s.while as Record<string, unknown>;
-        if (!w.condition || typeof w.condition !== 'string') {
-          errors.push({ path: `${path}.while.condition`, message: 'While must have a string "condition"' });
-        }
-        if (!Array.isArray(w.steps)) {
-          errors.push({ path: `${path}.while.steps`, message: 'While must have a "steps" array' });
-        } else {
-          validateStepsArray(w.steps, `${path}.while.steps`, errors);
-        }
-        if (w.maxIterations !== undefined && (typeof w.maxIterations !== 'number' || w.maxIterations <= 0)) {
-          errors.push({ path: `${path}.while.maxIterations`, message: 'maxIterations must be a positive number' });
-        }
-      }
-    } else if (type === 'flow') {
-      if (!s.flow || typeof s.flow !== 'object') {
-        errors.push({ path: `${path}.flow`, message: 'Flow step must have a "flow" config object' });
-      } else {
-        const f = s.flow as Record<string, unknown>;
-        if (!f.key || typeof f.key !== 'string') {
-          errors.push({ path: `${path}.flow.key`, message: 'Flow must have a string "key"' });
-        }
-        if (f.inputs !== undefined && (typeof f.inputs !== 'object' || Array.isArray(f.inputs))) {
-          errors.push({ path: `${path}.flow.inputs`, message: 'Flow inputs must be an object' });
-        }
-      }
-    } else if (type === 'paginate') {
-      if (!s.paginate || typeof s.paginate !== 'object') {
-        errors.push({ path: `${path}.paginate`, message: 'Paginate step must have a "paginate" config object' });
-      } else {
-        const p = s.paginate as Record<string, unknown>;
-        if (!p.action || typeof p.action !== 'object') {
-          errors.push({ path: `${path}.paginate.action`, message: 'Paginate must have an "action" config object' });
-        } else {
-          const a = p.action as Record<string, unknown>;
-          if (!a.platform) errors.push({ path: `${path}.paginate.action.platform`, message: 'Action must have "platform"' });
-          if (!a.actionId) errors.push({ path: `${path}.paginate.action.actionId`, message: 'Action must have "actionId"' });
-          if (!a.connectionKey) errors.push({ path: `${path}.paginate.action.connectionKey`, message: 'Action must have "connectionKey"' });
-        }
-        if (!p.pageTokenField || typeof p.pageTokenField !== 'string') {
-          errors.push({ path: `${path}.paginate.pageTokenField`, message: 'Paginate must have a string "pageTokenField"' });
-        }
-        if (!p.resultsField || typeof p.resultsField !== 'string') {
-          errors.push({ path: `${path}.paginate.resultsField`, message: 'Paginate must have a string "resultsField"' });
-        }
-        if (!p.inputTokenParam || typeof p.inputTokenParam !== 'string') {
-          errors.push({ path: `${path}.paginate.inputTokenParam`, message: 'Paginate must have a string "inputTokenParam"' });
-        }
-        if (p.maxPages !== undefined && (typeof p.maxPages !== 'number' || p.maxPages <= 0)) {
-          errors.push({ path: `${path}.paginate.maxPages`, message: 'maxPages must be a positive number' });
-        }
-      }
-    } else if (type === 'bash') {
-      if (!s.bash || typeof s.bash !== 'object') {
-        errors.push({ path: `${path}.bash`, message: 'Bash step must have a "bash" config object' });
-      } else {
-        const b = s.bash as Record<string, unknown>;
-        if (!b.command || typeof b.command !== 'string') {
-          errors.push({ path: `${path}.bash.command`, message: 'Bash must have a string "command"' });
-        }
-        if (b.timeout !== undefined && (typeof b.timeout !== 'number' || b.timeout <= 0)) {
-          errors.push({ path: `${path}.bash.timeout`, message: 'timeout must be a positive number' });
-        }
-        if (b.parseJson !== undefined && typeof b.parseJson !== 'boolean') {
-          errors.push({ path: `${path}.bash.parseJson`, message: 'parseJson must be a boolean' });
+
+      // Special: paginate.action is a nested action config
+      if (descriptor.type === 'paginate' && fieldName === 'action') {
+        if (typeof value === 'object' && value !== null) {
+          const a = value as Record<string, unknown>;
+          if (!a.platform) errors.push({ path: `${fieldPath}.platform`, message: 'Action must have "platform"' });
+          if (!a.actionId) errors.push({ path: `${fieldPath}.actionId`, message: 'Action must have "actionId"' });
+          if (!a.connectionKey) errors.push({ path: `${fieldPath}.connectionKey`, message: 'Action must have "connectionKey"' });
         }
       }
     }
   }
 }
 
+// ── Hint detection for common mistakes ──
+
+function detectFlatConfigHint(step: Record<string, unknown>, descriptor: ReturnType<typeof getStepTypeDescriptor> & object): string {
+  // Check if the user put config fields directly on the step
+  const requiredFields = Object.entries(descriptor.fields).filter(([, fd]) => fd.required).map(([name]) => name);
+  const flatFields = requiredFields.filter(f => f in step);
+  if (flatFields.length > 0) {
+    return `. Hint: "${flatFields.join('", "')}" must be nested inside "${descriptor.configKey}": { ... }, not placed directly on the step`;
+  }
+  return '';
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+// ── Step ID uniqueness ──
+
 export function validateStepIds(flow: Flow): ValidationError[] {
   const errors: ValidationError[] = [];
   const seen = new Set<string>();
+  const nestedKeys = getNestedStepsKeys();
 
   function collectIds(steps: FlowStep[], pathPrefix: string): void {
     for (let i = 0; i < steps.length; i++) {
@@ -297,13 +210,13 @@ export function validateStepIds(flow: Flow): ValidationError[] {
         seen.add(step.id);
       }
 
-      if (step.condition) {
-        if (step.condition.then) collectIds(step.condition.then, `${path}.condition.then`);
-        if (step.condition.else) collectIds(step.condition.else, `${path}.condition.else`);
+      // Recurse into all nested steps arrays using the descriptor
+      for (const { configKey, fieldName } of nestedKeys) {
+        const config = (step as Record<string, unknown>)[configKey] as Record<string, unknown> | undefined;
+        if (config && Array.isArray(config[fieldName])) {
+          collectIds(config[fieldName] as FlowStep[], `${path}.${configKey}.${fieldName}`);
+        }
       }
-      if (step.loop?.steps) collectIds(step.loop.steps, `${path}.loop.steps`);
-      if (step.parallel?.steps) collectIds(step.parallel.steps, `${path}.parallel.steps`);
-      if (step.while?.steps) collectIds(step.while.steps, `${path}.while.steps`);
     }
   }
 
@@ -311,28 +224,22 @@ export function validateStepIds(flow: Flow): ValidationError[] {
   return errors;
 }
 
+// ── Selector reference validation ──
+
 export function validateSelectorReferences(flow: Flow): ValidationError[] {
   const errors: ValidationError[] = [];
   const inputNames = new Set(Object.keys(flow.inputs));
+  const nestedKeys = getNestedStepsKeys();
 
   function getAllStepIds(steps: FlowStep[]): Set<string> {
     const ids = new Set<string>();
     for (const step of steps) {
       ids.add(step.id);
-      if (step.condition) {
-        for (const id of getAllStepIds(step.condition.then)) ids.add(id);
-        if (step.condition.else) {
-          for (const id of getAllStepIds(step.condition.else)) ids.add(id);
+      for (const { configKey, fieldName } of nestedKeys) {
+        const config = (step as Record<string, unknown>)[configKey] as Record<string, unknown> | undefined;
+        if (config && Array.isArray(config[fieldName])) {
+          for (const id of getAllStepIds(config[fieldName] as FlowStep[])) ids.add(id);
         }
-      }
-      if (step.loop?.steps) {
-        for (const id of getAllStepIds(step.loop.steps)) ids.add(id);
-      }
-      if (step.parallel?.steps) {
-        for (const id of getAllStepIds(step.parallel.steps)) ids.add(id);
-      }
-      if (step.while?.steps) {
-        for (const id of getAllStepIds(step.while.steps)) ids.add(id);
       }
     }
     return ids;
@@ -343,11 +250,9 @@ export function validateSelectorReferences(flow: Flow): ValidationError[] {
   function extractSelectors(value: unknown): string[] {
     const selectors: string[] = [];
     if (typeof value === 'string') {
-      // Match standalone selectors
       if (value.startsWith('$.')) {
         selectors.push(value);
       }
-      // Match interpolated selectors
       const interpolated = value.matchAll(/\{\{(\$\.[^}]+)\}\}/g);
       for (const match of interpolated) {
         selectors.push(match[1]);
@@ -369,7 +274,7 @@ export function validateSelectorReferences(flow: Flow): ValidationError[] {
       const parts = selector.split('.');
       if (parts.length < 3) continue;
 
-      const root = parts[1]; // input, steps, env, loop
+      const root = parts[1];
       if (root === 'input') {
         const inputName = parts[2];
         if (!inputNames.has(inputName)) {
@@ -381,7 +286,6 @@ export function validateSelectorReferences(flow: Flow): ValidationError[] {
           errors.push({ path, message: `Selector "${selector}" references undefined step "${stepId}"` });
         }
       }
-      // env and loop are runtime — skip
     }
   }
 
@@ -389,50 +293,33 @@ export function validateSelectorReferences(flow: Flow): ValidationError[] {
     if (step.if) checkSelectors(extractSelectors(step.if), `${pathPrefix}.if`);
     if (step.unless) checkSelectors(extractSelectors(step.unless), `${pathPrefix}.unless`);
 
-    if (step.action) {
-      checkSelectors(extractSelectors(step.action), `${pathPrefix}.action`);
-    }
-    if (step.transform) {
-      // Expressions use $ directly, not $.xxx selectors — skip deep checking
-    }
-    if (step.condition) {
-      checkStep({ id: '__cond_expr', name: '', type: 'transform', transform: { expression: '' } }, pathPrefix);
-      step.condition.then.forEach((s, i) => checkStep(s, `${pathPrefix}.condition.then[${i}]`));
-      step.condition.else?.forEach((s, i) => checkStep(s, `${pathPrefix}.condition.else[${i}]`));
-    }
-    if (step.loop) {
-      checkSelectors(extractSelectors(step.loop.over), `${pathPrefix}.loop.over`);
-      step.loop.steps.forEach((s, i) => checkStep(s, `${pathPrefix}.loop.steps[${i}]`));
-    }
-    if (step.parallel) {
-      step.parallel.steps.forEach((s, i) => checkStep(s, `${pathPrefix}.parallel.steps[${i}]`));
-    }
-    if (step.fileRead) {
-      checkSelectors(extractSelectors(step.fileRead.path), `${pathPrefix}.fileRead.path`);
-    }
-    if (step.fileWrite) {
-      checkSelectors(extractSelectors(step.fileWrite.path), `${pathPrefix}.fileWrite.path`);
-      checkSelectors(extractSelectors(step.fileWrite.content), `${pathPrefix}.fileWrite.content`);
-    }
-    if (step.while) {
-      step.while.steps.forEach((s, i) => checkStep(s, `${pathPrefix}.while.steps[${i}]`));
-    }
-    if (step.flow) {
-      checkSelectors(extractSelectors(step.flow.key), `${pathPrefix}.flow.key`);
-      if (step.flow.inputs) {
-        checkSelectors(extractSelectors(step.flow.inputs), `${pathPrefix}.flow.inputs`);
+    // Check selectors in all config objects
+    const descriptor = getStepTypeDescriptor(step.type);
+    if (descriptor) {
+      const config = (step as Record<string, unknown>)[descriptor.configKey];
+      if (config && typeof config === 'object') {
+        // Skip deep checking for expressions (transform, code) — they use $ directly
+        if (step.type !== 'transform' && step.type !== 'code') {
+          for (const [fieldName, fd] of Object.entries(descriptor.fields)) {
+            if (fd.stepsArray) continue; // steps are checked recursively below
+            const value = (config as Record<string, unknown>)[fieldName];
+            if (value !== undefined) {
+              checkSelectors(extractSelectors(value), `${pathPrefix}.${descriptor.configKey}.${fieldName}`);
+            }
+          }
+        }
       }
-    }
-    if (step.paginate) {
-      checkSelectors(extractSelectors(step.paginate.action), `${pathPrefix}.paginate.action`);
-    }
-    if (step.bash) {
-      checkSelectors(extractSelectors(step.bash.command), `${pathPrefix}.bash.command`);
-      if (step.bash.cwd) {
-        checkSelectors(extractSelectors(step.bash.cwd), `${pathPrefix}.bash.cwd`);
-      }
-      if (step.bash.env) {
-        checkSelectors(extractSelectors(step.bash.env), `${pathPrefix}.bash.env`);
+
+      // Recurse into nested steps
+      for (const { configKey, fieldName } of nestedKeys) {
+        if (configKey === descriptor.configKey) {
+          const c = (step as Record<string, unknown>)[configKey] as Record<string, unknown> | undefined;
+          if (c && Array.isArray(c[fieldName])) {
+            (c[fieldName] as FlowStep[]).forEach((s, i) =>
+              checkStep(s, `${pathPrefix}.${configKey}.${fieldName}[${i}]`),
+            );
+          }
+        }
       }
     }
   }
@@ -440,6 +327,8 @@ export function validateSelectorReferences(flow: Flow): ValidationError[] {
   flow.steps.forEach((step, i) => checkStep(step, `steps[${i}]`));
   return errors;
 }
+
+// ── Main entry point ──
 
 export function validateFlow(flow: unknown): ValidationError[] {
   const schemaErrors = validateFlowSchema(flow);

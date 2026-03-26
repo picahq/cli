@@ -1,4 +1,5 @@
 // Guide content — concise overview that routes agents to skill docs for details.
+import { generateFlowGuide } from './flow-schema.js';
 
 export const GUIDE_OVERVIEW = `# One CLI — Agent Guide
 
@@ -18,9 +19,9 @@ one --agent <command>
 
 All commands return JSON. If an \`error\` key is present, the command failed.
 
-## IMPORTANT: Learn before you use
+## IMPORTANT: Read the guide before you act
 
-Before using any feature, you MUST read the corresponding skill documentation first. The skills are bundled with the CLI and teach you the correct workflow, required steps, template syntax, and common mistakes. Never guess — read the skill, then act.
+Before using any feature, read its guide section first: \`one guide actions\`, \`one guide flows\`, or \`one guide relay\`. The guide teaches you the correct workflow, required fields, and common mistakes. Never guess — read the guide, then act.
 
 ## Features
 
@@ -160,91 +161,9 @@ All errors return JSON: \`{"error": "message"}\`. Check the \`error\` key.
 - Access control settings from \`one config\` may restrict execution
 `;
 
-export const GUIDE_FLOWS = `# One Flows — Reference
-
-## Overview
-
-Workflows are JSON files at \`.one/flows/<key>.flow.json\` that chain actions across platforms.
-
-## Commands
-
-\`\`\`bash
-one --agent flow create <key> --definition '<json>'   # Create
-one --agent flow list                                  # List
-one --agent flow validate <key>                        # Validate
-one --agent flow execute <key> -i name=value           # Execute
-one --agent flow execute <key> --dry-run --mock        # Test with mock data
-one --agent flow execute <key> --allow-bash            # Enable bash steps
-one --agent flow runs [flowKey]                        # List past runs
-one --agent flow resume <runId>                        # Resume failed run
-\`\`\`
-
-## Building a Workflow
-
-1. **Design first** — clarify the end goal, map the full value chain, identify where AI analysis is needed
-2. **Discover connections** — \`one --agent connection list\`
-3. **Get knowledge** for every action — \`one --agent actions knowledge <platform> <actionId>\`
-4. **Construct JSON** — declare inputs, wire steps with selectors
-5. **Validate** — \`one --agent flow validate <key>\`
-6. **Execute** — \`one --agent flow execute <key> -i param=value\`
-
-## Step Types
-
-| Type | Purpose |
-|------|---------|
-| \`action\` | Execute a platform API action |
-| \`transform\` | Single JS expression (implicit return) |
-| \`code\` | Multi-line async JS (explicit return) |
-| \`condition\` | If/then/else branching |
-| \`loop\` | Iterate over array with optional concurrency |
-| \`parallel\` | Run steps concurrently |
-| \`file-read\` | Read file (optional JSON parse) |
-| \`file-write\` | Write/append to file |
-| \`while\` | Do-while loop with condition |
-| \`flow\` | Execute a sub-flow |
-| \`paginate\` | Auto-paginate API results |
-| \`bash\` | Shell command (requires \`--allow-bash\`) |
-
-## Selectors
-
-| Pattern | Resolves To |
-|---------|-------------|
-| \`$.input.paramName\` | Input value |
-| \`$.steps.stepId.response\` | Full API response |
-| \`$.steps.stepId.response.data[0].email\` | Nested field |
-| \`$.steps.stepId.response.data[*].id\` | Wildcard array map |
-| \`$.env.MY_VAR\` | Environment variable |
-| \`$.loop.item\` / \`$.loop.i\` | Loop iteration |
-| \`"Hello {{$.steps.getUser.response.name}}"\` | String interpolation |
-
-## Error Handling
-
-\`\`\`json
-{"onError": {"strategy": "retry", "retries": 3, "retryDelayMs": 1000}}
-\`\`\`
-
-Strategies: \`fail\` (default), \`continue\`, \`retry\`, \`fallback\`
-
-Conditional execution: \`"if": "$.steps.prev.response.data.length > 0"\`
-
-## AI-Augmented Pattern
-
-For workflows that need analysis/summarization, use the file-write → bash → code pattern:
-
-1. \`file-write\` — save data to temp file
-2. \`bash\` — \`claude --print\` analyzes it (\`parseJson: true\`, \`timeout: 180000\`)
-3. \`code\` — parse and structure the output
-
-Set timeout to at least 180000ms (3 min). Run Claude-heavy flows sequentially, not in parallel.
-
-## Notes
-
-- Connection keys are **inputs**, not hardcoded
-- Action IDs in examples are placeholders — always use \`actions search\`
-- Code steps allow \`crypto\`, \`buffer\`, \`url\`, \`path\` — \`fs\`, \`http\`, \`child_process\` are blocked
-- Bash steps require \`--allow-bash\` flag
-- State is persisted after every step — resume picks up where it left off
-`;
+// Flow guide is generated from the schema descriptor in flow-schema.ts.
+// This ensures documentation always matches the actual type definitions.
+export const GUIDE_FLOWS = generateFlowGuide();
 
 export const GUIDE_RELAY = `# One Relay — Reference
 
