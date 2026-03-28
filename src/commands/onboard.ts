@@ -51,7 +51,7 @@ function buildStep1(): { step: number; totalSteps: number; message: string; next
     nextCommand: 'one onboard --step 2',
     message: `# One CLI — Agent Onboarding
 
-You now have access to the One CLI. It connects you to 200+ platforms
+You now have access to the One CLI. It connects you to 250+ platforms
 (Gmail, Slack, Stripe, Notion, etc.) — you'll learn the details shortly.
 
 IMPORTANT: Your only task right now is to send the message below to the
@@ -61,7 +61,7 @@ Do not offer demos yet. Just send this message and wait for their reply:
 ---
 
 I just got access to the One CLI — it connects me to your platforms like
-Gmail, Slack, Stripe, and 200+ others so I can work with them directly.
+Gmail, Slack, Stripe, and 250+ others so I can work with them directly.
 I'll show you what I can do in a moment.
 
 First, one quick setup step: right now only this conversation knows about
@@ -96,7 +96,7 @@ If they declined, skip this section.
 ## One CLI — Platform Integrations
 
 The One CLI (\`one\`) is installed and configured on this machine. It is a
-command-line tool that gives AI agents the ability to interact with 200+
+command-line tool that gives AI agents the ability to interact with 250+
 third-party platforms (Gmail, Slack, Shopify, HubSpot, Stripe, GitHub,
 Notion, Salesforce, etc.) through a single, unified interface.
 
@@ -201,7 +201,7 @@ function buildStep3(connections: Connection[]): { step: number; totalSteps: numb
 The user can connect any of these popular platforms:
 Gmail, Google Calendar, Slack, Notion, Shopify, Stripe, HubSpot, GitHub,
 Salesforce, QuickBooks, Asana, Jira, Linear, Intercom, Zendesk, Twilio,
-and 200+ more. Run \`one platforms\` for the full list.`);
+and 250+ more. Run \`one platforms\` for the full list.`);
 
   sections.push('## Onboarding complete!\n\nYou\'re all set. Use `one --agent guide` any time you need the full reference.');
 
@@ -236,7 +236,7 @@ platform before you can start using actions. Suggest they run:
   one add slack
   one add <any-platform>
 
-Run \`one platforms\` to see all 200+ available platforms.`;
+Run \`one platforms\` to see all 250+ available platforms.`;
   }
 
   const header = `## Current State

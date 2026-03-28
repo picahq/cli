@@ -62,7 +62,9 @@ export class OneApi {
       throw new ApiError(response.status, text || `HTTP ${response.status}`);
     }
 
-    return response.json() as Promise<T>;
+    const text = await response.text();
+    if (!text) return {} as T;
+    return JSON.parse(text) as T;
   }
 
   async validateApiKey(): Promise<boolean> {
@@ -343,6 +345,7 @@ export class OneApi {
   async listRelayEventTypes(platform: string): Promise<any> {
     return this.requestFull({ path: '/webhooks/relay/event-types', queryParams: { platform } });
   }
+
 
   async waitForConnection(
     platform: string,

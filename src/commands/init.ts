@@ -1,7 +1,8 @@
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
+import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { writeConfig, readConfig, getConfigPath, getAccessControl } from '../lib/config.js';
 import {
@@ -18,7 +19,6 @@ import { OneApi, TimeoutError } from '../lib/api.js';
 import { getApiKeyUrl, openApiKeyPage, openConnectionPage, getConnectionUrl } from '../lib/browser.js';
 import { configCommand } from './config.js';
 import open from 'open';
-import { printTable } from '../lib/table.js';
 import * as output from '../lib/output.js';
 import type { Agent } from '../lib/types.js';
 
@@ -29,14 +29,12 @@ export async function initCommand(options: { yes?: boolean; global?: boolean; pr
 
   const existingConfig = readConfig();
 
+  printBanner();
+
   if (existingConfig) {
-    p.intro(pc.bgCyan(pc.black(' One ')));
     await handleExistingConfig(existingConfig.apiKey, options);
     return;
   }
-
-  // First-run: show welcome banner
-  printBanner();
   await freshSetup(options);
 }
 
@@ -50,54 +48,49 @@ async function handleExistingConfig(
 
   // Display current setup
   const masked = maskApiKey(apiKey);
+  const skillInstalled = isSkillInstalled();
+
   console.log();
   console.log(`  ${pc.bold('Current Setup')}`);
   console.log(`  ${pc.dim('─'.repeat(42))}`);
   console.log(`  ${pc.dim('API Key:')}  ${masked}`);
+  console.log(`  ${pc.dim('Skill:')}    ${skillInstalled ? pc.green('installed') : pc.yellow('not installed')}`);
   console.log(`  ${pc.dim('Config:')}   ${getConfigPath()}`);
-  console.log();
 
-  // Agent status table
-  printTable(
-    [
-      { key: 'agent', label: 'Agent' },
-      { key: 'global', label: 'Global' },
-      { key: 'project', label: 'Project' },
-    ],
-    statuses.map(s => ({
-      agent: s.agent.name,
-      global: !s.detected
-        ? pc.dim('-')
-        : s.globalMcp
-          ? pc.green('\u25cf yes')
-          : pc.yellow('\u25cb no'),
-      project: s.projectMcp === null
-        ? pc.dim('-')
-        : s.projectMcp
-          ? pc.green('\u25cf yes')
-          : pc.yellow('\u25cb no'),
-    })),
-  );
-
-  const notDetected = statuses.filter(s => !s.detected);
-  if (notDetected.length > 0) {
-    console.log(`  ${pc.dim('- = not detected on this machine')}`);
-  }
   // Show access control summary if non-default settings are configured
   const ac = getAccessControl();
   if (Object.keys(ac).length > 0) {
+    console.log();
     console.log(`  ${pc.bold('Access Control')}`);
     console.log(`  ${pc.dim('─'.repeat(42))}`);
     if (ac.permissions) console.log(`  ${pc.dim('Permissions:')}   ${ac.permissions}`);
     if (ac.connectionKeys) console.log(`  ${pc.dim('Connections:')}   ${ac.connectionKeys.join(', ')}`);
     if (ac.actionIds) console.log(`  ${pc.dim('Action IDs:')}    ${ac.actionIds.join(', ')}`);
     if (ac.knowledgeAgent) console.log(`  ${pc.dim('Knowledge only:')} yes`);
-    console.log();
   }
+  console.log();
 
-  // Build action menu: only show relevant options
-  type Action = 'update-key' | 'install-skills' | 'install-more' | 'install-project' | 'access-control' | 'start-fresh';
+  // Build action menu
+  type Action = 'install-skills' | 'show-prompt' | 'add-connection' | 'update-key' | 'access-control' | 'install-mcp' | 'start-fresh';
   const actionOptions: { value: Action; label: string; hint?: string }[] = [];
+
+  actionOptions.push({
+    value: 'install-skills',
+    label: skillInstalled ? 'Update skill' : 'Install skill',
+    hint: skillInstalled ? 'reinstall latest version' : 'recommended',
+  });
+
+  actionOptions.push({
+    value: 'show-prompt',
+    label: 'Show agent onboarding prompt',
+    hint: 'copy-paste to your AI agent',
+  });
+
+  actionOptions.push({
+    value: 'add-connection',
+    label: 'Connect a platform',
+    hint: 'add Gmail, Slack, Shopify, etc.',
+  });
 
   actionOptions.push({
     value: 'update-key',
@@ -105,32 +98,15 @@ async function handleExistingConfig(
   });
 
   actionOptions.push({
-    value: 'install-skills',
-    label: 'Install/update skills',
-  });
-
-  const agentsMissingGlobal = statuses.filter(s => s.detected && !s.globalMcp);
-  if (agentsMissingGlobal.length > 0) {
-    actionOptions.push({
-      value: 'install-more',
-      label: 'Install MCP to more agents',
-      hint: `${agentsMissingGlobal.map(s => s.agent.name).join(', ')} (not recommended)`,
-    });
-  }
-
-  const agentsMissingProject = statuses.filter(s => s.projectMcp === false);
-  if (agentsMissingProject.length > 0) {
-    actionOptions.push({
-      value: 'install-project',
-      label: 'Install MCP for this project',
-      hint: `${agentsMissingProject.map(s => s.agent.name).join(', ')} (not recommended)`,
-    });
-  }
-
-  actionOptions.push({
     value: 'access-control',
     label: 'Configure access control',
     hint: 'permissions, connections, actions',
+  });
+
+  actionOptions.push({
+    value: 'install-mcp',
+    label: 'Install MCP server',
+    hint: 'not recommended — use skills instead',
   });
 
   actionOptions.push({
@@ -149,29 +125,33 @@ async function handleExistingConfig(
   }
 
   switch (action) {
-    case 'update-key':
-      await handleUpdateKey(statuses);
-      break;
     case 'install-skills': {
-      const success = await runSkillsInstall();
+      const success = await promptSkillInstall();
       if (success) {
-        p.outro('Skills installed successfully.');
+        printOnboardingPrompt();
+        p.outro('Skill installed. Paste the prompt above to your AI agent.');
       } else {
-        const __dirname = path.dirname(fileURLToPath(import.meta.url));
-        const skillsDir = path.resolve(__dirname, '..', 'skills');
-        p.log.warn(`Skills installation failed. You can try manually: ${pc.cyan(`npx skills add ${skillsDir}`)}`);
         p.outro('Done.');
       }
       break;
     }
-    case 'install-more':
-      await handleInstallMore(apiKey, agentsMissingGlobal);
+    case 'show-prompt':
+      printOnboardingPrompt();
+      p.outro('Paste the prompt above to your AI agent.');
       break;
-    case 'install-project':
-      await handleInstallProject(apiKey, agentsMissingProject);
+    case 'add-connection':
+      await promptConnectIntegrations(apiKey);
+      p.outro('Done.');
+      break;
+    case 'update-key':
+      await handleUpdateKey(statuses);
       break;
     case 'access-control':
       await configCommand();
+      break;
+    case 'install-mcp':
+      await promptAndInstallMcp(apiKey, options);
+      p.outro('Done.');
       break;
     case 'start-fresh':
       await freshSetup({ yes: true });
@@ -361,31 +341,206 @@ async function handleInstallProject(apiKey: string, missing: AgentStatus[]): Pro
   p.outro('Done.');
 }
 
-// ── Skills install helper ─────────────────────────────────────────────
+// ── Skill installer ───────────────────────────────────────────────────
 
-async function runSkillsInstall(): Promise<boolean> {
+interface SkillAgent {
+  id: string;
+  name: string;
+  skillDir: string; // relative to home, e.g. '.claude/skills'
+  primary?: boolean; // show in the default list
+}
+
+const SKILL_AGENTS: SkillAgent[] = [
+  { id: 'claude-code', name: 'Claude Code', skillDir: '.claude/skills', primary: true },
+  { id: 'claude-desktop', name: 'Claude Desktop', skillDir: '.claude/skills', primary: true },
+  { id: 'codex', name: 'Codex', skillDir: '.codex/skills', primary: true },
+  { id: 'cursor', name: 'Cursor', skillDir: '.cursor/skills' },
+  { id: 'windsurf', name: 'Windsurf', skillDir: '.codeium/windsurf/skills' },
+  { id: 'kiro', name: 'Kiro', skillDir: '.kiro/skills' },
+  { id: 'goose', name: 'Goose', skillDir: '.config/goose/skills' },
+  { id: 'amp', name: 'Amp', skillDir: '.amp/skills' },
+  { id: 'opencode', name: 'OpenCode', skillDir: '.opencode/skills' },
+  { id: 'roo', name: 'Roo', skillDir: '.roo/skills' },
+];
+
+// Canonical location — shared by universal agents
+const CANONICAL_SKILL_DIR = '.agents/skills';
+
+function getSkillSourceDir(): string {
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
-  const skillsDir = path.resolve(__dirname, '..', 'skills');
+  return path.resolve(__dirname, '..', 'skills', 'one');
+}
 
-  return new Promise((resolve) => {
-    const handler = () => {};
-    process.on('SIGINT', handler);
+function getCanonicalSkillPath(): string {
+  return path.join(os.homedir(), CANONICAL_SKILL_DIR, 'one');
+}
 
-    const child = spawn('npx', ['skills', 'add', skillsDir], {
-      stdio: 'inherit',
-      shell: true,
-    });
+function getAgentSkillPath(agent: SkillAgent): string {
+  return path.join(os.homedir(), agent.skillDir, 'one');
+}
 
-    child.on('close', (code) => {
-      process.removeListener('SIGINT', handler);
-      resolve(code === 0);
-    });
+function isSkillInstalled(): boolean {
+  return fs.existsSync(path.join(getCanonicalSkillPath(), 'SKILL.md'));
+}
 
-    child.on('error', () => {
-      process.removeListener('SIGINT', handler);
-      resolve(false);
-    });
+function isSkillInstalledForAgent(agent: SkillAgent): boolean {
+  return fs.existsSync(path.join(getAgentSkillPath(agent), 'SKILL.md'));
+}
+
+function copyDirSync(src: string, dest: string): void {
+  fs.mkdirSync(dest, { recursive: true });
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const srcPath = path.join(src, entry.name);
+    const destPath = path.join(dest, entry.name);
+    if (entry.isDirectory()) {
+      copyDirSync(srcPath, destPath);
+    } else {
+      fs.copyFileSync(srcPath, destPath);
+    }
+  }
+}
+
+function installSkillForAgents(agentIds: string[]): { installed: string[]; failed: string[] } {
+  const source = getSkillSourceDir();
+  const canonical = getCanonicalSkillPath();
+  const installed: string[] = [];
+  const failed: string[] = [];
+
+  // Verify source exists
+  if (!fs.existsSync(path.join(source, 'SKILL.md'))) {
+    return { installed: [], failed: ['skill source not found'] };
+  }
+
+  // Step 1: Copy to canonical location
+  try {
+    if (fs.existsSync(canonical)) {
+      fs.rmSync(canonical, { recursive: true });
+    }
+    copyDirSync(source, canonical);
+  } catch {
+    return { installed: [], failed: ['canonical copy'] };
+  }
+
+  // Step 2: Symlink for each selected agent
+  // Deduplicate by skillDir (e.g. claude-code and claude-desktop share .claude/skills)
+  const seen = new Map<string, boolean>(); // path -> success
+  for (const id of agentIds) {
+    const agent = SKILL_AGENTS.find(a => a.id === id);
+    if (!agent) continue;
+
+    const agentPath = getAgentSkillPath(agent);
+
+    // If we already processed this path, mirror its result
+    if (seen.has(agentPath)) {
+      (seen.get(agentPath) ? installed : failed).push(agent.name);
+      continue;
+    }
+
+    try {
+      const agentSkillsDir = path.dirname(agentPath);
+      fs.mkdirSync(agentSkillsDir, { recursive: true });
+
+      // Remove existing (real dir or symlink, including broken ones)
+      try { fs.lstatSync(agentPath); fs.rmSync(agentPath, { recursive: true }); } catch { /* doesn't exist */ }
+
+      const relative = path.relative(agentSkillsDir, canonical);
+      fs.symlinkSync(relative, agentPath);
+      installed.push(agent.name);
+      seen.set(agentPath, true);
+    } catch {
+      failed.push(agent.name);
+      seen.set(agentPath, false);
+    }
+  }
+
+  return { installed, failed };
+}
+
+async function promptSkillInstall(): Promise<boolean> {
+  const primaryAgents = SKILL_AGENTS.filter(a => a.primary);
+  const otherAgents = SKILL_AGENTS.filter(a => !a.primary);
+
+  const options: { value: string; label: string; hint?: string }[] = [
+    ...primaryAgents.map(a => ({
+      value: a.id,
+      label: a.name,
+      hint: isSkillInstalledForAgent(a) ? pc.green('installed') : undefined,
+    })),
+    {
+      value: '_other',
+      label: 'Other agents',
+      hint: otherAgents.map(a => a.name).join(', '),
+    },
+  ];
+
+  const choice = await p.multiselect({
+    message: 'Install the One skill to:',
+    options,
+    initialValues: primaryAgents.map(a => a.id),
   });
+
+  if (p.isCancel(choice)) {
+    return false;
+  }
+
+  let selectedIds = choice as string[];
+
+  // If "Other agents" was selected, show the expanded list
+  if (selectedIds.includes('_other')) {
+    selectedIds = selectedIds.filter(id => id !== '_other');
+
+    const otherChoice = await p.multiselect({
+      message: 'Select additional agents:',
+      options: otherAgents.map(a => ({
+        value: a.id,
+        label: a.name,
+        hint: isSkillInstalledForAgent(a) ? pc.green('installed') : undefined,
+      })),
+    });
+
+    if (!p.isCancel(otherChoice)) {
+      selectedIds.push(...(otherChoice as string[]));
+    }
+  }
+
+  if (selectedIds.length === 0) {
+    p.log.info('No agents selected.');
+    return false;
+  }
+
+  const spinner = p.spinner();
+  spinner.start('Installing skill...');
+  const { installed, failed } = installSkillForAgents(selectedIds);
+  spinner.stop(installed.length > 0 ? 'Skill installed' : 'Installation failed');
+
+  for (const name of installed) {
+    p.log.success(`${name}: ${pc.green('\u2713')} skill installed`);
+  }
+  for (const name of failed) {
+    p.log.warn(`${name}: failed to install`);
+  }
+
+  return installed.length > 0;
+}
+
+// ── Onboarding prompt ─────────────────────────────────────────────────
+
+function printOnboardingPrompt(): void {
+  console.log();
+  console.log(pc.bold('  Copy-paste this to your AI agent:'));
+  console.log();
+  console.log(pc.cyan('  ┌─────────────────────────────────────────────────────────────'));
+  console.log(pc.cyan('  │'));
+  console.log(pc.cyan('  │  The One CLI (`one`) is now installed on this machine. It'));
+  console.log(pc.cyan('  │  lets you interact with 250+ third-party platforms (Gmail,'));
+  console.log(pc.cyan('  │  Slack, Shopify, HubSpot, Stripe, GitHub, etc.) through'));
+  console.log(pc.cyan('  │  their APIs. Whenever you need to interact with any'));
+  console.log(pc.cyan('  │  third-party platform or external service, use the `one`'));
+  console.log(pc.cyan('  │  skill. Please save this to your project instructions or'));
+  console.log(pc.cyan('  │  memory so you remember it in future conversations.'));
+  console.log(pc.cyan('  │'));
+  console.log(pc.cyan('  └─────────────────────────────────────────────────────────────'));
+  console.log();
 }
 
 // ── MCP install helper (extracted from freshSetup) ────────────────────
@@ -572,22 +727,8 @@ async function freshSetup(options: { yes?: boolean; global?: boolean; project?: 
     createdAt: new Date().toISOString(),
   });
 
-  // Step 2: Install skills (recommended)
-  const installSkills = await p.confirm({
-    message: 'Install One skills to your AI agents? (recommended)',
-    initialValue: true,
-  });
-
-  if (!p.isCancel(installSkills) && installSkills) {
-    const success = await runSkillsInstall();
-    if (success) {
-      p.log.success('Skills installed successfully.');
-    } else {
-      const __dirname = path.dirname(fileURLToPath(import.meta.url));
-      const skillsDir = path.resolve(__dirname, '..', 'skills');
-      p.log.warn(`Skills installation failed. You can try manually: ${pc.cyan(`npx skills add ${skillsDir}`)}`);
-    }
-  }
+  // Step 2: Install skill
+  await promptSkillInstall();
 
   // Step 3: Connect integrations
   await promptConnectIntegrations(apiKey);
@@ -607,12 +748,9 @@ async function freshSetup(options: { yes?: boolean; global?: boolean; project?: 
     'Setup Complete'
   );
 
-  p.note(
-    `Tell your agent to run ${pc.cyan('one onboard')} to learn what it can do.`,
-    'Next Step'
-  );
+  printOnboardingPrompt();
 
-  p.outro('Your AI agents now have access to One integrations!');
+  p.outro('Done! Paste the prompt above to your AI agent.');
 }
 
 // ── Welcome banner & post-setup integration prompt ───────────────────
@@ -630,7 +768,7 @@ function printBanner(): void {
   console.log(pc.yellow('  ██████████████   ██████     ██████   ██████████████'));
   console.log(pc.yellow('  ██████████████   ██████      █████   ██████████████'));
   console.log();
-  console.log(pc.dim('  U N I V E R S A L   I N T E G R A T I O N S   F O R   A I'));
+  console.log(pc.dim('  I N F R A S T R U C T U R E   F O R   A G E N T S'));
   console.log();
 }
 

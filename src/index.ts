@@ -29,9 +29,10 @@ import {
   relayDeliveriesCommand,
   relayEventTypesCommand,
 } from './commands/relay.js';
+
 import { guideCommand } from './commands/guide.js';
 import { onboardCommand } from './commands/onboard.js';
-import { updateCommand, checkLatestVersionCached, getCurrentVersion } from './commands/update.js';
+import { updateCommand, checkLatestVersionCached, getCurrentVersion, autoUpdate } from './commands/update.js';
 import { setAgentMode, isAgentMode } from './lib/output.js';
 
 const require = createRequire(import.meta.url);
@@ -42,7 +43,7 @@ const program = new Command();
 program
   .name('one')
   .option('--agent', 'Machine-readable JSON output (no colors, spinners, or prompts)')
-  .description(`One CLI — Connect AI agents to 200+ platforms through one interface.
+  .description(`One CLI — Connect AI agents to 250+ platforms through one interface.
 
   Setup:
     one init                              Set up API key and install MCP server
@@ -86,11 +87,11 @@ program
         -d '{"to":"j@example.com","subject":"Hello","body":"Hi!","connectionKey":"live::gmail::default::abc123"}'
 
   Platform names are always kebab-case (e.g. hub-spot, ship-station, google-calendar).
-  Run 'one platforms' to browse all 200+ available platforms.`)
+  Run 'one platforms' to browse all 250+ available platforms.`)
   .version(version);
 
 // Fire a non-blocking version check alongside every command
-let updateCheckPromise: Promise<string | null> | undefined;
+let updateCheckPromise: Promise<{ version: string; publishedAt: string | null } | null> | undefined;
 
 program.hook('preAction', (thisCommand) => {
   const opts = program.opts();
@@ -106,16 +107,12 @@ program.hook('preAction', (thisCommand) => {
 
 program.hook('postAction', async () => {
   if (!updateCheckPromise) return;
-  const latestVersion = await updateCheckPromise;
-  if (!latestVersion) return;
+  const info = await updateCheckPromise;
+  if (!info) return;
   const current = getCurrentVersion();
-  if (current === latestVersion) return;
-  if (isAgentMode()) {
-    // In agent mode, append a notice field to stderr so it doesn't break JSON parsing
-    process.stderr.write(`\nUpdate available: v${current} → v${latestVersion}. Run "one update" to upgrade.\n`);
-  } else {
-    console.log(`\n\x1b[33mUpdate available: v${current} → v${latestVersion}. Run \x1b[1mone update\x1b[22m to upgrade.\x1b[0m`);
-  }
+  if (current === info.version) return;
+  // Auto-update silently in the background
+  autoUpdate(info.version, info.publishedAt);
 });
 
 program
@@ -375,6 +372,7 @@ relay
   .action(async (platform: string) => {
     await relayEventTypesCommand(platform);
   });
+
 
 program
   .command('guide [topic]')

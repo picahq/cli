@@ -25,7 +25,7 @@ Before using any feature, read its guide section first: \`one guide actions\`, \
 
 ## Features
 
-### 1. Actions — Execute API calls on 200+ platforms
+### 1. Actions — Execute API calls on 250+ platforms
 Search for actions, read their docs, and execute them. This is the core workflow.
 
 **Quick start:**
@@ -253,7 +253,7 @@ const TOPICS: { topic: GuideTopic; description: string }[] = [
   { topic: 'actions', description: 'Search, read docs, and execute platform actions' },
   { topic: 'flows', description: 'Build and execute multi-step workflows' },
   { topic: 'relay', description: 'Receive webhooks and forward to other platforms' },
-  { topic: 'all', description: 'Complete guide (all topics combined)' },
+{ topic: 'all', description: 'Complete guide (all topics combined)' },
 ];
 
 export function getGuideContent(topic: GuideTopic): { title: string; content: string } {

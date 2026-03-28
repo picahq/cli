@@ -1,0 +1,116 @@
+---
+name: one
+description: |
+  Use the One CLI (`one`) to interact with 250+ third-party platforms — Gmail, Slack, Shopify, HubSpot, Stripe, GitHub, Notion, Salesforce, and more — through their APIs. One handles authentication, request building, and execution through a single unified interface.
+
+  TRIGGER when the user wants to:
+  - Interact with ANY third-party platform or external service (e.g., "send an email", "create a Shopify order", "look up a HubSpot contact", "post to Slack")
+  - List their connected platforms or check what integrations are available
+  - Search for what they can do on a platform (e.g., "what can I do with Gmail")
+  - Execute any API call against a connected platform
+  - Set up webhook-driven automations between platforms (e.g., "when a Stripe payment comes in, notify Slack")
+  - Build multi-step workflows that chain actions across platforms (e.g., "fetch Stripe customers and email each one")
+  - Anything involving third-party APIs, integrations, or connected apps — even if they don't mention "One" by name
+
+  DO NOT TRIGGER for:
+  - Setting up One or installing MCP (that's `one init`)
+  - Adding new connections (that's `one add <platform>`)
+  - Configuring access control (that's `one config`)
+---
+
+# One CLI
+
+You have access to the One CLI which lets you interact with 250+ third-party platforms through their APIs. Always include the `--agent` flag right after `one` for structured JSON output.
+
+## Core Workflow: search -> knowledge -> execute
+
+Always follow this sequence when the user wants to do something on a connected platform:
+
+### 1. List connections
+
+```bash
+one --agent connection list
+```
+
+Returns connected platforms with their connection keys (needed for execution) and platform names in kebab-case (needed for searching).
+
+### 2. Search for the right action
+
+```bash
+one --agent actions search <platform> "<query>" -t execute
+```
+
+- Platform names are always kebab-case: `gmail`, `hub-spot`, `ship-station`
+- Use `-t execute` when performing actions, `-t knowledge` when researching or writing code
+- If no results, broaden the query (e.g., `"list"` instead of `"list active premium customers"`)
+
+### 3. Get the action's knowledge (REQUIRED before executing)
+
+```bash
+one --agent actions knowledge <platform> <actionId>
+```
+
+This tells you exactly what parameters are required, how to structure the request, and which flags to use. Never skip this step — without it you'll guess wrong on parameters.
+
+### 4. Execute
+
+```bash
+one --agent actions execute <platform> <actionId> <connectionKey> [options]
+```
+
+Options:
+- `-d, --data <json>` — Request body (POST, PUT, PATCH)
+- `--path-vars <json>` — Path variables for URLs with `{id}` placeholders
+- `--query-params <json>` — Query parameters
+- `--headers <json>` — Additional headers
+- `--form-data` — Send as multipart/form-data
+- `--form-url-encoded` — Send as application/x-www-form-urlencoded
+- `--dry-run` — Preview the request without executing
+
+Examples:
+```bash
+# Simple GET
+one --agent actions execute shopify <actionId> <connectionKey>
+
+# POST with body data
+one --agent actions execute hub-spot <actionId> <connectionKey> \
+  -d '{"properties": {"email": "jane@example.com", "firstname": "Jane"}}'
+
+# Path variables + query params
+one --agent actions execute shopify <actionId> <connectionKey> \
+  --path-vars '{"order_id": "12345"}' \
+  --query-params '{"limit": "10"}'
+
+# Array query params (expand to repeated keys)
+one --agent actions execute gmail <actionId> <connectionKey> \
+  --path-vars '{"userId": "me", "id": "msg123"}' \
+  --query-params '{"format": "metadata", "metadataHeaders": ["From", "Subject", "Date"]}'
+```
+
+## Error Handling
+
+All errors return JSON: `{"error": "message"}`. Parse output as JSON and check for the `error` key.
+
+## Important Rules
+
+- Always use `--agent` flag for structured JSON output
+- Platform names are always kebab-case (`hub-spot` not `HubSpot`)
+- Always use the exact action ID from search results — never guess or construct them
+- Always read knowledge before executing — it has required params, validation rules, and caveats
+- JSON values passed to `-d`, `--path-vars`, `--query-params` must be valid JSON (use single quotes around JSON to avoid shell escaping)
+- Do NOT pass path or query parameters inside the `-d` body flag
+
+## Beyond Single Actions
+
+One also supports more advanced patterns. Read the relevant reference file before using these:
+
+- **Webhook Relay** — Receive webhooks from a platform and forward to another (e.g., Stripe event -> Slack message). Read `references/relay.md` in this skill's directory for the full workflow.
+- **Multi-step Workflows** — Chain actions across platforms as JSON workflow files (like n8n/Zapier but file-based). Read `references/flows.md` in this skill's directory for the schema and examples.
+
+## Adding New Connections
+
+If the user needs a platform that isn't connected yet, tell them to run:
+```bash
+one add <platform>
+```
+This is interactive and opens the browser for OAuth. After connecting, the platform will appear in `one --agent connection list`.

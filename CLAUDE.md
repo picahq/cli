@@ -14,3 +14,7 @@ Do NOT run `npm publish` directly. The release is automated via GitHub.
 ### Branch workflow
 
 Always create a branch and PR for changes — do not commit directly to `main`.
+
+### Parked features
+
+- **Remote cloud skills (`one skills` CRUD)** — Removed in the unified skill onboarding PR. The command, API methods, types (`CloudSkill`), and skill-file parser were stripped out. Source files are preserved in git history if we want to bring this back later. The feature allowed managing AI skills stored in the One API via `one skills list/get/create/update/delete`.
