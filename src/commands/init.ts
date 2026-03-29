@@ -71,7 +71,7 @@ async function handleExistingConfig(
   console.log();
 
   // Build action menu
-  type Action = 'install-skills' | 'show-prompt' | 'add-connection' | 'update-key' | 'access-control' | 'install-mcp' | 'start-fresh';
+  type Action = 'install-skills' | 'show-prompt' | 'add-connection' | 'update-key' | 'access-control' | 'start-fresh';
   const actionOptions: { value: Action; label: string; hint?: string }[] = [];
 
   actionOptions.push({
@@ -101,12 +101,6 @@ async function handleExistingConfig(
     value: 'access-control',
     label: 'Configure access control',
     hint: 'permissions, connections, actions',
-  });
-
-  actionOptions.push({
-    value: 'install-mcp',
-    label: 'Install MCP server',
-    hint: 'not recommended — use skills instead',
   });
 
   actionOptions.push({
@@ -148,10 +142,6 @@ async function handleExistingConfig(
       break;
     case 'access-control':
       await configCommand();
-      break;
-    case 'install-mcp':
-      await promptAndInstallMcp(apiKey, options);
-      p.outro('Done.');
       break;
     case 'start-fresh':
       await freshSetup({ yes: true });
@@ -732,16 +722,6 @@ async function freshSetup(options: { yes?: boolean; global?: boolean; project?: 
 
   // Step 3: Connect integrations
   await promptConnectIntegrations(apiKey);
-
-  // Step 4: Optional MCP install (not recommended)
-  const installMcp = await p.confirm({
-    message: 'Install One MCP server to your AI agents? (not recommended)',
-    initialValue: false,
-  });
-
-  if (!p.isCancel(installMcp) && installMcp) {
-    await promptAndInstallMcp(apiKey, options);
-  }
 
   p.note(
     `Config saved to: ${pc.dim(getConfigPath())}`,
