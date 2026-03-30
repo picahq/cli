@@ -225,6 +225,30 @@ one actions execute stripe <actionId> <connectionKey> \
 | `--form-url-encoded` | Send as application/x-www-form-urlencoded |
 | `--dry-run` | Show the request without executing it |
 
+### `one cache`
+
+Manage the local cache for knowledge and search responses. The CLI automatically caches `actions knowledge` and `actions search` results so repeated calls serve instantly from disk.
+
+```bash
+one cache list                    # List all cached entries with age and status
+one cache list --expired          # Show only expired entries
+one cache clear                   # Clear all cached data
+one cache clear <actionId>        # Clear a specific entry
+one cache update-all              # Re-fetch fresh data for all cached entries
+```
+
+Knowledge and search commands also support cache flags:
+
+```bash
+one actions knowledge gmail <actionId> --no-cache       # Skip cache, fetch fresh
+one actions knowledge gmail <actionId> --cache-status   # Check cache status
+one actions search gmail "send email" --no-cache        # Skip cache for search
+```
+
+Default TTL is 1 hour. Configure via `ONE_CACHE_TTL` environment variable or `cacheTtl` in `~/.one/config.json`.
+
+Note: `actions execute` is never cached — it always hits the API fresh.
+
 ### `one guide [topic]`
 
 Get the full CLI usage guide, designed for AI agents that only have the binary (no MCP, no IDE skills).
@@ -239,7 +263,7 @@ one --agent guide         # full guide as structured JSON
 one --agent guide flows   # single topic as JSON
 ```
 
-Topics: `overview`, `actions`, `flows`, `all` (default).
+Topics: `overview`, `actions`, `flows`, `relay`, `cache`, `all` (default).
 
 In agent mode (`--agent`), the JSON response includes the guide content and an `availableTopics` array so agents can discover what sections exist.
 

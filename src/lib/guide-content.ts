@@ -89,6 +89,7 @@ Request specific sections:
 - \`one guide actions\` — Actions reference (search, knowledge, execute)
 - \`one guide flows\` — Workflow engine reference (step types, selectors, examples)
 - \`one guide relay\` — Webhook relay reference (templates, passthrough actions)
+- \`one guide cache\` — Cache management (TTL, flags, commands)
 - \`one guide all\` — Everything
 
 ## Important Notes
@@ -246,14 +247,97 @@ Any connected platform can be a destination via passthrough actions.
 4. \`relay event <id>\` — inspect full payload to verify template paths
 `;
 
-type GuideTopic = 'overview' | 'actions' | 'flows' | 'relay' | 'all';
+export const GUIDE_CACHE = `# One Cache — Reference
+
+## Overview
+
+The One CLI caches \`actions knowledge\` and \`actions search\` responses locally so repeated calls serve instantly from disk instead of hitting the API. This is the single biggest latency win for agents who call knowledge for the same actions repeatedly.
+
+Cache location: \`~/.one/cache/knowledge/\` and \`~/.one/cache/search/\`
+
+## How It Works
+
+- **First call**: fetches from the API, writes to cache, serves the response
+- **Subsequent calls (within TTL)**: serves from cache instantly, no API call
+- **After TTL expires**: makes a conditional request (ETag). If content unchanged, refreshes the cache timestamp. If changed, writes fresh data.
+- **Network failure with stale cache**: serves the stale cache with a warning — never fails hard when a cache exists
+
+Default TTL: 3600 seconds (1 hour). Configure via \`ONE_CACHE_TTL\` env var or \`cacheTtl\` in \`~/.one/config.json\`.
+
+## What Gets Cached
+
+| Cached | Not Cached |
+|--------|-----------|
+| \`actions knowledge\` (API docs, change infrequently) | \`actions execute\` (live data, always fresh) |
+| \`actions search\` results | \`connection list\` (changes with add/remove) |
+
+## Agent Mode \`_cache\` Metadata
+
+In \`--agent\` mode, knowledge and search responses include a \`_cache\` field:
+
+\`\`\`json
+{
+  "knowledge": "...",
+  "method": "POST",
+  "_cache": {
+    "hit": true,
+    "age": 1423,
+    "fresh": true
+  }
+}
+\`\`\`
+
+Use this to programmatically decide whether to force-refresh.
+
+## Cache Flags
+
+\`\`\`bash
+# Skip cache, fetch fresh (result still gets cached for next time)
+one --agent actions knowledge <platform> <actionId> --no-cache
+
+# Check cache status without fetching
+one --agent actions knowledge <platform> <actionId> --cache-status
+
+# Same for search
+one --agent actions search <platform> "<query>" --no-cache
+\`\`\`
+
+## Cache Management Commands
+
+\`\`\`bash
+one cache list                    # List all cached entries with age and status
+one cache list --expired          # List only expired entries
+one cache clear                   # Delete all cached knowledge and search data
+one cache clear <actionId>        # Delete one specific entry
+one cache update-all              # Re-fetch fresh data for all cached entries
+\`\`\`
+
+All cache commands respect \`--agent\` for JSON output.
+
+## When to Force-Refresh
+
+- After a platform updates its API docs (rare)
+- If you suspect stale data is causing issues
+- Use \`one cache update-all\` to proactively warm the entire cache
+
+## Configuration
+
+| Setting | Source | Example |
+|---------|--------|---------|
+| TTL (seconds) | \`ONE_CACHE_TTL\` env var | \`ONE_CACHE_TTL=7200\` |
+| TTL (seconds) | \`cacheTtl\` in \`~/.one/config.json\` | \`"cacheTtl": 7200\` |
+| Default | — | 3600 (1 hour) |
+`;
+
+type GuideTopic = 'overview' | 'actions' | 'flows' | 'relay' | 'cache' | 'all';
 
 const TOPICS: { topic: GuideTopic; description: string }[] = [
   { topic: 'overview', description: 'Setup, features, and quick start for each' },
   { topic: 'actions', description: 'Search, read docs, and execute platform actions' },
   { topic: 'flows', description: 'Build and execute multi-step workflows' },
   { topic: 'relay', description: 'Receive webhooks and forward to other platforms' },
-{ topic: 'all', description: 'Complete guide (all topics combined)' },
+  { topic: 'cache', description: 'Local caching for knowledge and search responses' },
+  { topic: 'all', description: 'Complete guide (all topics combined)' },
 ];
 
 export function getGuideContent(topic: GuideTopic): { title: string; content: string } {
@@ -266,10 +350,12 @@ export function getGuideContent(topic: GuideTopic): { title: string; content: st
       return { title: 'One CLI — Agent Guide: Workflows', content: GUIDE_FLOWS };
     case 'relay':
       return { title: 'One CLI — Agent Guide: Relay', content: GUIDE_RELAY };
+    case 'cache':
+      return { title: 'One CLI — Agent Guide: Cache', content: GUIDE_CACHE };
     case 'all':
       return {
         title: 'One CLI — Agent Guide: Complete',
-        content: [GUIDE_OVERVIEW, GUIDE_ACTIONS, GUIDE_FLOWS, GUIDE_RELAY].join('\n---\n\n'),
+        content: [GUIDE_OVERVIEW, GUIDE_ACTIONS, GUIDE_FLOWS, GUIDE_RELAY, GUIDE_CACHE].join('\n---\n\n'),
       };
   }
 }

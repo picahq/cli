@@ -15,6 +15,17 @@ Do NOT run `npm publish` directly. The release is automated via GitHub.
 
 Always create a branch and PR for changes — do not commit directly to `main`.
 
+### Documentation-first development
+
+When making any feature change, **always update documentation as part of the implementation**:
+
+1. `src/lib/guide-content.ts` — CLI guide content (`one guide <topic>`)
+2. `skills/one/SKILL.md` — Agent-facing skill documentation
+3. `README.md` — User-facing command reference
+4. `src/index.ts` — Help text and command descriptions
+
+Agent experience is the highest priority. Agents rely on accurate documentation to use the CLI correctly. Stale docs = broken agent workflows.
+
 ### Parked features
 
 - **Remote cloud skills (`one skills` CRUD)** — Removed in the unified skill onboarding PR. The command, API methods, types (`CloudSkill`), and skill-file parser were stripped out. Source files are preserved in git history if we want to bring this back later. The feature allowed managing AI skills stored in the One API via `one skills list/get/create/update/delete`.

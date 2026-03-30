@@ -10,7 +10,18 @@ import {
 } from '../lib/api.js';
 import { printTable } from '../lib/table.js';
 import * as output from '../lib/output.js';
-import type { PermissionLevel } from '../lib/types.js';
+import type { PermissionLevel, ActionKnowledgeResponse } from '../lib/types.js';
+import {
+  knowledgeCachePath,
+  searchCachePath,
+  readCache,
+  writeCache,
+  isFresh,
+  getAge,
+  buildCacheMeta,
+  formatAge,
+  makeCacheEntry,
+} from '../lib/cache.js';
 
 function getConfig() {
   const apiKey = getApiKey();
@@ -38,7 +49,7 @@ function parseJsonArg(value: string, argName: string): any {
 export async function actionsSearchCommand(
   platform: string,
   query: string,
-  options: { type?: string }
+  options: { type?: string; cache?: boolean }
 ): Promise<void> {
   output.intro(pc.bgCyan(pc.black(' One ')));
 
@@ -54,23 +65,72 @@ export async function actionsSearchCommand(
       ? 'knowledge'
       : (options.type as 'execute' | 'knowledge' | undefined);
 
-    let actions = await api.searchActions(platform, query, agentType);
+    const useCache = options.cache !== false;
+    const cachePath = searchCachePath(platform, query, agentType || 'knowledge');
+    const cached = useCache ? readCache<{ actions: Array<{ actionId: string; title: string; method: string; path: string }> }>(cachePath) : null;
 
-    // Apply permission-level filtering
-    actions = filterByPermissions(actions, permissions);
+    let cleanedActions: Array<{ actionId: string; title: string; method: string; path: string }>;
+    let cacheHit = false;
 
-    // Apply action allowlist filtering
-    actions = actions.filter((a) => isActionAllowed(a.systemId, actionIds));
+    if (cached && isFresh(cached)) {
+      // Serve from cache
+      cleanedActions = cached.data.actions;
+      cacheHit = true;
+    } else {
+      // Fetch from API (conditional if stale cache exists)
+      try {
+        const result = await api.searchActionsWithMeta(
+          platform, query, agentType, cached?.etag ?? undefined
+        );
 
-    const cleanedActions = actions.map((action) => ({
-      actionId: action.systemId,
-      title: action.title,
-      method: action.method,
-      path: action.path,
-    }));
+        if (result.status === 304 && cached) {
+          // Content unchanged — update cachedAt and serve cached data
+          cached.cachedAt = new Date().toISOString();
+          writeCache(cachePath, cached);
+          cleanedActions = cached.data.actions;
+          cacheHit = true;
+        } else {
+          let actions = result.data;
+          actions = filterByPermissions(actions, permissions);
+          actions = actions.filter((a) => isActionAllowed(a.systemId, actionIds));
+
+          cleanedActions = actions.map((action) => ({
+            actionId: action.systemId,
+            title: action.title,
+            method: action.method,
+            path: action.path,
+          }));
+
+          // Write to cache
+          writeCache(cachePath, makeCacheEntry(
+            `${platform}_${query}_${agentType || 'knowledge'}`,
+            { actions: cleanedActions },
+            result.etag
+          ));
+        }
+      } catch (fetchError) {
+        // Network failure — serve stale cache if available
+        if (cached) {
+          process.stderr.write(
+            `Warning: serving cached search results (network unavailable, cached ${formatAge(getAge(cached))} ago)\n`
+          );
+          cleanedActions = cached.data.actions;
+          cacheHit = true;
+        } else {
+          throw fetchError;
+        }
+      }
+    }
 
     if (output.isAgentMode()) {
-      output.json({ actions: cleanedActions });
+      const response: Record<string, unknown> = { actions: cleanedActions };
+      if (cacheHit && cached) {
+        response._cache = buildCacheMeta(cached, true);
+      } else {
+        const freshEntry = readCache(cachePath);
+        response._cache = buildCacheMeta(freshEntry, false);
+      }
+      output.json(response);
       return;
     }
 
@@ -131,8 +191,34 @@ export async function actionsSearchCommand(
 
 export async function actionsKnowledgeCommand(
   platform: string,
-  actionId: string
+  actionId: string,
+  options: { cache?: boolean; cacheStatus?: boolean }
 ): Promise<void> {
+  const cachePath = knowledgeCachePath(actionId);
+
+  // --cache-status: print cache metadata and return
+  if (options.cacheStatus) {
+    const entry = readCache<ActionKnowledgeResponse>(cachePath);
+    if (!entry) {
+      output.json({
+        cached: false,
+        path: cachePath,
+      });
+    } else {
+      const age = getAge(entry);
+      output.json({
+        cached: true,
+        cachedAt: entry.cachedAt,
+        age: formatAge(age),
+        ttl: entry.ttl,
+        expired: !isFresh(entry),
+        etag: entry.etag,
+        path: cachePath,
+      });
+    }
+    return;
+  }
+
   output.intro(pc.bgCyan(pc.black(' One ')));
 
   const { apiKey, actionIds, connectionKeys } = getConfig();
@@ -167,17 +253,66 @@ export async function actionsKnowledgeCommand(
   spinner.start(`Loading knowledge for action ${pc.dim(actionId)}...`);
 
   try {
-    const { knowledge, method } = await api.getActionKnowledge(actionId);
+    const useCache = options.cache !== false;
+    const cached = useCache ? readCache<ActionKnowledgeResponse>(cachePath) : null;
+
+    let knowledgeData: ActionKnowledgeResponse;
+    let cacheHit = false;
+    let cacheEntry = cached;
+
+    if (cached && isFresh(cached) && useCache) {
+      // Fresh cache hit — serve directly
+      knowledgeData = cached.data;
+      cacheHit = true;
+    } else {
+      // Fetch from API (conditional if stale cache exists)
+      try {
+        const result = await api.getActionKnowledgeWithMeta(
+          actionId, cached?.etag ?? undefined
+        );
+
+        if (result.status === 304 && cached) {
+          // Content unchanged — refresh cachedAt
+          cached.cachedAt = new Date().toISOString();
+          writeCache(cachePath, cached);
+          knowledgeData = cached.data;
+          cacheHit = true;
+        } else {
+          knowledgeData = result.data;
+
+          // Write to cache
+          const newEntry = makeCacheEntry(actionId, knowledgeData, result.etag);
+          writeCache(cachePath, newEntry);
+          cacheEntry = newEntry;
+        }
+      } catch (fetchError) {
+        // Network failure — serve stale cache if available
+        if (cached) {
+          process.stderr.write(
+            `Warning: serving cached knowledge (network unavailable, cached ${formatAge(getAge(cached))} ago)\n`
+          );
+          knowledgeData = cached.data;
+          cacheHit = true;
+        } else {
+          throw fetchError;
+        }
+      }
+    }
 
     const knowledgeWithGuidance = buildActionKnowledgeWithGuidance(
-      knowledge,
-      method,
+      knowledgeData.knowledge,
+      knowledgeData.method,
       platform,
       actionId
     );
 
     if (output.isAgentMode()) {
-      output.json({ knowledge: knowledgeWithGuidance, method });
+      const response: Record<string, unknown> = {
+        knowledge: knowledgeWithGuidance,
+        method: knowledgeData.method,
+        _cache: buildCacheMeta(cacheEntry, cacheHit),
+      };
+      output.json(response);
       return;
     }
 

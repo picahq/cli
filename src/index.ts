@@ -30,6 +30,7 @@ import {
   relayEventTypesCommand,
 } from './commands/relay.js';
 
+import { cacheClearCommand, cacheListCommand, cacheUpdateAllCommand } from './commands/cache.js';
 import { guideCommand } from './commands/guide.js';
 import { onboardCommand } from './commands/onboard.js';
 import { updateCommand, checkLatestVersionCached, getCurrentVersion, autoUpdate } from './commands/update.js';
@@ -64,6 +65,11 @@ program
     one flow create [key]                 Create a workflow from JSON
     one flow execute <key>                Execute a workflow
     one flow validate <key>               Validate a flow
+
+  Cache:
+    one cache list                        List cached entries with age and status
+    one cache clear                       Clear all cached knowledge and search data
+    one cache update-all                  Re-fetch fresh data for all cached entries
 
   Webhook Relay:
     one relay create                      Create a relay endpoint for a connection
@@ -173,7 +179,8 @@ actions
   .command('search <platform> <query>')
   .description('Search for actions on a platform (e.g. one actions search gmail "send email")')
   .option('-t, --type <type>', 'execute (to run it) or knowledge (to learn about it). Default: knowledge')
-  .action(async (platform: string, query: string, options: { type?: string }) => {
+  .option('--no-cache', 'Skip cache, fetch fresh from API')
+  .action(async (platform: string, query: string, options: { type?: string; cache?: boolean }) => {
     await actionsSearchCommand(platform, query, options);
   });
 
@@ -181,8 +188,10 @@ actions
   .command('knowledge <platform> <actionId>')
   .alias('k')
   .description('Get full docs for an action — MUST call before execute to know required params')
-  .action(async (platform: string, actionId: string) => {
-    await actionsKnowledgeCommand(platform, actionId);
+  .option('--no-cache', 'Skip cache, fetch fresh from API')
+  .option('--cache-status', 'Print cache metadata without fetching')
+  .action(async (platform: string, actionId: string, options: { cache?: boolean; cacheStatus?: boolean }) => {
+    await actionsKnowledgeCommand(platform, actionId, options);
   });
 
 actions
@@ -373,6 +382,35 @@ relay
     await relayEventTypesCommand(platform);
   });
 
+
+// ── Cache Commands ──
+
+const cache = program
+  .command('cache')
+  .description('Manage the local knowledge and search cache');
+
+cache
+  .command('clear [actionId]')
+  .description('Clear all cached data, or a specific action by ID')
+  .action(async (actionId?: string) => {
+    await cacheClearCommand(actionId);
+  });
+
+cache
+  .command('list')
+  .alias('ls')
+  .description('List all cached entries with age and status')
+  .option('--expired', 'Show only expired entries')
+  .action(async (options: { expired?: boolean }) => {
+    await cacheListCommand(options);
+  });
+
+cache
+  .command('update-all')
+  .description('Re-fetch fresh data for all cached entries')
+  .action(async () => {
+    await cacheUpdateAllCommand();
+  });
 
 program
   .command('guide [topic]')

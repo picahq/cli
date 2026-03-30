@@ -100,6 +100,16 @@ export function getAccessControl(): AccessControlSettings {
   return readConfig()?.accessControl ?? {};
 }
 
+export function getCacheTtl(): number {
+  if (process.env.ONE_CACHE_TTL) {
+    const val = parseInt(process.env.ONE_CACHE_TTL, 10);
+    if (!isNaN(val) && val > 0) return val;
+  }
+  const config = readConfig();
+  if (config?.cacheTtl && config.cacheTtl > 0) return config.cacheTtl;
+  return 3600;
+}
+
 export function updateAccessControl(settings: AccessControlSettings): void {
   const config = readConfig();
   if (!config) return;

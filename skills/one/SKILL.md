@@ -100,6 +100,18 @@ All errors return JSON: `{"error": "message"}`. Parse output as JSON and check f
 - JSON values passed to `-d`, `--path-vars`, `--query-params` must be valid JSON (use single quotes around JSON to avoid shell escaping)
 - Do NOT pass path or query parameters inside the `-d` body flag
 
+## Caching
+
+Knowledge and search responses are cached locally (`~/.one/cache/`). Subsequent calls for the same action serve instantly from disk.
+
+- Cache is automatic — no setup required
+- Default TTL: 1 hour (configurable via `ONE_CACHE_TTL` env var)
+- In `--agent` mode, responses include a `_cache` field: `{"hit": true, "age": 1423, "fresh": true}`
+- Use `--no-cache` to force a fresh fetch: `one --agent actions knowledge <platform> <actionId> --no-cache`
+- Use `--cache-status` to check cache state without fetching
+- Manage cache: `one cache list`, `one cache clear`, `one cache update-all`
+- `actions execute` is NEVER cached — always fresh
+
 ## Beyond Single Actions
 
 One also supports more advanced patterns. Read the relevant reference file before using these:

@@ -9,6 +9,7 @@ import type {
   ExecuteActionArgs,
   ExecutePassthroughResponse,
   SanitizedRequestConfig,
+  ApiResponseWithMeta,
 } from './types.js';
 
 const API_BASE = 'https://api.withone.ai/v1';
@@ -160,6 +161,114 @@ export class OneApi {
       knowledge: action.knowledge,
       method: action.method,
     };
+  }
+
+  private async requestWithMeta<T>(opts: {
+    path: string;
+    method?: string;
+    body?: unknown;
+    headers?: Record<string, string>;
+    queryParams?: Record<string, string>;
+    ifNoneMatch?: string;
+  }): Promise<ApiResponseWithMeta<T>> {
+    let url = `${API_BASE}${opts.path}`;
+    if (opts.queryParams && Object.keys(opts.queryParams).length > 0) {
+      const params = new URLSearchParams(opts.queryParams);
+      url += `?${params.toString()}`;
+    }
+
+    const headers: Record<string, string> = {
+      'x-one-secret': this.apiKey,
+      'Content-Type': 'application/json',
+      ...opts.headers,
+    };
+
+    if (opts.ifNoneMatch) {
+      headers['If-None-Match'] = opts.ifNoneMatch;
+    }
+
+    const fetchOpts: RequestInit = {
+      method: opts.method || 'GET',
+      headers,
+    };
+
+    if (opts.body !== undefined) {
+      fetchOpts.body = JSON.stringify(opts.body);
+    }
+
+    const response = await fetch(url, fetchOpts);
+
+    if (response.status === 304) {
+      return { data: null as T, etag: opts.ifNoneMatch ?? null, status: 304 };
+    }
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new ApiError(response.status, text || `HTTP ${response.status}`);
+    }
+
+    const etag = response.headers.get('etag') ?? null;
+    const text = await response.text();
+    const data = text ? (JSON.parse(text) as T) : ({} as T);
+    return { data, etag, status: response.status };
+  }
+
+  async getActionKnowledgeWithMeta(
+    actionId: string,
+    ifNoneMatch?: string
+  ): Promise<ApiResponseWithMeta<ActionKnowledgeResponse>> {
+    const result = await this.requestWithMeta<{ rows: ActionDetails[] }>({
+      path: '/knowledge',
+      queryParams: { _id: actionId },
+      ifNoneMatch,
+    });
+
+    if (result.status === 304) {
+      return { data: null as unknown as ActionKnowledgeResponse, etag: result.etag, status: 304 };
+    }
+
+    const actions = result.data?.rows || [];
+    if (actions.length === 0) {
+      throw new ApiError(404, `Action with ID ${actionId} not found`);
+    }
+
+    const action = actions[0];
+    const knowledge: ActionKnowledgeResponse = {
+      knowledge: action.knowledge || 'No knowledge was found',
+      method: action.method || 'No method was found',
+    };
+
+    return { data: knowledge, etag: result.etag, status: result.status };
+  }
+
+  async searchActionsWithMeta(
+    platform: string,
+    query: string,
+    agentType?: 'execute' | 'knowledge',
+    ifNoneMatch?: string
+  ): Promise<ApiResponseWithMeta<AvailableAction[]>> {
+    const isKnowledgeAgent = !agentType || agentType === 'knowledge';
+    const queryParams: Record<string, string> = {
+      query,
+      limit: '5',
+    };
+    if (isKnowledgeAgent) {
+      queryParams.knowledgeAgent = 'true';
+    } else {
+      queryParams.executeAgent = 'true';
+    }
+
+    const result = await this.requestWithMeta<AvailableAction[]>({
+      path: `/available-actions/search/${platform}`,
+      queryParams,
+      ifNoneMatch,
+    });
+
+    if (result.status === 304) {
+      return { data: null as unknown as AvailableAction[], etag: result.etag, status: 304 };
+    }
+
+    return { data: result.data || [], etag: result.etag, status: result.status };
   }
 
   async executePassthroughRequest(

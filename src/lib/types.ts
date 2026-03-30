@@ -50,6 +50,7 @@ export interface Config {
   installedAgents: string[];
   createdAt: string;
   accessControl?: AccessControlSettings;
+  cacheTtl?: number;
 }
 
 export interface ConnectionsResponse {
@@ -164,6 +165,28 @@ export interface RelayDelivery {
   attempt: number;
   deliveredAt?: string;
   createdAt: string;
+}
+
+// Cache types
+
+export interface CacheEntry<T = unknown> {
+  key: string;
+  etag: string | null;
+  cachedAt: string;
+  ttl: number;
+  data: T;
+}
+
+export interface CacheMeta {
+  hit: boolean;
+  age: number;
+  fresh: boolean;
+}
+
+export interface ApiResponseWithMeta<T> {
+  data: T;
+  etag: string | null;
+  status: number;
 }
 
 export interface RelayEndpointsResponse {
