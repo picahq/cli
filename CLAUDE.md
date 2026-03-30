@@ -11,6 +11,16 @@ Do NOT run `npm publish` directly. The release is automated via GitHub.
 5. Once merged to `main`, create a **release tag** in GitHub for that version
 6. The GitHub release triggers the automated deploy to npm
 
+### Version bump checklist
+
+Every feature PR must include a version bump before shipping:
+
+1. Bump `version` in `package.json` (semver: patch for fixes, minor for features, major for breaking)
+2. Run `npm install` so `package-lock.json` updates
+3. Commit both `package.json` and `package-lock.json` in the same PR
+
+Do NOT forget this — the PR cannot be released without it.
+
 ### Branch workflow
 
 Always create a branch and PR for changes — do not commit directly to `main`.
