@@ -1,6 +1,6 @@
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
-import { getApiKey, getAccessControlFromAllSources } from '../lib/config.js';
+import { getApiKey, getApiBase, getAccessControlFromAllSources } from '../lib/config.js';
 import { OneApi, TimeoutError } from '../lib/api.js';
 import { openConnectionPage, getConnectionUrl } from '../lib/browser.js';
 import { findPlatform, findSimilarPlatforms } from '../lib/platforms.js';
@@ -21,7 +21,7 @@ export async function connectionAddCommand(platformArg?: string): Promise<void> 
     process.exit(1);
   }
 
-  const api = new OneApi(apiKey);
+  const api = new OneApi(apiKey, getApiBase());
 
   // Get platform list for validation
   const spinner = p.spinner();
@@ -140,7 +140,7 @@ export async function connectionListCommand(options?: { search?: string; limit?:
     output.error('Not configured. Run `one init` first.');
   }
 
-  const api = new OneApi(apiKey);
+  const api = new OneApi(apiKey, getApiBase());
 
   const spinner = output.createSpinner();
   spinner.start('Loading connections...');

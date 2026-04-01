@@ -1,5 +1,5 @@
 import pc from 'picocolors';
-import { getApiKey, getAccessControlFromAllSources } from '../lib/config.js';
+import { getApiKey, getApiBase, getAccessControlFromAllSources } from '../lib/config.js';
 import { OneApi } from '../lib/api.js';
 import * as output from '../lib/output.js';
 import { printTable } from '../lib/table.js';
@@ -153,7 +153,7 @@ export async function flowExecuteCommand(
   output.intro(pc.bgCyan(pc.black(' One Workflow ')));
 
   const { apiKey, permissions, actionIds } = getConfig();
-  const api = new OneApi(apiKey);
+  const api = new OneApi(apiKey, getApiBase());
 
   const spinner = output.createSpinner();
   spinner.start(`Loading workflow "${keyOrPath}"...`);
@@ -363,7 +363,7 @@ export async function flowResumeCommand(runId: string): Promise<void> {
   }
 
   const { apiKey, permissions, actionIds } = getConfig();
-  const api = new OneApi(apiKey);
+  const api = new OneApi(apiKey, getApiBase());
 
   let flow: Flow;
   try {

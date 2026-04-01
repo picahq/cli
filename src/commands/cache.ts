@@ -1,5 +1,5 @@
 import pc from 'picocolors';
-import { getApiKey } from '../lib/config.js';
+import { getApiKey, getApiBase } from '../lib/config.js';
 import { OneApi } from '../lib/api.js';
 import { printTable } from '../lib/table.js';
 import * as output from '../lib/output.js';
@@ -91,7 +91,7 @@ export async function cacheUpdateAllCommand(): Promise<void> {
     output.error('Not configured. Run `one init` first.');
   }
 
-  const api = new OneApi(apiKey);
+  const api = new OneApi(apiKey, getApiBase());
   const entries = listCacheEntries();
 
   if (entries.length === 0) {

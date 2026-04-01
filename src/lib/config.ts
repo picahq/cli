@@ -100,6 +100,27 @@ export function getAccessControl(): AccessControlSettings {
   return readConfig()?.accessControl ?? {};
 }
 
+const DEFAULT_API_BASE = 'https://api.withone.ai/v1';
+
+export function getApiBase(): string {
+  const config = readConfig();
+  if (config?.apiBase) return `${config.apiBase}/v1`;
+  return DEFAULT_API_BASE;
+}
+
+export function updateApiBase(url: string | null): void {
+  const config = readConfig();
+  if (!config) return;
+
+  if (url) {
+    config.apiBase = url;
+  } else {
+    delete config.apiBase;
+  }
+
+  writeConfig(config);
+}
+
 export function getCacheTtl(): number {
   if (process.env.ONE_CACHE_TTL) {
     const val = parseInt(process.env.ONE_CACHE_TTL, 10);

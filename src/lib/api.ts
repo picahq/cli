@@ -12,8 +12,6 @@ import type {
   ApiResponseWithMeta,
 } from './types.js';
 
-const API_BASE = 'https://api.withone.ai/v1';
-
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
     super(message);
@@ -22,7 +20,11 @@ export class ApiError extends Error {
 }
 
 export class OneApi {
-  constructor(private apiKey: string) {}
+  private apiBase: string;
+
+  constructor(private apiKey: string, apiBase?: string) {
+    this.apiBase = apiBase ?? 'https://api.withone.ai/v1';
+  }
 
   private async request<T>(path: string): Promise<T> {
     return this.requestFull<T>({ path });
@@ -35,7 +37,7 @@ export class OneApi {
     headers?: Record<string, string>;
     queryParams?: Record<string, string>;
   }): Promise<T> {
-    let url = `${API_BASE}${opts.path}`;
+    let url = `${this.apiBase}${opts.path}`;
     if (opts.queryParams && Object.keys(opts.queryParams).length > 0) {
       const params = new URLSearchParams(opts.queryParams);
       url += `?${params.toString()}`;
@@ -171,7 +173,7 @@ export class OneApi {
     queryParams?: Record<string, string>;
     ifNoneMatch?: string;
   }): Promise<ApiResponseWithMeta<T>> {
-    let url = `${API_BASE}${opts.path}`;
+    let url = `${this.apiBase}${opts.path}`;
     if (opts.queryParams && Object.keys(opts.queryParams).length > 0) {
       const params = new URLSearchParams(opts.queryParams);
       url += `?${params.toString()}`;
@@ -297,7 +299,7 @@ export class OneApi {
       : action.path;
 
     const normalizedPath = finalActionPath.startsWith('/') ? finalActionPath : `/${finalActionPath}`;
-    const url = `${API_BASE.replace('/v1', '')}/v1/passthrough${normalizedPath}`;
+    const url = `${this.apiBase.replace('/v1', '')}/v1/passthrough${normalizedPath}`;
 
     // Check if action has "custom" tag and add connectionKey to body if needed
     const isCustomAction = action.tags?.includes('custom');

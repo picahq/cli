@@ -33,8 +33,8 @@ import {
 import { cacheClearCommand, cacheListCommand, cacheUpdateAllCommand } from './commands/cache.js';
 import { guideCommand } from './commands/guide.js';
 import { onboardCommand } from './commands/onboard.js';
-import { updateCommand, checkLatestVersionCached, getCurrentVersion, autoUpdate } from './commands/update.js';
-import { setAgentMode, isAgentMode } from './lib/output.js';
+import { updateCommand, checkLatestVersionCached, getCurrentVersion, isNewerVersion, autoUpdate } from './commands/update.js';
+import { setAgentMode } from './lib/output.js';
 
 const require = createRequire(import.meta.url);
 const { version } = require('../package.json');
@@ -116,7 +116,7 @@ program.hook('postAction', async () => {
   const info = await updateCheckPromise;
   if (!info) return;
   const current = getCurrentVersion();
-  if (current === info.version) return;
+  if (!isNewerVersion(info.version, current)) return;
   // Auto-update silently in the background
   autoUpdate(info.version, info.publishedAt);
 });

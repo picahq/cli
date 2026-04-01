@@ -1,6 +1,6 @@
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
-import { getApiKey } from '../lib/config.js';
+import { getApiKey, getApiBase } from '../lib/config.js';
 import { OneApi } from '../lib/api.js';
 import { printTable } from '../lib/table.js';
 import * as output from '../lib/output.js';
@@ -17,7 +17,7 @@ export async function platformsCommand(options: { category?: string; json?: bool
     options.json = true;
   }
 
-  const api = new OneApi(apiKey);
+  const api = new OneApi(apiKey, getApiBase());
 
   const spinner = output.createSpinner();
   spinner.start('Loading platforms...');

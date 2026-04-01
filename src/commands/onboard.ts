@@ -1,4 +1,4 @@
-import { getApiKey, configExists } from '../lib/config.js';
+import { getApiKey, getApiBase, configExists } from '../lib/config.js';
 import { OneApi } from '../lib/api.js';
 import { PLATFORM_DEMO_ACTIONS, getWorkflowExamples } from '../lib/platform-meta.js';
 import * as output from '../lib/output.js';
@@ -26,7 +26,7 @@ export async function onboardCommand(step?: number): Promise<void> {
   let connections: Connection[] = [];
   if (currentStep >= 2) {
     try {
-      const api = new OneApi(apiKey);
+      const api = new OneApi(apiKey, getApiBase());
       connections = await api.listConnections();
     } catch {
       // Continue with empty connections

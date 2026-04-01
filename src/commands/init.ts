@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { writeConfig, readConfig, getConfigPath, getAccessControl } from '../lib/config.js';
+import { writeConfig, readConfig, getConfigPath, getApiBase, getAccessControl } from '../lib/config.js';
 import {
   getAllAgents,
   installMcpConfig,
@@ -189,7 +189,7 @@ async function handleUpdateKey(statuses: AgentStatus[]): Promise<void> {
   const spinner = p.spinner();
   spinner.start('Validating API key...');
 
-  const api = new OneApi(newKey);
+  const api = new OneApi(newKey, getApiBase());
   const isValid = await api.validateApiKey();
 
   if (!isValid) {
@@ -699,7 +699,7 @@ async function freshSetup(options: { yes?: boolean; global?: boolean; project?: 
   const spinner = p.spinner();
   spinner.start('Validating API key...');
 
-  const api = new OneApi(apiKey);
+  const api = new OneApi(apiKey, getApiBase());
   const isValid = await api.validateApiKey();
 
   if (!isValid) {
@@ -759,7 +759,7 @@ const TOP_INTEGRATIONS = [
 ];
 
 async function promptConnectIntegrations(apiKey: string): Promise<void> {
-  const api = new OneApi(apiKey);
+  const api = new OneApi(apiKey, getApiBase());
   const connected: string[] = [];
 
   // Check which top integrations are already connected

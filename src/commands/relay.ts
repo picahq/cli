@@ -1,5 +1,5 @@
 import pc from 'picocolors';
-import { getApiKey, getAccessControlFromAllSources } from '../lib/config.js';
+import { getApiKey, getApiBase, getAccessControlFromAllSources } from '../lib/config.js';
 import { OneApi } from '../lib/api.js';
 import { printTable } from '../lib/table.js';
 import * as output from '../lib/output.js';
@@ -38,7 +38,7 @@ export async function relayCreateCommand(options: {
     output.error(`Connection key "${options.connectionKey}" is not allowed.`);
   }
 
-  const api = new OneApi(apiKey);
+  const api = new OneApi(apiKey, getApiBase());
   const spinner = output.createSpinner();
   spinner.start('Creating relay endpoint...');
 
@@ -78,7 +78,7 @@ export async function relayListCommand(options: {
   page?: string;
 }): Promise<void> {
   const { apiKey } = getConfig();
-  const api = new OneApi(apiKey);
+  const api = new OneApi(apiKey, getApiBase());
   const spinner = output.createSpinner();
   spinner.start('Loading relay endpoints...');
 
@@ -132,7 +132,7 @@ export async function relayListCommand(options: {
 
 export async function relayGetCommand(id: string): Promise<void> {
   const { apiKey } = getConfig();
-  const api = new OneApi(apiKey);
+  const api = new OneApi(apiKey, getApiBase());
   const spinner = output.createSpinner();
   spinner.start('Loading relay endpoint...');
 
@@ -176,7 +176,7 @@ export async function relayUpdateCommand(
   }
 ): Promise<void> {
   const { apiKey } = getConfig();
-  const api = new OneApi(apiKey);
+  const api = new OneApi(apiKey, getApiBase());
   const spinner = output.createSpinner();
   spinner.start('Updating relay endpoint...');
 
@@ -208,7 +208,7 @@ export async function relayUpdateCommand(
 
 export async function relayDeleteCommand(id: string): Promise<void> {
   const { apiKey } = getConfig();
-  const api = new OneApi(apiKey);
+  const api = new OneApi(apiKey, getApiBase());
   const spinner = output.createSpinner();
   spinner.start('Deleting relay endpoint...');
 
@@ -234,7 +234,7 @@ export async function relayActivateCommand(
   options: { actions: string; webhookSecret?: string }
 ): Promise<void> {
   const { apiKey } = getConfig();
-  const api = new OneApi(apiKey);
+  const api = new OneApi(apiKey, getApiBase());
   const spinner = output.createSpinner();
   spinner.start('Activating relay endpoint...');
 
@@ -270,7 +270,7 @@ export async function relayEventsCommand(options: {
   before?: string;
 }): Promise<void> {
   const { apiKey } = getConfig();
-  const api = new OneApi(apiKey);
+  const api = new OneApi(apiKey, getApiBase());
   const spinner = output.createSpinner();
   spinner.start('Loading relay events...');
 
@@ -324,7 +324,7 @@ export async function relayEventsCommand(options: {
 
 export async function relayEventGetCommand(id: string): Promise<void> {
   const { apiKey } = getConfig();
-  const api = new OneApi(apiKey);
+  const api = new OneApi(apiKey, getApiBase());
   const spinner = output.createSpinner();
   spinner.start('Loading relay event...');
 
@@ -360,7 +360,7 @@ export async function relayDeliveriesCommand(options: {
   }
 
   const { apiKey } = getConfig();
-  const api = new OneApi(apiKey);
+  const api = new OneApi(apiKey, getApiBase());
   const spinner = output.createSpinner();
   spinner.start('Loading deliveries...');
 
@@ -401,7 +401,7 @@ export async function relayDeliveriesCommand(options: {
 
 export async function relayEventTypesCommand(platform: string): Promise<void> {
   const { apiKey } = getConfig();
-  const api = new OneApi(apiKey);
+  const api = new OneApi(apiKey, getApiBase());
   const spinner = output.createSpinner();
   spinner.start(`Loading event types for ${pc.cyan(platform)}...`);
 

@@ -122,6 +122,16 @@ export async function updateCommand(): Promise<void> {
  * Spawns a detached npm install process so it doesn't block the current command.
  * Respects a 30-minute age gate — won't install versions published less than 30min ago.
  */
+/** Returns true if `latest` is strictly newer than `current` (semver comparison). */
+export function isNewerVersion(latest: string, current: string): boolean {
+  const parse = (v: string) => v.split('.').map(Number);
+  const [lMaj, lMin, lPat] = parse(latest);
+  const [cMaj, cMin, cPat] = parse(current);
+  if (lMaj !== cMaj) return lMaj > cMaj;
+  if (lMin !== cMin) return lMin > cMin;
+  return lPat > cPat;
+}
+
 export function autoUpdate(targetVersion: string, publishedAt: string | null): void {
   // Age gate: don't install versions published less than 30min ago
   if (publishedAt) {

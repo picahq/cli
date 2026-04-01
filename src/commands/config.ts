@@ -1,8 +1,9 @@
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
-import { readConfig, getAccessControl, updateAccessControl } from '../lib/config.js';
+import { readConfig, writeConfig, getApiBase, getAccessControl, updateAccessControl, updateApiBase } from '../lib/config.js';
 import { getAgentStatuses, installMcpConfig } from '../lib/agents.js';
 import { OneApi } from '../lib/api.js';
+import { getApiKeyUrl } from '../lib/browser.js';
 import * as output from '../lib/output.js';
 import type { AccessControlSettings, PermissionLevel } from '../lib/types.js';
 
@@ -125,6 +126,129 @@ export async function configCommand(): Promise<void> {
     return;
   }
 
+  // 5. API base URL
+  const currentBase = getApiBase();
+  const isCustomBase = !!readConfig()?.apiBase;
+
+  const baseUrlMode = await p.select({
+    message: 'API base URL',
+    options: [
+      { value: 'default', label: 'Default', hint: 'https://api.withone.ai' },
+      { value: 'custom', label: 'Custom', hint: 'Use a different API endpoint' },
+    ],
+    initialValue: isCustomBase ? 'custom' : 'default',
+  });
+
+  if (p.isCancel(baseUrlMode)) {
+    p.outro('No changes made.');
+    return;
+  }
+
+  let newApiKey = config.apiKey;
+
+  if (baseUrlMode === 'custom') {
+    const customUrl = await p.text({
+      message: 'Enter API base URL:',
+      placeholder: 'https://development-api.withone.ai',
+      initialValue: isCustomBase ? currentBase.replace(/\/v1$/, '') : '',
+      validate: (value) => {
+        if (!value) return 'URL is required';
+        try { new URL(value); } catch { return 'Invalid URL'; }
+        return undefined;
+      },
+    });
+
+    if (p.isCancel(customUrl)) {
+      p.outro('No changes made.');
+      return;
+    }
+
+    const normalized = customUrl.replace(/\/+$/, '').replace(/\/v1$/, '');
+
+    const apiKey = await p.text({
+      message: `Enter your API key for ${pc.cyan(normalized)}:`,
+      placeholder: 'sk_live_...',
+      validate: (value) => {
+        if (!value) return 'API key is required';
+        if (!value.startsWith('sk_live_') && !value.startsWith('sk_test_')) {
+          return 'API key should start with sk_live_ or sk_test_';
+        }
+        return undefined;
+      },
+    });
+
+    if (p.isCancel(apiKey)) {
+      p.outro('No changes made.');
+      return;
+    }
+
+    const spinner = p.spinner();
+    spinner.start('Validating API key...');
+
+    let isValid = false;
+    try {
+      const api = new OneApi(apiKey, `${normalized}/v1`);
+      isValid = await api.validateApiKey();
+    } catch (err) {
+      spinner.stop('Connection failed');
+      const msg = err instanceof Error ? err.message : String(err);
+      p.log.error(`Could not reach ${pc.cyan(normalized)}: ${msg}`);
+      return;
+    }
+
+    if (!isValid) {
+      spinner.stop('Invalid API key');
+      p.log.error(`Invalid API key for ${pc.cyan(normalized)}.`);
+      return;
+    }
+
+    spinner.stop('API key validated');
+    updateApiBase(normalized);
+    newApiKey = apiKey;
+  } else if (isCustomBase) {
+    // Switching back to default — need a key for production
+    const apiKey = await p.text({
+      message: `Enter your API key for ${pc.cyan('https://api.withone.ai')}:`,
+      placeholder: 'sk_live_...',
+      validate: (value) => {
+        if (!value) return 'API key is required';
+        if (!value.startsWith('sk_live_') && !value.startsWith('sk_test_')) {
+          return 'API key should start with sk_live_ or sk_test_';
+        }
+        return undefined;
+      },
+    });
+
+    if (p.isCancel(apiKey)) {
+      p.outro('No changes made.');
+      return;
+    }
+
+    const spinner = p.spinner();
+    spinner.start('Validating API key...');
+
+    let isValid = false;
+    try {
+      const api = new OneApi(apiKey, 'https://api.withone.ai/v1');
+      isValid = await api.validateApiKey();
+    } catch (err) {
+      spinner.stop('Connection failed');
+      const msg = err instanceof Error ? err.message : String(err);
+      p.log.error(`Could not reach ${pc.cyan('https://api.withone.ai')}: ${msg}`);
+      return;
+    }
+
+    if (!isValid) {
+      spinner.stop('Invalid API key');
+      p.log.error(`Invalid API key. Get a valid key at ${getApiKeyUrl()}`);
+      return;
+    }
+
+    spinner.stop('API key validated');
+    updateApiBase(null);
+    newApiKey = apiKey;
+  }
+
   // Build settings
   const settings: AccessControlSettings = {
     permissions: permissions as PermissionLevel,
@@ -133,8 +257,13 @@ export async function configCommand(): Promise<void> {
     knowledgeAgent: knowledgeAgent as boolean,
   };
 
-  // Save
+  // Save access control + API key
   updateAccessControl(settings);
+  const updatedConfig = readConfig();
+  if (updatedConfig && newApiKey !== config.apiKey) {
+    updatedConfig.apiKey = newApiKey;
+    writeConfig(updatedConfig);
+  }
 
   // Reinstall all agents
   const ac = getAccessControl();
@@ -143,11 +272,11 @@ export async function configCommand(): Promise<void> {
 
   for (const s of statuses) {
     if (s.globalMcp) {
-      installMcpConfig(s.agent, config.apiKey, 'global', ac);
+      installMcpConfig(s.agent, newApiKey, 'global', ac);
       reinstalled.push(`${s.agent.name} (global)`);
     }
     if (s.projectMcp) {
-      installMcpConfig(s.agent, config.apiKey, 'project', ac);
+      installMcpConfig(s.agent, newApiKey, 'project', ac);
       reinstalled.push(`${s.agent.name} (project)`);
     }
   }
@@ -156,7 +285,7 @@ export async function configCommand(): Promise<void> {
     p.log.success(`Updated MCP configs: ${reinstalled.join(', ')}`);
   }
 
-  p.outro('Access control updated.');
+  p.outro('Configuration updated.');
 }
 
 async function selectConnections(apiKey: string): Promise<string[] | undefined> {
@@ -166,7 +295,7 @@ async function selectConnections(apiKey: string): Promise<string[] | undefined> 
   let connections: { platform: string; key: string }[];
 
   try {
-    const api = new OneApi(apiKey);
+    const api = new OneApi(apiKey, getApiBase());
     const rawConnections = await api.listConnections();
     connections = rawConnections.map(c => ({ platform: c.platform, key: c.key }));
     spinner.stop(`Found ${connections.length} connection(s)`);
@@ -202,6 +331,8 @@ async function selectConnections(apiKey: string): Promise<string[] | undefined> 
   if (p.isCancel(selected)) return undefined;
   return selected as string[];
 }
+
+
 
 function formatList(list: string[] | undefined): string {
   if (!list || list.length === 0) return 'all';

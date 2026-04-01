@@ -1,6 +1,6 @@
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
-import { getApiKey, getAccessControlFromAllSources } from '../lib/config.js';
+import { getApiKey, getApiBase, getAccessControlFromAllSources } from '../lib/config.js';
 import {
   OneApi,
   filterByPermissions,
@@ -54,7 +54,7 @@ export async function actionsSearchCommand(
   output.intro(pc.bgCyan(pc.black(' One ')));
 
   const { apiKey, permissions, actionIds, knowledgeAgent } = getConfig();
-  const api = new OneApi(apiKey);
+  const api = new OneApi(apiKey, getApiBase());
 
   const spinner = output.createSpinner();
   spinner.start(`Searching actions on ${pc.cyan(platform)} for "${query}"...`);
@@ -222,7 +222,7 @@ export async function actionsKnowledgeCommand(
   output.intro(pc.bgCyan(pc.black(' One ')));
 
   const { apiKey, actionIds, connectionKeys } = getConfig();
-  const api = new OneApi(apiKey);
+  const api = new OneApi(apiKey, getApiBase());
 
   // Check action allowlist
   if (!isActionAllowed(actionId, actionIds)) {
@@ -369,7 +369,7 @@ export async function actionsExecuteCommand(
     output.error(`Connection key "${connectionKey}" is not allowed.`);
   }
 
-  const api = new OneApi(apiKey);
+  const api = new OneApi(apiKey, getApiBase());
 
   const spinner = output.createSpinner();
   spinner.start('Loading action details...');

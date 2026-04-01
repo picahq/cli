@@ -51,6 +51,7 @@ export interface Config {
   createdAt: string;
   accessControl?: AccessControlSettings;
   cacheTtl?: number;
+  apiBase?: string;
 }
 
 export interface ConnectionsResponse {
