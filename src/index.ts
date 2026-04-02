@@ -4,7 +4,7 @@ import { createRequire } from 'module';
 import { Command } from 'commander';
 import { initCommand } from './commands/init.js';
 import { configCommand } from './commands/config.js';
-import { connectionAddCommand, connectionListCommand } from './commands/connection.js';
+import { connectionAddCommand, connectionListCommand, connectionDeleteCommand } from './commands/connection.js';
 import { platformsCommand } from './commands/platforms.js';
 import { actionsSearchCommand, actionsKnowledgeCommand, actionsExecuteCommand } from './commands/actions.js';
 import {
@@ -49,6 +49,7 @@ program
   Setup:
     one init                              Set up API key and install MCP server
     one add <platform>                    Connect a platform via OAuth (e.g. gmail, slack, shopify)
+    one connection delete <key>           Remove a connection (alias: one connection rm)
     one config                            Configure access control (permissions, scoping)
 
   Workflow (use these in order):
@@ -158,6 +159,15 @@ connection
   .option('-l, --limit <n>', 'Max connections to return (agent mode default: 20)')
   .action(async (options) => {
     await connectionListCommand(options);
+  });
+
+connection
+  .command('delete <connection-key>')
+  .alias('rm')
+  .description('Delete a connection')
+  .option('-f, --force', 'Skip confirmation prompt')
+  .action(async (connectionKey: string, options: { force?: boolean }) => {
+    await connectionDeleteCommand(connectionKey, options);
   });
 
 program

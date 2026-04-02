@@ -162,6 +162,21 @@ one list
 
 You need the connection key (rightmost column) when executing actions.
 
+### `one connection delete <connection-key>`
+
+Remove a connection by its key.
+
+```bash
+one connection delete live::gmail::default::abc123
+one connection rm live::gmail::default::abc123      # alias
+```
+
+Shows the connection details and asks for confirmation before deleting. Use `--force` to skip the confirmation prompt.
+
+| Option | What it does |
+|--------|-------------|
+| `-f, --force` | Skip confirmation prompt |
+
 ### `one platforms`
 
 Browse all 200+ available platforms.

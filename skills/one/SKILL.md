@@ -34,6 +34,14 @@ one --agent connection list
 
 Returns connected platforms with their connection keys (needed for execution) and platform names in kebab-case (needed for searching).
 
+### 1b. Delete a connection
+
+```bash
+one --agent connection delete <connection-key>
+```
+
+Removes a connection. Returns `{"deleted": true, "platform": "...", "key": "..."}` on success. Use the connection key from `one --agent connection list`.
+
 ### 2. Search for the right action
 
 ```bash
@@ -126,3 +134,11 @@ If the user needs a platform that isn't connected yet, tell them to run:
 one add <platform>
 ```
 This is interactive and opens the browser for OAuth. After connecting, the platform will appear in `one --agent connection list`.
+
+## Removing Connections
+
+To delete a connection that is no longer needed:
+```bash
+one --agent connection delete <connection-key>
+```
+The connection key comes from `one --agent connection list`. Returns `{"deleted": true, "platform": "...", "key": "..."}` on success.

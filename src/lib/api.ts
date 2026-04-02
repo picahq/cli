@@ -97,6 +97,10 @@ export class OneApi {
     return allConnections;
   }
 
+  async deleteConnection(id: string): Promise<void> {
+    await this.requestFull({ path: `/vault/connections/${id}`, method: 'DELETE' });
+  }
+
   async listPlatforms(): Promise<Platform[]> {
     const allPlatforms: Platform[] = [];
     let page = 1;

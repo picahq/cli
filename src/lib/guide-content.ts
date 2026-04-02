@@ -31,6 +31,7 @@ Search for actions, read their docs, and execute them. This is the core workflow
 **Quick start:**
 \`\`\`bash
 one --agent connection list                                    # See connected platforms
+one --agent connection delete <connection-key>                 # Remove a connection
 one --agent actions search <platform> "<query>" -t execute     # Find an action
 one --agent actions knowledge <platform> <actionId>            # Read docs (REQUIRED)
 one --agent actions execute <platform> <actionId> <key> -d '{}'  # Execute it
@@ -114,6 +115,14 @@ one --agent connection list
 \`\`\`
 
 Returns platforms, status, connection keys, and tags.
+
+### 1b. Delete a Connection
+
+\`\`\`bash
+one --agent connection delete <connection-key>
+\`\`\`
+
+Removes a connection by its key. In agent mode, returns \`{"deleted": true, "platform": "...", "key": "..."}\`. The connection key comes from \`one connection list\`.
 
 ### 2. Search Actions
 
