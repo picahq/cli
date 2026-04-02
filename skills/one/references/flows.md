@@ -172,13 +172,46 @@ A pure `$.xxx` value resolves to the raw type. A string containing `{{$.xxx}}` d
 
 ### `parallel` — Run steps concurrently
 
+Use when fetching from 2+ independent data sources before combining results. Each substep must have the full step schema (`id`, `name`, `type`, and type-specific config).
+
 ```json
 {
-  "id": "lookups",
+  "id": "fetchAll",
+  "name": "Fetch email and calendar data in parallel",
   "type": "parallel",
-  "parallel": { "maxConcurrency": 5, "steps": [...] }
+  "parallel": {
+    "maxConcurrency": 5,
+    "steps": [
+      {
+        "id": "fetchEmails",
+        "name": "Fetch recent emails",
+        "type": "action",
+        "action": {
+          "platform": "gmail",
+          "actionId": "conn_mod_def::GmailListMessages::xxx",
+          "connectionKey": "$.input.gmailKey",
+          "pathVars": { "userId": "me" },
+          "queryParams": { "maxResults": 10 }
+        }
+      },
+      {
+        "id": "fetchEvents",
+        "name": "Fetch today's calendar events",
+        "type": "action",
+        "action": {
+          "platform": "google-calendar",
+          "actionId": "conn_mod_def::CalendarListEvents::xxx",
+          "connectionKey": "$.input.calendarKey",
+          "pathVars": { "calendarId": "primary" },
+          "queryParams": { "maxResults": 10 }
+        }
+      }
+    ]
+  }
 }
 ```
+
+After a parallel step, access each substep's output by its `id`: `$.steps.fetchEmails.response`, `$.steps.fetchEvents.response`.
 
 ### `file-read` / `file-write` — Filesystem access
 
@@ -247,7 +280,18 @@ Strategies: `fail` (default), `continue`, `retry`, `fallback`.
 
 Conditional execution: `"if": "$.steps.find.response.data.length > 0"`
 
-## AI-Augmented Pattern: file-write -> bash -> code
+## AI-Augmented Patterns
+
+### When to use parallel steps
+
+Use `parallel` when your workflow fetches from 2+ independent data sources before combining them. Common patterns:
+- Fetch Gmail + Calendar + Sheets → compile into daily briefing
+- Search Exa + scrape with Firecrawl → merge research data
+- Query BigQuery + list Google Drive files → combine for analysis
+
+Each substep inside `parallel.steps` must have the full step schema: `id`, `name`, `type`, and the type-specific config (`action`, `code`, etc.). Follow a parallel step with a `code` or `transform` step to combine the results.
+
+### file-write -> bash -> code
 
 When raw data needs analysis, use this pattern:
 1. `file-write` — save data to temp file (API responses are too large to inline)
