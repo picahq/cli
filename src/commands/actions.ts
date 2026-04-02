@@ -60,10 +60,10 @@ export async function actionsSearchCommand(
   spinner.start(`Searching actions on ${pc.cyan(platform)} for "${query}"...`);
 
   try {
-    // Force knowledge mode when knowledgeAgent is enabled
+    // Default to execute mode; only use knowledge mode when explicitly enabled in config
     const agentType = knowledgeAgent
       ? 'knowledge'
-      : (options.type as 'execute' | 'knowledge' | undefined);
+      : (options.type as 'execute' | 'knowledge' | undefined) || 'execute';
 
     const useCache = options.cache !== false;
     const cachePath = searchCachePath(platform, query, agentType || 'knowledge');

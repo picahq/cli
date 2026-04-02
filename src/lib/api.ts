@@ -121,7 +121,7 @@ export class OneApi {
     query: string,
     agentType?: 'execute' | 'knowledge'
   ): Promise<AvailableAction[]> {
-    const isKnowledgeAgent = !agentType || agentType === 'knowledge';
+    const isKnowledgeAgent = agentType === 'knowledge';
     const queryParams: Record<string, string> = {
       query,
       limit: '5',
@@ -253,7 +253,7 @@ export class OneApi {
     agentType?: 'execute' | 'knowledge',
     ifNoneMatch?: string
   ): Promise<ApiResponseWithMeta<AvailableAction[]>> {
-    const isKnowledgeAgent = !agentType || agentType === 'knowledge';
+    const isKnowledgeAgent = agentType === 'knowledge';
     const queryParams: Record<string, string> = {
       query,
       limit: '5',
