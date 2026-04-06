@@ -102,6 +102,20 @@ Connection inputs with a `connection` field auto-resolve if the user has exactly
 
 A pure `$.xxx` value resolves to the raw type. A string containing `{{$.xxx}}` does string interpolation.
 
+### Selectors vs expressions
+
+Selectors in data fields (`data`, `queryParams`, `pathVars`, `connectionKey`) are **dot-path lookups only** — they do not support JavaScript operators like `||` or `&&`. For default values, use the `default` field on the input definition:
+
+```json
+{
+  "inputs": {
+    "maxResults": { "type": "number", "default": 10 }
+  }
+}
+```
+
+The `if`, `unless`, `condition.expression`, `while.condition`, `transform.expression`, and `code.source` fields **do** support full JavaScript expressions (e.g., `$.input.email && $.input.email.length > 0`).
+
 ## Step Types
 
 ### `action` — Execute a One API action

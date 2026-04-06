@@ -472,6 +472,16 @@ Every step MUST have \`id\`, \`name\`, and \`type\`. The \`type\` determines whi
 - **Interpolation** (\`{{$.input.x}}\`): Use inside string values where the selector is embedded in text — e.g., \`"Hello {{$.steps.getUser.response.name}}"\`. The resolved value is always stringified. Use this in \`data\`, \`pathVars\`, and \`queryParams\` when mixing selectors with literal text.
 - **Rule of thumb**: If the value is purely a selector, use bare. If it's a string containing a selector, use \`{{...}}\`.
 
+### Selectors vs expressions
+
+Selectors in data fields (\`data\`, \`queryParams\`, \`pathVars\`, \`connectionKey\`) are **dot-path lookups only** — they do not support JavaScript operators like \`||\` or \`&&\`. For default values, use the \`default\` field on the input definition:
+
+\`\`\`json
+{ "inputs": { "maxResults": { "type": "number", "default": 10 } } }
+\`\`\`
+
+The \`if\`, \`unless\`, \`condition.expression\`, \`while.condition\`, \`transform.expression\`, and \`code.source\` fields **do** support full JavaScript expressions (e.g., \`$.input.email && $.input.email.length > 0\`).
+
 ### \`output\` vs \`response\` on step results
 
 Every completed step produces both \`output\` and \`response\`:

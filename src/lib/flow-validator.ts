@@ -247,12 +247,17 @@ export function validateSelectorReferences(flow: Flow): ValidationError[] {
 
   const allStepIds = getAllStepIds(flow.steps);
 
+  // Matches individual $.x.y.z selector tokens, stopping at operators and whitespace
+  const SELECTOR_TOKEN_RE = /\$\.[a-zA-Z_][\w.\[\]*]*/g;
+
   function extractSelectors(value: unknown): string[] {
     const selectors: string[] = [];
     if (typeof value === 'string') {
-      if (value.startsWith('$.')) {
-        selectors.push(value);
+      // Extract all $.x.y.z tokens (handles expressions like "$.input.x && $.input.y > 0")
+      for (const match of value.matchAll(SELECTOR_TOKEN_RE)) {
+        selectors.push(match[0]);
       }
+      // Also extract from {{...}} interpolations
       const interpolated = value.matchAll(/\{\{(\$\.[^}]+)\}\}/g);
       for (const match of interpolated) {
         selectors.push(match[1]);
@@ -289,7 +294,29 @@ export function validateSelectorReferences(flow: Flow): ValidationError[] {
     }
   }
 
+  // Fields that are evaluated as JS expressions at runtime (not dot-path selectors)
+  const EXPRESSION_FIELDS = new Set(['condition.expression', 'while.condition']);
+
+  function checkOperatorsInSelectorField(value: unknown, path: string): void {
+    if (typeof value === 'string' && value.startsWith('$.')) {
+      if (value.includes('||')) {
+        errors.push({ path, message: `Selector "${value}" contains unsupported operator "||". Selectors in data fields use dot-path resolution, not JS evaluation. Use the "default" field on the input definition instead, or use a "code" step for complex expressions.` });
+      } else if (value.includes('&&')) {
+        errors.push({ path, message: `Selector "${value}" contains unsupported operator "&&". Selectors in data fields use dot-path resolution, not JS evaluation. Use a "condition" step or "code" step for complex expressions.` });
+      }
+    } else if (value && typeof value === 'object' && !Array.isArray(value)) {
+      for (const [k, v] of Object.entries(value)) {
+        checkOperatorsInSelectorField(v, `${path}.${k}`);
+      }
+    } else if (Array.isArray(value)) {
+      for (let i = 0; i < value.length; i++) {
+        checkOperatorsInSelectorField(value[i], `${path}[${i}]`);
+      }
+    }
+  }
+
   function checkStep(step: FlowStep, pathPrefix: string): void {
+    // if/unless are JS expressions — validate selector references but allow operators
     if (step.if) checkSelectors(extractSelectors(step.if), `${pathPrefix}.if`);
     if (step.unless) checkSelectors(extractSelectors(step.unless), `${pathPrefix}.unless`);
 
@@ -304,7 +331,13 @@ export function validateSelectorReferences(flow: Flow): ValidationError[] {
             if (fd.stepsArray) continue; // steps are checked recursively below
             const value = (config as Record<string, unknown>)[fieldName];
             if (value !== undefined) {
-              checkSelectors(extractSelectors(value), `${pathPrefix}.${descriptor.configKey}.${fieldName}`);
+              const fieldKey = `${descriptor.configKey}.${fieldName}`;
+              const fieldPath = `${pathPrefix}.${fieldKey}`;
+              checkSelectors(extractSelectors(value), fieldPath);
+              // For non-expression fields, detect operators that won't work at runtime
+              if (!EXPRESSION_FIELDS.has(fieldKey)) {
+                checkOperatorsInSelectorField(value, fieldPath);
+              }
             }
           }
         }
