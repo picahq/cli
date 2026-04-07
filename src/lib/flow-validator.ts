@@ -332,8 +332,10 @@ export function validateSelectorReferences(flow: Flow): ValidationError[] {
       for (const match of value.matchAll(SELECTOR_TOKEN_RE)) {
         selectors.push(match[0]);
       }
-      // Also extract from {{...}} interpolations
-      const interpolated = value.matchAll(/\{\{(\$\.[^}]+)\}\}/g);
+      // Also extract from {{...}} interpolations. Stop the selector token at
+      // whitespace OR a `|` so escape pipes (cli#53, e.g. `{{$.x | shell}}`)
+      // and the legacy `q` prefix don't get pulled into the selector text.
+      const interpolated = value.matchAll(/\{\{\s*(?:q\s+)?(\$\.[^}\s|]+)/g);
       for (const match of interpolated) {
         selectors.push(match[1]);
       }

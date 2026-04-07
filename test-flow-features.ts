@@ -1587,6 +1587,24 @@ describe('cli#53: Handlebars context-aware escaping pipes', () => {
     assert.equal(out, 'foo\\|bar \\[baz\\]');
   });
 
+  it('validator does not treat the pipe as part of the selector name', () => {
+    // Regression: extractSelectors used `{{(\\$\\.[^}]+)}}` which captured
+    // `$.input.name | shell` as the selector and reported "undefined input
+    // 'name | shell'". The fix stops at whitespace or `|`.
+    const flow: Flow = {
+      key: 'test', name: 'test',
+      inputs: { name: { type: 'string', default: 'x' } },
+      steps: [
+        {
+          id: 's', name: 's', type: 'transform',
+          transform: { expression: '`echo {{$.input.name | shell}}`' },
+        },
+      ],
+    };
+    const errors = validateFlow(flow);
+    assert.deepEqual(errors, [], `expected clean validation, got ${JSON.stringify(errors)}`);
+  });
+
   it('handles space-padded pipe expressions like {{ $.x | json }}', () => {
     // Regression for routing bug found by stress agent.
     const out = resolveValue('{{ $.input.name | json }}', ctx);
