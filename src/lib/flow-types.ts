@@ -110,6 +110,13 @@ export interface FlowStep {
   type: FlowStepType;
   if?: string;
   unless?: string;
+  /**
+   * Wall-clock timeout for the step in milliseconds. When exceeded, the step fails with
+   * a TimeoutError (errorCode: 'TIMEOUT'). If `onError.strategy` is `continue`, the step
+   * result will have `status: 'timeout'` so downstream steps can distinguish a timeout
+   * from a normal failure.
+   */
+  timeoutMs?: number;
   onError?: FlowStepErrorConfig;
   action?: FlowActionConfig;
   transform?: FlowTransformConfig;
@@ -135,10 +142,17 @@ export interface Flow {
 }
 
 export interface StepResult {
-  status: 'success' | 'skipped' | 'failed';
+  // 'success' — step ran and produced output
+  // 'skipped' — step was skipped by an `if`/`unless` condition
+  // 'failed'  — step threw an error (and onError swallowed it, or the engine is reporting pre-throw state)
+  // 'timeout' — step exceeded its configured `timeoutMs`
+  status: 'success' | 'skipped' | 'failed' | 'timeout';
   response?: unknown;
   output?: unknown;
   error?: string;
+  // Machine-readable error classifier. Currently set to 'TIMEOUT' for timed-out steps.
+  // Other steps may populate this in the future (e.g. HTTP status codes for action errors).
+  errorCode?: string;
   durationMs?: number;
   retries?: number;
 }

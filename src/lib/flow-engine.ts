@@ -22,6 +22,29 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
+ * Error thrown when a step exceeds its `timeoutMs`. Carries an `errorCode` of
+ * 'TIMEOUT' so the step-result builder can surface `status: 'timeout'` to
+ * downstream consumers (withoneai/cli#58, #67).
+ */
+class StepTimeoutError extends Error {
+  errorCode = 'TIMEOUT' as const;
+  constructor(stepId: string, timeoutMs: number) {
+    super(`Step "${stepId}" exceeded timeout of ${timeoutMs}ms`);
+    this.name = 'StepTimeoutError';
+  }
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, stepId: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeoutPromise = new Promise<T>((_, reject) => {
+    timer = setTimeout(() => reject(new StepTimeoutError(stepId, timeoutMs)), timeoutMs);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timer) clearTimeout(timer);
+  }) as Promise<T>;
+}
+
+/**
  * Compute the delay before retry attempt N (1-indexed first retry = attempt 2
  * in the executor loop). Honours `backoff` and `maxDelayMs` from the step's
  * onError config; defaults to fixed-delay so existing flows are unchanged.
@@ -673,15 +696,52 @@ async function executeSubflowStep(
     [...flowStack, resolvedKey],
   );
 
-  // Canonicalise sub-flow output: both `.output` and `.response` expose the
-  // same value — the sub-flow's steps map, keyed by sub-step id. Previously
-  // `.response` returned the full sub-flow context (which also contained
-  // `.steps`, `.input`, `.env`), so callers saw two different shapes
-  // depending on which alias they used (cli#47).
+  // Sub-flow output layout (withoneai/cli#66):
+  //
+  //   Previously: `output = subContext.steps`, forcing callers to write
+  //     `$.steps.loadConfig.output.<innerStepId>.output.<field>`
+  //
+  //   Now: we flatten the sub-flow's FINAL step output onto the top-level
+  //   output, so `$.steps.loadConfig.output.<field>` works directly. The
+  //   legacy nested path (`.output.<innerStepId>.output.<field>`) continues
+  //   to work because we spread flattened fields OVER the steps map — both
+  //   access patterns resolve. If an inner step id collides with a
+  //   flattened field name, the flattened field wins (and we emit a
+  //   deprecation warning once per collision).
+  //
+  //   Also exposed: `output._steps` always points at the full sub-flow
+  //   steps map for callers that need deterministic access regardless of
+  //   field collisions.
+  const finalStep = subFlow.steps[subFlow.steps.length - 1];
+  const finalOutput = finalStep ? subContext.steps[finalStep.id]?.output : undefined;
+  let flattenedOutput: unknown;
+  if (finalOutput && typeof finalOutput === 'object' && !Array.isArray(finalOutput)) {
+    const collisions = Object.keys(finalOutput as Record<string, unknown>).filter(
+      k => k in subContext.steps,
+    );
+    if (collisions.length > 0) {
+      options.onEvent?.({
+        event: 'flow:warning',
+        message: `Sub-flow "${resolvedKey}" final step output fields [${collisions.join(', ')}] collide with sub-step ids — flattened fields take precedence.`,
+      } as FlowEvent);
+    }
+    flattenedOutput = {
+      ...subContext.steps,
+      ...(finalOutput as Record<string, unknown>),
+      _steps: subContext.steps,
+    };
+  } else {
+    flattenedOutput = {
+      ...subContext.steps,
+      _steps: subContext.steps,
+      ...(finalOutput !== undefined ? { _finalOutput: finalOutput } : {}),
+    };
+  }
+
   return {
     status: 'success',
-    output: subContext.steps,
-    response: subContext.steps,
+    output: flattenedOutput,
+    response: flattenedOutput,
   };
 }
 
@@ -844,48 +904,40 @@ export async function executeSingleStep(
         return result;
       }
 
-      let result: StepResult;
+      const dispatch = async (): Promise<StepResult> => {
+        switch (step.type) {
+          case 'action':
+            return await executeActionStep(step, context, api, permissions, allowedActionIds);
+          case 'transform':
+            return executeTransformStep(step, context);
+          case 'code':
+            return await executeCodeStep(step, context, options);
+          case 'condition':
+            return await executeConditionStep(step, context, api, permissions, allowedActionIds, options, flowStack);
+          case 'loop':
+            return await executeLoopStep(step, context, api, permissions, allowedActionIds, options, flowStack);
+          case 'parallel':
+            return await executeParallelStep(step, context, api, permissions, allowedActionIds, options, flowStack);
+          case 'file-read':
+            return executeFileReadStep(step, context);
+          case 'file-write':
+            return executeFileWriteStep(step, context);
+          case 'while':
+            return await executeWhileStep(step, context, api, permissions, allowedActionIds, options, flowStack);
+          case 'flow':
+            return await executeSubflowStep(step, context, api, permissions, allowedActionIds, options, flowStack);
+          case 'paginate':
+            return await executePaginateStep(step, context, api, permissions, allowedActionIds, options);
+          case 'bash':
+            return await executeBashStep(step, context, options);
+          default:
+            throw new Error(`Unknown step type: ${step.type}`);
+        }
+      };
 
-      switch (step.type) {
-        case 'action':
-          result = await executeActionStep(step, context, api, permissions, allowedActionIds);
-          break;
-        case 'transform':
-          result = executeTransformStep(step, context);
-          break;
-        case 'code':
-          result = await executeCodeStep(step, context, options);
-          break;
-        case 'condition':
-          result = await executeConditionStep(step, context, api, permissions, allowedActionIds, options, flowStack);
-          break;
-        case 'loop':
-          result = await executeLoopStep(step, context, api, permissions, allowedActionIds, options, flowStack);
-          break;
-        case 'parallel':
-          result = await executeParallelStep(step, context, api, permissions, allowedActionIds, options, flowStack);
-          break;
-        case 'file-read':
-          result = executeFileReadStep(step, context);
-          break;
-        case 'file-write':
-          result = executeFileWriteStep(step, context);
-          break;
-        case 'while':
-          result = await executeWhileStep(step, context, api, permissions, allowedActionIds, options, flowStack);
-          break;
-        case 'flow':
-          result = await executeSubflowStep(step, context, api, permissions, allowedActionIds, options, flowStack);
-          break;
-        case 'paginate':
-          result = await executePaginateStep(step, context, api, permissions, allowedActionIds, options);
-          break;
-        case 'bash':
-          result = await executeBashStep(step, context, options);
-          break;
-        default:
-          throw new Error(`Unknown step type: ${step.type}`);
-      }
+      const result: StepResult = step.timeoutMs
+        ? await withTimeout(dispatch(), step.timeoutMs, step.id)
+        : await dispatch();
 
       result.durationMs = Date.now() - startTime;
       if (attempt > 1) {
@@ -915,11 +967,14 @@ export async function executeSingleStep(
   const errorMessage = lastError?.message || 'Unknown error';
   const strategy = step.onError?.strategy || 'fail';
   const retriesUsed = Math.max(0, maxAttempts - 1);
+  const isTimeout = lastError instanceof StepTimeoutError;
+  const errorCode = (lastError as { errorCode?: string } | undefined)?.errorCode;
 
   if (strategy === 'continue') {
     const result: StepResult = {
-      status: 'failed',
+      status: isTimeout ? 'timeout' : 'failed',
       error: errorMessage,
+      ...(errorCode ? { errorCode } : {}),
       durationMs: Date.now() - startTime,
       retries: retriesUsed,
     };
@@ -931,8 +986,9 @@ export async function executeSingleStep(
     // The fallback step must already be defined in the flow
     // We mark this step as failed and the caller should handle fallback
     const result: StepResult = {
-      status: 'failed',
+      status: isTimeout ? 'timeout' : 'failed',
       error: errorMessage,
+      ...(errorCode ? { errorCode } : {}),
       durationMs: Date.now() - startTime,
       retries: retriesUsed,
     };

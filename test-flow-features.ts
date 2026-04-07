@@ -6,6 +6,7 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import {
   resolveSelector,
@@ -1048,6 +1049,246 @@ describe('Integration: Multi-feature flow', () => {
     const context = await executeFlow(flow, {}, mockApi, defaultPermissions, defaultAllowedActions);
     // Sum of [1,2,3,4,5] = 15
     assert.equal(context.steps.finalResult?.output, 15);
+  });
+});
+
+// ── Step Result Shape (cli#67, #58, #66) ──
+
+describe('Step result shape', () => {
+  it('should set status:"timeout" and errorCode:"TIMEOUT" when step exceeds timeoutMs with onError:continue', async () => {
+    const step: FlowStep = {
+      id: 'slow',
+      name: 'Slow step',
+      type: 'code',
+      timeoutMs: 30,
+      onError: { strategy: 'continue' },
+      code: { source: 'await new Promise(r => setTimeout(r, 200)); return "done";' },
+    };
+    const context = makeContext();
+    const result = await executeSingleStep(step, context, mockApi, defaultPermissions, defaultAllowedActions, {});
+    assert.equal(result.status, 'timeout');
+    assert.equal(result.errorCode, 'TIMEOUT');
+    assert.match(result.error ?? '', /exceeded timeout of 30ms/);
+    assert.equal(context.steps.slow?.status, 'timeout');
+  });
+
+  it('should set status:"failed" (not timeout) for generic errors with onError:continue', async () => {
+    const step: FlowStep = {
+      id: 'boom',
+      name: 'Boom',
+      type: 'code',
+      onError: { strategy: 'continue' },
+      code: { source: 'throw new Error("kaboom");' },
+    };
+    const context = makeContext();
+    const result = await executeSingleStep(step, context, mockApi, defaultPermissions, defaultAllowedActions, {});
+    assert.equal(result.status, 'failed');
+    assert.equal(result.errorCode, undefined);
+    assert.match(result.error ?? '', /kaboom/);
+  });
+
+  it('should flatten sub-flow final step output onto parent output (cli#66)', async () => {
+    // Set up a temporary sub-flow in .one/flows
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'flowtest-'));
+    const flowsDir = path.join(tmpRoot, '.one', 'flows', 'sub-consts');
+    fs.mkdirSync(flowsDir, { recursive: true });
+    const subFlow: Flow = {
+      key: 'sub-consts',
+      name: 'Constants',
+      inputs: {},
+      steps: [
+        {
+          id: 'load',
+          name: 'Load constants',
+          type: 'transform',
+          transform: { expression: '({ CHART_URL: "https://chart.example", API_KEY: "xyz" })' },
+        },
+      ],
+    };
+    fs.writeFileSync(path.join(flowsDir, 'flow.json'), JSON.stringify(subFlow));
+
+    // chdir so loadFlowWithMeta can find it
+    const prevCwd = process.cwd();
+    process.chdir(tmpRoot);
+    try {
+      const parent: Flow = {
+        key: 'parent',
+        name: 'Parent',
+        inputs: {},
+        steps: [
+          {
+            id: 'loadConfig',
+            name: 'Load config',
+            type: 'flow',
+            flow: { key: 'sub-consts' },
+          },
+        ],
+      };
+      const context = await executeFlow(parent, {}, mockApi, defaultPermissions, defaultAllowedActions);
+      const out = context.steps.loadConfig?.output as Record<string, unknown>;
+      // New flattened path
+      assert.equal(out?.CHART_URL, 'https://chart.example');
+      assert.equal(out?.API_KEY, 'xyz');
+      // Legacy nested path still works
+      const load = out?.load as { output?: Record<string, unknown> };
+      assert.equal(load?.output?.CHART_URL, 'https://chart.example');
+      // _steps escape hatch
+      assert.ok((out as any)?._steps?.load);
+    } finally {
+      process.chdir(prevCwd);
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('should set status:"skipped" when if-condition is false', async () => {
+    const step: FlowStep = {
+      id: 'cond',
+      name: 'Conditional',
+      type: 'transform',
+      if: 'false',
+      transform: { expression: '"never runs"' },
+    };
+    const context = makeContext();
+    const result = await executeSingleStep(step, context, mockApi, defaultPermissions, defaultAllowedActions, {});
+    assert.equal(result.status, 'skipped');
+    assert.equal(context.steps.cond?.status, 'skipped');
+    assert.equal(result.output, undefined);
+  });
+
+  it('should set status:"timeout" with onError:fallback when timeout expires', async () => {
+    const step: FlowStep = {
+      id: 'slowFb',
+      name: 'Slow w/ fallback',
+      type: 'code',
+      timeoutMs: 20,
+      onError: { strategy: 'fallback', fallbackStepId: 'backup' },
+      code: { source: 'await new Promise(r => setTimeout(r, 200)); return 1;' },
+    };
+    const context = makeContext();
+    const result = await executeSingleStep(step, context, mockApi, defaultPermissions, defaultAllowedActions, {});
+    assert.equal(result.status, 'timeout');
+    assert.equal(result.errorCode, 'TIMEOUT');
+  });
+
+  it('should honor timeoutMs across retry attempts (each attempt bounded)', async () => {
+    const step: FlowStep = {
+      id: 'slowRetry',
+      name: 'Slow with retries',
+      type: 'code',
+      timeoutMs: 20,
+      onError: { strategy: 'retry', retries: 2, retryDelayMs: 5 },
+      code: { source: 'await new Promise(r => setTimeout(r, 200)); return 1;' },
+    };
+    const context = makeContext();
+    const start = Date.now();
+    await assert.rejects(
+      executeSingleStep(step, context, mockApi, defaultPermissions, defaultAllowedActions, {}),
+      /exceeded timeout of 20ms/,
+    );
+    // 3 attempts × ~20ms timeout + 2 retry delays — should finish well under 200ms
+    assert.ok(Date.now() - start < 500, 'retries should each be bounded by timeoutMs');
+  });
+
+  it('should flatten sub-flow output even when final step output is a scalar (_finalOutput)', async () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'flowtest-'));
+    const flowsDir = path.join(tmpRoot, '.one', 'flows', 'sub-scalar');
+    fs.mkdirSync(flowsDir, { recursive: true });
+    const subFlow: Flow = {
+      key: 'sub-scalar',
+      name: 'Scalar',
+      inputs: {},
+      steps: [
+        { id: 'compute', name: 'Compute', type: 'transform', transform: { expression: '42' } },
+      ],
+    };
+    fs.writeFileSync(path.join(flowsDir, 'flow.json'), JSON.stringify(subFlow));
+    const prevCwd = process.cwd();
+    process.chdir(tmpRoot);
+    try {
+      const parent: Flow = {
+        key: 'parent',
+        name: 'Parent',
+        inputs: {},
+        steps: [{ id: 'call', name: 'Call', type: 'flow', flow: { key: 'sub-scalar' } }],
+      };
+      const context = await executeFlow(parent, {}, mockApi, defaultPermissions, defaultAllowedActions);
+      const out = context.steps.call?.output as Record<string, unknown>;
+      assert.equal(out?._finalOutput, 42);
+      // Legacy path still works
+      assert.equal((out?.compute as { output?: unknown })?.output, 42);
+    } finally {
+      process.chdir(prevCwd);
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('should emit flow:warning event on sub-flow field/sub-step id collision', async () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'flowtest-'));
+    const flowsDir = path.join(tmpRoot, '.one', 'flows', 'sub-collide');
+    fs.mkdirSync(flowsDir, { recursive: true });
+    // Sub-flow has a step "load" AND its final step returns a field named "load"
+    const subFlow: Flow = {
+      key: 'sub-collide',
+      name: 'Collide',
+      inputs: {},
+      steps: [
+        { id: 'load', name: 'Load', type: 'transform', transform: { expression: '"first"' } },
+        { id: 'finish', name: 'Finish', type: 'transform', transform: { expression: '({ load: "flattened" })' } },
+      ],
+    };
+    fs.writeFileSync(path.join(flowsDir, 'flow.json'), JSON.stringify(subFlow));
+    const prevCwd = process.cwd();
+    process.chdir(tmpRoot);
+    try {
+      const parent: Flow = {
+        key: 'parent',
+        name: 'Parent',
+        inputs: {},
+        steps: [{ id: 'call', name: 'Call', type: 'flow', flow: { key: 'sub-collide' } }],
+      };
+      const events: FlowEvent[] = [];
+      await executeFlow(parent, {}, mockApi, defaultPermissions, defaultAllowedActions, {
+        onEvent: (e) => events.push(e),
+      });
+      const warning = events.find(e => e.event === 'flow:warning');
+      assert.ok(warning, 'expected a flow:warning event');
+      assert.match(String(warning?.message ?? ''), /collide/);
+    } finally {
+      process.chdir(prevCwd);
+      fs.rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('should mark parallel sub-step as status:"timeout" when it exceeds timeoutMs', async () => {
+    const step: FlowStep = {
+      id: 'par',
+      name: 'Parallel',
+      type: 'parallel',
+      parallel: {
+        maxConcurrency: 2,
+        steps: [
+          {
+            id: 'fast',
+            name: 'Fast',
+            type: 'code',
+            code: { source: 'return "ok";' },
+          },
+          {
+            id: 'slow',
+            name: 'Slow',
+            type: 'code',
+            timeoutMs: 20,
+            onError: { strategy: 'continue' },
+            code: { source: 'await new Promise(r => setTimeout(r, 200)); return "late";' },
+          },
+        ],
+      },
+    };
+    const context = makeContext();
+    await executeSingleStep(step, context, mockApi, defaultPermissions, defaultAllowedActions, {});
+    assert.equal(context.steps.fast?.status, 'success');
+    assert.equal(context.steps.slow?.status, 'timeout');
+    assert.equal(context.steps.slow?.errorCode, 'TIMEOUT');
   });
 });
 

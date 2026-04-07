@@ -68,6 +68,7 @@ export const FLOW_SCHEMA: FlowSchemaDescriptor = {
     type:   { type: 'string', required: true, description: 'Step type (determines which config object is required)' },
     if:     { type: 'string', required: false, description: 'JS expression — skip step if falsy' },
     unless: { type: 'string', required: false, description: 'JS expression — skip step if truthy' },
+    timeoutMs: { type: 'number', required: false, description: 'Wall-clock timeout (ms). On expiry the step fails with errorCode:"TIMEOUT"; with onError:continue the result gets status:"timeout".' },
   },
 
   stepTypes: [
@@ -576,6 +577,39 @@ Every completed step produces both \`output\` and \`response\`:
 - **Action steps**: \`response\` is the raw API response. \`output\` is the same as \`response\`.
 - **Code/transform steps**: \`output\` is the return value. \`response\` is an alias for \`output\`.
 - **In practice**: Use \`$.steps.stepId.response\` for action steps (API data) and \`$.steps.stepId.output\` for code/transform steps (computed data). Both work interchangeably, but using the semantically correct one makes flows easier to read.
+
+### Step result metadata (\`status\`, \`error\`, \`errorCode\`)
+
+Every step result also exposes execution metadata that downstream steps can inspect:
+
+| Field | Values | When set |
+|-------|--------|----------|
+| \`$.steps.X.status\` | \`"success"\` \\| \`"skipped"\` \\| \`"failed"\` \\| \`"timeout"\` | Always |
+| \`$.steps.X.error\` | error message string | When status is \`failed\` or \`timeout\` |
+| \`$.steps.X.errorCode\` | machine-readable code (e.g. \`"TIMEOUT"\`) | When the error has a code |
+| \`$.steps.X.durationMs\` | number | Always |
+| \`$.steps.X.retries\` | number | When the step was retried |
+
+This lets downstream steps distinguish \`skipped\` (\`if\` condition false) from \`failed\` (error, \`onError:continue\`) from \`timeout\` (exceeded \`timeoutMs\`) — e.g. \`"if": "$.steps.enrichment.status === 'timeout'"\` to retry with a longer window.
+
+### Sub-flow output (flattened)
+
+When a step has \`type: "flow"\`, the sub-flow's final step output is flattened onto the parent step's \`output\`:
+
+\`\`\`jsonc
+// Sub-flow "sub-consts" has a final step "load" that returns { CHART_URL, API_KEY }
+
+// Preferred (flattened):
+"{{$.steps.loadConfig.output.CHART_URL}}"
+
+// Legacy nested path (still works for backward compatibility):
+"{{$.steps.loadConfig.output.load.output.CHART_URL}}"
+
+// Escape hatch for programmatic access to the full sub-flow steps map:
+"{{$.steps.loadConfig.output._steps.load.output.CHART_URL}}"
+\`\`\`
+
+If a sub-step id collides with a flattened field name, the flattened field wins and the engine emits a \`flow:warning\` event.
 
 ## Error Handling
 
