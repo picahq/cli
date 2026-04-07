@@ -83,12 +83,23 @@ export interface FlowPaginateConfig {
   maxPages?: number;
 }
 
+/**
+ * A bash-step env var value. Can be:
+ * - a plain string (interpolated as-is, like before — caller is responsible for escaping)
+ * - `{ json: <selector|value> }` — the value is JSON-serialized, written to a temp
+ *   file, and the env var is set to the temp file path. Use with `@$VAR` in curl
+ *   data, etc. The temp file is cleaned up after the step finishes.
+ * - `{ shell: <selector|value> }` — the value is resolved and POSIX-shell-quoted,
+ *   so it can be safely interpolated inside bash double-quoted strings via `"$VAR"`.
+ */
+export type FlowBashEnvValue = string | { json: unknown } | { shell: string };
+
 export interface FlowBashConfig {
   command: string;
   timeout?: number;
   parseJson?: boolean;
   cwd?: string;
-  env?: Record<string, string>;
+  env?: Record<string, FlowBashEnvValue>;
 }
 
 export interface FlowStepErrorConfig {
@@ -106,7 +117,24 @@ export interface FlowStepErrorConfig {
   /** Upper bound for backoff delays. Defaults to 30000 (30s). */
   maxDelayMs?: number;
   fallbackStepId?: string;
+  /**
+   * Conditional retry — only retry when the underlying error matches one of
+   * these codes. Entries can be HTTP status numbers (429, 502), error code
+   * strings ('TIMEOUT', 'ETIMEDOUT', 'ECONNRESET'), or substring matches
+   * against the error message. If unset, all errors are retried (legacy
+   * behavior).
+   */
+  retryOn?: (string | number)[];
+  /**
+   * Conditional fail-fast — if the error matches any entry here, the step
+   * fails immediately without consuming further retries. Takes precedence
+   * over `retryOn`. Same matching rules.
+   */
+  failFastOn?: (string | number)[];
 }
+
+export type FlowOutputSchemaType = 'string' | 'number' | 'boolean' | 'object' | 'array' | 'unknown';
+export type FlowOutputSchema = { [field: string]: FlowOutputSchemaType | FlowOutputSchema };
 
 export type FlowStepType = 'action' | 'transform' | 'code' | 'condition' | 'loop' | 'parallel' | 'file-read' | 'file-write' | 'while' | 'flow' | 'paginate' | 'bash';
 
@@ -132,6 +160,16 @@ export interface FlowStep {
    * failed). Failures honor the step's `onError` strategy.
    */
   requires?: string[];
+  /**
+   * Optional declaration of the shape of this step's `output`. When set, the
+   * validator checks that downstream `$.steps.<this.id>.output.<field>`
+   * references match a declared field. Field values are type names
+   * (`string` | `number` | `boolean` | `object` | `array` | `unknown`) or
+   * a nested record for object subfields. Purely a documentation /
+   * validation aid — the engine does not coerce or check the runtime value
+   * against the schema.
+   */
+  outputSchema?: FlowOutputSchema;
   onError?: FlowStepErrorConfig;
   action?: FlowActionConfig;
   transform?: FlowTransformConfig;

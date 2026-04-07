@@ -71,6 +71,7 @@ export const FLOW_SCHEMA: FlowSchemaDescriptor = {
     unless: { type: 'string', required: false, description: 'JS expression — skip step if truthy' },
     timeoutMs: { type: 'number', required: false, description: 'Wall-clock timeout (ms). On expiry the step fails with errorCode:"TIMEOUT"; with onError:continue the result gets status:"timeout".' },
     requires:  { type: 'array', required: false, description: 'Presence preconditions: array of $.input.X or $.steps.X.output... selectors that must resolve to a non-empty value before the step runs. Failures honor onError.' },
+    outputSchema: { type: 'object', required: false, description: 'Optional declaration of the shape this step\'s output produces. When set, the validator checks that downstream $.steps.<this.id>.output.<field> references point at declared fields. Format: { fieldName: "string"|"number"|"boolean"|"object"|"array"|"unknown" } — nested objects are supported.' },
   },
 
   stepTypes: [
@@ -507,7 +508,7 @@ Every step MUST have \`id\`, \`name\`, and \`type\`. The \`type\` determines whi
     sections.push(`| \`${name}\` | ${fd.type} | ${fd.required ? 'yes' : 'no'} | ${fd.description} |`);
   }
 
-  sections.push(`| \`onError\` | object | no | Error handling: \`{ "strategy": "${FLOW_SCHEMA.errorStrategies.join(' | ')}", "retries": 3, "retryDelayMs": 1000, "backoff": "fixed \\| exponential \\| exponential-jitter", "maxDelayMs": 30000 }\` |`);
+  sections.push(`| \`onError\` | object | no | Error handling: \`{ "strategy": "${FLOW_SCHEMA.errorStrategies.join(' | ')}", "retries": 3, "retryDelayMs": 1000, "backoff": "fixed \\| exponential \\| exponential-jitter", "maxDelayMs": 30000, "retryOn": [429, 502, "ETIMEDOUT"], "failFastOn": [401, 403, 404] }\`. \`retryOn\`/\`failFastOn\` (cli#53) make retries conditional on the error code/status — \`failFastOn\` matches skip the retry entirely. |`);
 
   // Step types table
   sections.push(`
@@ -556,6 +557,20 @@ Every step MUST have \`id\`, \`name\`, and \`type\`. The \`type\` determines whi
 | \`$.env.MY_VAR\` | Environment variable |
 | \`$.loop.item\` / \`$.loop.i\` | Loop iteration |
 | \`"Hello {{$.steps.getUser.response.name}}"\` | String interpolation |
+
+### Context-aware escape pipes (cli#53)
+
+Handlebars interpolations support pipe-based escaping for safe embedding into shell commands, JSON, URLs, markdown, or HTML:
+
+| Pipe | Effect |
+|------|--------|
+| \`{{ $.x \\| json }}\`  | \`JSON.stringify\` (handles quotes, newlines, unicode) |
+| \`{{ $.x \\| shell }}\` | POSIX-shell-quote — safe inside bash arguments |
+| \`{{ $.x \\| url }}\`   | \`encodeURIComponent\` |
+| \`{{ $.x \\| md }}\`    | Escape markdown structural characters |
+| \`{{ $.x \\| html }}\`  | Entity-escape \`& < > " '\` |
+
+Pipes can be applied to any value (objects/arrays are JSON-stringified first for shell/url/md/html). An unknown pipe name throws at runtime. The legacy \`{{q $.x}}\` shell-quote helper still works but new flows should prefer \`{{$.x | shell}}\`.
 
 ### When to use bare selectors vs \`{{...}}\` interpolation
 
@@ -620,6 +635,68 @@ If a sub-step id collides with a flattened field name, the flattened field wins 
 \`\`\`
 
 Strategies: \`${FLOW_SCHEMA.errorStrategies.join('\`, \`')}\`
+
+**Conditional retry (cli#53):** add \`retryOn\` and/or \`failFastOn\` to discriminate transient errors from permanent ones. \`failFastOn\` takes precedence; \`retryOn\` (when set) requires a match for the retry to happen. Numbers match against any 3-digit substring of the error message (HTTP statuses); strings match against \`error.errorCode\` exactly OR as a case-insensitive substring of the message.
+
+\`\`\`json
+{
+  "onError": {
+    "strategy": "retry",
+    "retries": 4,
+    "backoff": "exponential",
+    "retryOn":    [429, 502, 503, "ETIMEDOUT", "ECONNRESET"],
+    "failFastOn": [401, 403, 404]
+  }
+}
+\`\`\`
+
+## Step Output Contracts (\`outputSchema\`, cli#59)
+
+Declare a step's output shape so the validator catches downstream field-name typos at flow load time:
+
+\`\`\`json
+{
+  "id": "research",
+  "type": "flow",
+  "flow": { "key": "company-research" },
+  "outputSchema": {
+    "company": "string",
+    "charCount": "number",
+    "quality": { "confidence": "string", "score": "number" }
+  }
+}
+\`\`\`
+
+Field types: \`string\`, \`number\`, \`boolean\`, \`object\`, \`array\`, \`unknown\`. Nested objects describe sub-fields. Any \`$.steps.<id>.output.<field>\` reference from a downstream step is checked against the schema; unknown fields fail validation. The runtime engine does not enforce the schema — it's a documentation / wiring-bug aid.
+
+## Bash structured env vars (cli#54)
+
+A \`bash\` step's \`env\` map accepts two structured forms in addition to plain strings:
+
+\`\`\`json
+{
+  "type": "bash",
+  "bash": {
+    "env": {
+      "PAYLOAD_FILE": { "json": "$.steps.buildConfig.output" },
+      "COMPANY":      { "shell": "$.input.companyName" }
+    },
+    "command": "curl -X POST $ENDPOINT -d @$PAYLOAD_FILE && echo \\"$COMPANY\\""
+  }
+}
+\`\`\`
+
+- \`{ "json": <selector|value> }\` — JSON-serialized to a temp file; the env var holds the temp file path. Auto-cleaned after the step runs (success or failure).
+- \`{ "shell": <selector|value> }\` — exposed as a plain string env var; reference inside bash double quotes (\`"$VAR"\`).
+- A plain string is the legacy form (interpolated as-is, caller is responsible for escaping).
+
+## Dynamic sub-flow dispatch (cli#61)
+
+A \`flow\` step's \`flow.key\` accepts selectors and Handlebars interpolations, so a single orchestrator can route to different sub-flows at runtime:
+
+\`\`\`json
+{ "type": "flow", "flow": { "key": "{{$.input.target}}", "inputs": { "company": "$.input.company" } } }
+\`\`\`
 
 Conditional execution: \`"if": "$.steps.prev.response.data.length > 0"\`
 

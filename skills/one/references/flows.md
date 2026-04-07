@@ -234,6 +234,29 @@ A pure `$.xxx` value resolves to the raw type. A string containing `{{$.xxx}}` d
 "files": "$.steps.extract.output.allFiles"
 ```
 
+### Context-aware escape pipes (cli#53)
+
+Handlebars interpolations support pipe-based escaping so user-controlled values are safe to embed in shell commands, JSON payloads, URLs, markdown, or HTML without writing per-call escapers:
+
+```json
+{
+  "command": "curl -d {{$.input.payload | json}} https://example.com/{{$.input.slug | url}}",
+  "env": { "GREETING": { "shell": "$.input.name" } }
+}
+```
+
+Available pipes:
+
+| Pipe | Effect | Example |
+|------|--------|---------|
+| `json` | `JSON.stringify` (handles quotes, newlines, unicode) | `{{$.x \| json}}` → `"O'Brien & Co."` |
+| `shell` | POSIX-shell-quote (apostrophes use the `'\''` close-reopen trick) | `{{$.x \| shell}}` → `'O'\''Brien & Co.'` |
+| `url` | `encodeURIComponent` | `{{$.x \| url}}` → `O'Brien%20%26%20Co.` |
+| `md` | Escape markdown structural characters (` ` ` * _ { } [ ] ( ) # + - ! \| `) | `{{x \| md}}` |
+| `html` | Entity-escape `& < > " '` | `{{x \| html}}` → `&lt;b&gt;` |
+
+Pipes can be applied to numbers, booleans, objects, and `null`/`undefined` (which become empty string for shell/url/md/html, `null` for json). An unknown pipe name throws a clear error at flow execution time. Pipes cannot be combined with the legacy `q` prefix — use the pipe form (`{{$.x | shell}}` instead of `{{q $.x}}`).
+
 ### Selectors vs expressions
 
 Selectors in data fields (`data`, `queryParams`, `pathVars`, `connectionKey`) are **dot-path lookups only** — they do not support JavaScript operators like `||` or `&&`. For default values, use the `default` field on the input definition:
@@ -390,6 +413,8 @@ After a parallel step, access each substep's output by its `id`: `$.steps.fetchE
 }
 ```
 
+**Dynamic dispatch (cli#61).** `flow.key` accepts a selector (`"$.input.target"`) or Handlebars interpolation (`"{{$.input.prefix}}-{{$.input.suffix}}"`). The resolved key is loaded at runtime, so you can write a single orchestrator that picks among multiple sub-flows based on inputs or upstream results — no bash workaround required. If the resolved key does not exist, the step fails with the standard "flow not found" error.
+
 A sub-flow step exposes the sub-flow's **step results map** at both `.output` and `.response` (they are aliases — pick whichever reads better). Access a specific sub-step's data with:
 
 ```
@@ -444,6 +469,27 @@ Alternatively, pass values as environment variables (also shell-safe) and refere
 }
 ```
 
+**Structured env vars (cli#54).** A bash step's `env` map also accepts two structured forms that handle JSON and shell escaping safely without writing temp files by hand:
+
+```json
+{
+  "type": "bash",
+  "bash": {
+    "env": {
+      "PAYLOAD_FILE": { "json": "$.steps.buildConfig.output" },
+      "COMPANY":      { "shell": "$.input.companyName" }
+    },
+    "command": "curl -X POST $ENDPOINT -H 'Content-Type: application/json' -d @$PAYLOAD_FILE && echo \"$COMPANY\""
+  }
+}
+```
+
+- `{ "json": <selector|value> }` — the resolved value is JSON-serialized, written to a temp file, and the env var is set to the temp file's path. Use it with `curl -d @$VAR` or `cat $VAR`. The temp file is cleaned up automatically after the step finishes (success OR failure).
+- `{ "shell": <selector|value> }` — the resolved value is exposed as a plain string env var. Reference it inside bash double quotes (`"$VAR"`) so bash itself handles word-splitting.
+- A plain string value (`"COMPANY": "$.input.companyName"`) is the legacy form — interpolated as-is.
+
+This is the recommended way to pass structured payloads to `curl`, `claude --print`, or any CLI that expects a JSON file. It eliminates the older `file-write → bash` two-step workaround.
+
 ## Step Input Contracts (`requires`)
 
 Declare the data a step depends on so the engine fails fast — with a useful error — when an upstream value is missing. Without `requires`, a skipped or failed upstream step silently leaves `undefined` in the context and the consumer either crashes deep in user code or burns an LLM call on empty input.
@@ -473,6 +519,34 @@ The "because…" suffix tells you exactly why — skipped, failed, or timed out 
 
 Forward references are caught at flow load time: if `requires` points at a step declared after the current step, validation rejects the flow.
 
+## Step Output Contracts (`outputSchema`)
+
+Declare the shape of a step's `output` so the validator can catch field-name typos in downstream selectors at flow load time — long before a misspelled `$.steps.research.output.charCount` silently resolves to `undefined` at runtime:
+
+```json
+{
+  "id": "research",
+  "type": "flow",
+  "flow": { "key": "company-research" },
+  "outputSchema": {
+    "company": "string",
+    "research": "string",
+    "charCount": "number",
+    "quality": { "confidence": "string", "coverageScore": "number" }
+  }
+}
+```
+
+Field types: `"string"`, `"number"`, `"boolean"`, `"object"`, `"array"`, `"unknown"`. Nest objects to describe sub-fields (`quality.coverageScore` above). Anything not declared is rejected when referenced via `$.steps.<id>.output.<field>` from a downstream step:
+
+```
+Selector "$.steps.research.output.chars" references field "chars" which is not
+declared in step "research".outputSchema. Either fix the field name or update
+the outputSchema declaration.
+```
+
+`outputSchema` is purely a documentation / validation aid — the engine does **not** enforce the shape at runtime, so a code step that returns an unexpected field still works (it just won't be discoverable from typed selectors). Schemas declared on a step apply to all references from anywhere in the flow tree (including inside loops, conditions, parallel blocks, code, and transform expressions).
+
 ## Error Handling
 
 ```json
@@ -496,6 +570,26 @@ Strategies: `fail` (default), `continue`, `retry`, `fallback`.
 ```
 
 `exponential` waits `retryDelayMs * 2^(retryIndex)` (1s, 2s, 4s, 8s…) capped at `maxDelayMs`. `exponential-jitter` multiplies each wait by a random factor in [0.5, 1.0) so concurrent retries spread out.
+
+**Conditional retry (cli#53).** By default a `retry` strategy retries every error. To distinguish transient failures (rate-limits, timeouts) from permanent ones (auth errors, 404s) add `retryOn` and/or `failFastOn`:
+
+```json
+{
+  "onError": {
+    "strategy": "retry",
+    "retries": 4,
+    "backoff": "exponential",
+    "retryOn":    [429, 502, 503, "ETIMEDOUT", "ECONNRESET"],
+    "failFastOn": [401, 403, 404]
+  }
+}
+```
+
+- `failFastOn` takes precedence: if the error matches any entry, the step fails immediately without consuming retries.
+- `retryOn` (when set): the error must match an entry to be retried; non-matching errors fail immediately.
+- If neither is set the legacy "retry every error" behavior applies.
+
+Match rules: number entries are compared against any 3-digit token in the error message (covers `HTTP 429`, `status 502`, etc.); string entries match `error.errorCode` exactly OR appear as a case-insensitive substring of the message (covers Node error codes like `ETIMEDOUT` and our own `TIMEOUT`).
 
 **Inspecting retry outcomes.** Every retried step exposes how it ended on its `StepResult`:
 

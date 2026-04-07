@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { exec, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -49,6 +50,48 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, stepId: string):
  * in the executor loop). Honours `backoff` and `maxDelayMs` from the step's
  * onError config; defaults to fixed-delay so existing flows are unchanged.
  */
+/**
+ * Decide whether an error should be retried based on the step's onError
+ * config (withoneai/cli#53). Match rules:
+ *   - `failFastOn` takes precedence: any match → do not retry
+ *   - `retryOn` (if set): error must match an entry → retry
+ *   - if neither set → retry (legacy behavior, decided by attempt count)
+ *
+ * Match entries can be:
+ *   - numbers — interpreted as HTTP status codes; matched against any
+ *     `(\d{3})` substring in the error message (covers "HTTP 429", "status 502", etc.)
+ *   - strings — matched against `error.errorCode` (case-sensitive) OR as a
+ *     case-insensitive substring of the error message. This covers Node
+ *     error codes (`ETIMEDOUT`, `ECONNRESET`) and our own (`TIMEOUT`).
+ */
+export function shouldRetryError(
+  err: unknown,
+  onError: import('./flow-types.js').FlowStepErrorConfig | undefined,
+): { retry: boolean; reason?: string } {
+  if (!onError) return { retry: false };
+  const message = err instanceof Error ? err.message : String(err);
+  const errorCode = (err as { errorCode?: string } | undefined)?.errorCode;
+
+  const matches = (entry: string | number): boolean => {
+    if (typeof entry === 'number') {
+      // Match against any 3-digit status code in the message
+      const re = new RegExp(`\\b${entry}\\b`);
+      return re.test(message);
+    }
+    if (errorCode && entry === errorCode) return true;
+    return message.toLowerCase().includes(entry.toLowerCase());
+  };
+
+  if (Array.isArray(onError.failFastOn) && onError.failFastOn.some(matches)) {
+    return { retry: false, reason: 'failFastOn' };
+  }
+  if (Array.isArray(onError.retryOn)) {
+    if (onError.retryOn.some(matches)) return { retry: true, reason: 'retryOn' };
+    return { retry: false, reason: 'no-retryOn-match' };
+  }
+  return { retry: true };
+}
+
 function computeRetryDelay(onError: import('./flow-types.js').FlowStepErrorConfig, attempt: number): number {
   const base = onError.retryDelayMs ?? 1000;
   const max = onError.maxDelayMs ?? 30_000;
@@ -115,24 +158,77 @@ export function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-export function interpolateString(str: string, context: FlowContext): string {
-  // Supports two token shapes:
-  //   {{$.path.to.value}}        — raw stringification (string interp)
-  //   {{q $.path.to.value}}      — POSIX-shell-quoted, safe for bash steps
-  return str.replace(/\{\{\s*(q\s+)?(\$\.[^}\s]+)\s*\}\}/g, (_match, qFlag, selector) => {
-    const value = resolveSelector(selector, context);
-    if (value === undefined || value === null) return qFlag ? `''` : '';
-    if (typeof value === 'object') {
-      console.warn(
-        `[flow] WARNING: Handlebars expression "{{${qFlag ? 'q ' : ''}${selector}}}" resolved to ${Array.isArray(value) ? 'an array' : 'an object'} and was stringified as JSON. ` +
-        `To pass objects/arrays as native values, use a direct selector without {{ }}: "${selector}"`
-      );
-      const json = JSON.stringify(value);
-      return qFlag ? shellQuote(json) : json;
+/**
+ * Apply a context-specific escaping pipe to a resolved Handlebars value.
+ * Pipes are intended for use in `{{ $.x | json }}` style interpolations and
+ * make it safe to embed user-provided data into shell commands, JSON
+ * payloads, URLs, markdown, or HTML without writing per-call escapers.
+ */
+export function applyHandlebarsPipe(value: unknown, pipe: string): string {
+  switch (pipe) {
+    case 'json':
+      return JSON.stringify(value ?? null);
+    case 'shell': {
+      if (value === undefined || value === null) return `''`;
+      const str = typeof value === 'object' ? JSON.stringify(value) : String(value);
+      return shellQuote(str);
     }
-    const str = String(value);
-    return qFlag ? shellQuote(str) : str;
-  });
+    case 'url': {
+      if (value === undefined || value === null) return '';
+      const str = typeof value === 'object' ? JSON.stringify(value) : String(value);
+      return encodeURIComponent(str);
+    }
+    case 'md': {
+      if (value === undefined || value === null) return '';
+      const str = typeof value === 'object' ? JSON.stringify(value) : String(value);
+      // Escape markdown structural characters that commonly break tables/links.
+      return str.replace(/([\\`*_{}\[\]()#+\-!|])/g, '\\$1');
+    }
+    case 'html': {
+      if (value === undefined || value === null) return '';
+      const str = typeof value === 'object' ? JSON.stringify(value) : String(value);
+      return str
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+    default:
+      throw new Error(`Unknown Handlebars pipe: "${pipe}". Supported: json, shell, url, md, html.`);
+  }
+}
+
+export function interpolateString(str: string, context: FlowContext): string {
+  // Supports three token shapes:
+  //   {{$.path.to.value}}             — raw stringification (string interp)
+  //   {{q $.path.to.value}}           — POSIX-shell-quoted, safe for bash steps
+  //   {{$.path.to.value | pipe}}      — context-aware escaping (json|shell|url|md|html)
+  return str.replace(
+    /\{\{\s*(q\s+)?(\$\.[^}\s|]+)(?:\s*\|\s*([a-zA-Z]+))?\s*\}\}/g,
+    (_match, qFlag, selector, pipe) => {
+      const value = resolveSelector(selector, context);
+
+      if (pipe) {
+        if (qFlag) {
+          throw new Error(`Handlebars expression "{{q ${selector} | ${pipe}}}" combines the legacy "q" prefix with a pipe — pick one (prefer the pipe form).`);
+        }
+        return applyHandlebarsPipe(value, pipe);
+      }
+
+      if (value === undefined || value === null) return qFlag ? `''` : '';
+      if (typeof value === 'object') {
+        console.warn(
+          `[flow] WARNING: Handlebars expression "{{${qFlag ? 'q ' : ''}${selector}}}" resolved to ${Array.isArray(value) ? 'an array' : 'an object'} and was stringified as JSON. ` +
+          `To pass objects/arrays as native values, use a direct selector without {{ }}: "${selector}"`
+        );
+        const json = JSON.stringify(value);
+        return qFlag ? shellQuote(json) : json;
+      }
+      const str = String(value);
+      return qFlag ? shellQuote(str) : str;
+    },
+  );
 }
 
 export function resolveValue(value: unknown, context: FlowContext): unknown {
@@ -141,8 +237,8 @@ export function resolveValue(value: unknown, context: FlowContext): unknown {
     if (value.startsWith('$.') && !value.includes('{{')) {
       return resolveSelector(value, context);
     }
-    // String with interpolation ({{$.x}} or {{q $.x}})
-    if (value.includes('{{$.') || /\{\{\s*q\s+\$\./.test(value)) {
+    // String with interpolation ({{$.x}}, {{ $.x }}, {{q $.x}}, or {{ $.x | pipe }})
+    if (/\{\{\s*(q\s+)?\$\./.test(value)) {
       return interpolateString(value, context);
     }
     return value;
@@ -812,6 +908,63 @@ async function executePaginateStep(
   };
 }
 
+/**
+ * Resolve a bash step's `env` map, supporting structured `{ json: ... }` and
+ * `{ shell: ... }` values (withoneai/cli#54). Returns the resolved env vars
+ * along with a list of temp files that must be cleaned up after the step.
+ */
+function resolveBashEnv(
+  envConfig: Record<string, unknown> | undefined,
+  context: FlowContext,
+  stepId: string,
+): { env: Record<string, string>; tempFiles: string[] } {
+  const out: Record<string, string> = {};
+  const tempFiles: string[] = [];
+  if (!envConfig) return { env: out, tempFiles };
+
+  for (const [key, raw] of Object.entries(envConfig)) {
+    if (raw === undefined || raw === null) continue;
+
+    // Structured form: { json: ... } or { shell: ... }
+    if (typeof raw === 'object' && !Array.isArray(raw)) {
+      const obj = raw as Record<string, unknown>;
+      if ('json' in obj) {
+        const resolved = resolveValue(obj.json, context);
+        const json = JSON.stringify(resolved ?? null);
+        const tmp = path.join(
+          os.tmpdir(),
+          `one-flow-${stepId}-${key}-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`,
+        );
+        fs.writeFileSync(tmp, json, { encoding: 'utf-8' });
+        tempFiles.push(tmp);
+        out[key] = tmp;
+        continue;
+      }
+      if ('shell' in obj) {
+        const resolved = resolveValue(obj.shell, context);
+        // Plain (non-quoted) string. The user should reference it inside
+        // bash double quotes ("$VAR") — bash itself handles word-splitting
+        // safely. We still strip nothing; the value is what it is.
+        out[key] = resolved === undefined || resolved === null
+          ? ''
+          : typeof resolved === 'object' ? JSON.stringify(resolved) : String(resolved);
+        continue;
+      }
+      // Unknown object shape — fall through to JSON stringification.
+      out[key] = JSON.stringify(resolveValue(raw, context));
+      continue;
+    }
+
+    // Legacy: plain string (interpolated)
+    const resolved = resolveValue(raw, context);
+    out[key] = resolved === undefined || resolved === null
+      ? ''
+      : typeof resolved === 'object' ? JSON.stringify(resolved) : String(resolved);
+  }
+
+  return { env: out, tempFiles };
+}
+
 // Feature 9: Bash step
 async function executeBashStep(
   step: FlowStep,
@@ -824,23 +977,34 @@ async function executeBashStep(
   const config = step.bash!;
   const command = resolveValue(config.command, context) as string;
   const cwd = config.cwd ? resolveValue(config.cwd, context) as string : process.cwd();
+  const { env: resolvedEnv, tempFiles } = resolveBashEnv(
+    config.env as Record<string, unknown> | undefined,
+    context,
+    step.id,
+  );
   const env = config.env
-    ? { ...process.env, ...resolveValue(config.env, context) as Record<string, string> }
+    ? { ...process.env, ...resolvedEnv }
     : process.env;
 
-  const { stdout, stderr } = await execAsync(command, {
-    timeout: config.timeout || 30000,
-    cwd,
-    env,
-    maxBuffer: 10 * 1024 * 1024,
-  });
+  try {
+    const { stdout, stderr } = await execAsync(command, {
+      timeout: config.timeout || 30000,
+      cwd,
+      env,
+      maxBuffer: 10 * 1024 * 1024,
+    });
 
-  const output = config.parseJson ? JSON.parse(stripCodeFences(stdout)) : stdout.trim();
-  return {
-    status: 'success',
-    output,
-    response: { stdout: stdout.trim(), stderr: stderr.trim(), exitCode: 0 },
-  };
+    const output = config.parseJson ? JSON.parse(stripCodeFences(stdout)) : stdout.trim();
+    return {
+      status: 'success',
+      output,
+      response: { stdout: stdout.trim(), stderr: stderr.trim(), exitCode: 0 },
+    };
+  } finally {
+    for (const tmp of tempFiles) {
+      try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+    }
+  }
 }
 
 // ── Input describe helper (for type-error messages) ──
@@ -1016,6 +1180,22 @@ export async function executeSingleStep(
       if (attempt === maxAttempts) {
         // All retries exhausted or no retry strategy
         break;
+      }
+
+      // Conditional retry (cli#53): if retryOn/failFastOn are set, decide
+      // whether THIS particular error should be retried at all.
+      if (step.onError?.strategy === 'retry' &&
+          (step.onError.retryOn || step.onError.failFastOn)) {
+        const decision = shouldRetryError(lastError, step.onError);
+        if (!decision.retry) {
+          options.onEvent?.({
+            event: 'step:retry-skip',
+            stepId: step.id,
+            reason: decision.reason ?? 'no-match',
+            error: lastError.message,
+          });
+          break;
+        }
       }
     }
   }

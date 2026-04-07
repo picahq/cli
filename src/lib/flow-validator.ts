@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import type { Flow, FlowStep, FlowStepType } from './flow-types.js';
+import type { Flow, FlowStep, FlowStepType, FlowOutputSchema } from './flow-types.js';
 import { FLOW_SCHEMA, getStepTypeDescriptor, getNestedStepsKeys } from './flow-schema.js';
 
 export interface ValidationError {
@@ -287,7 +287,7 @@ export function validateStepIds(flow: Flow): ValidationError[] {
 
       // Recurse into all nested steps arrays using the descriptor
       for (const { configKey, fieldName } of nestedKeys) {
-        const config = (step as Record<string, unknown>)[configKey] as Record<string, unknown> | undefined;
+        const config = (step as unknown as Record<string, unknown>)[configKey] as Record<string, unknown> | undefined;
         if (config && Array.isArray(config[fieldName])) {
           collectIds(config[fieldName] as FlowStep[], `${path}.${configKey}.${fieldName}`);
         }
@@ -311,7 +311,7 @@ export function validateSelectorReferences(flow: Flow): ValidationError[] {
     for (const step of steps) {
       ids.add(step.id);
       for (const { configKey, fieldName } of nestedKeys) {
-        const config = (step as Record<string, unknown>)[configKey] as Record<string, unknown> | undefined;
+        const config = (step as unknown as Record<string, unknown>)[configKey] as Record<string, unknown> | undefined;
         if (config && Array.isArray(config[fieldName])) {
           for (const id of getAllStepIds(config[fieldName] as FlowStep[])) ids.add(id);
         }
@@ -414,7 +414,7 @@ export function validateSelectorReferences(flow: Flow): ValidationError[] {
     // Check selectors in all config objects
     const descriptor = getStepTypeDescriptor(step.type);
     if (descriptor) {
-      const config = (step as Record<string, unknown>)[descriptor.configKey];
+      const config = (step as unknown as Record<string, unknown>)[descriptor.configKey];
       if (config && typeof config === 'object') {
         if (step.type !== 'transform' && step.type !== 'code') {
           for (const [fieldName, fd] of Object.entries(descriptor.fields)) {
@@ -450,7 +450,7 @@ export function validateSelectorReferences(flow: Flow): ValidationError[] {
       // accumulate sibling IDs as we walk.
       for (const { configKey, fieldName } of nestedKeys) {
         if (configKey === descriptor.configKey) {
-          const c = (step as Record<string, unknown>)[configKey] as Record<string, unknown> | undefined;
+          const c = (step as unknown as Record<string, unknown>)[configKey] as Record<string, unknown> | undefined;
           if (c && Array.isArray(c[fieldName])) {
             const childPreceding = new Set(preceding);
             (c[fieldName] as FlowStep[]).forEach((s, i) => {
@@ -471,6 +471,185 @@ export function validateSelectorReferences(flow: Flow): ValidationError[] {
   return errors;
 }
 
+// ── Output schema validation (cli#59) ──
+
+const VALID_OUTPUT_SCHEMA_TYPES = new Set(['string', 'number', 'boolean', 'object', 'array', 'unknown']);
+
+function isOutputSchemaObject(v: unknown): v is FlowOutputSchema {
+  return !!v && typeof v === 'object' && !Array.isArray(v);
+}
+
+/**
+ * Walk a declared outputSchema following a dot-path. Returns:
+ *   - 'ok' if the path resolves to a declared field
+ *   - 'unknown-field' if a segment is missing from the schema
+ *   - 'opaque' if the path runs into a leaf type (e.g. `string`) but
+ *     more segments remain — we can't validate further but it's not
+ *     necessarily wrong
+ */
+function walkOutputSchema(schema: FlowOutputSchema, path: string[]): 'ok' | 'unknown-field' | 'opaque' {
+  let current: FlowOutputSchema | string = schema;
+  for (let i = 0; i < path.length; i++) {
+    const seg = path[i];
+    if (typeof current === 'string') {
+      // Hit a leaf type with more path remaining; can't validate further.
+      return current === 'unknown' || current === 'object' || current === 'array' ? 'opaque' : 'opaque';
+    }
+    if (!(seg in current)) return 'unknown-field';
+    const next: FlowOutputSchema[string] = current[seg];
+    if (typeof next === 'string') {
+      if (!VALID_OUTPUT_SCHEMA_TYPES.has(next)) return 'unknown-field';
+      current = next;
+    } else if (isOutputSchemaObject(next)) {
+      current = next;
+    } else {
+      return 'unknown-field';
+    }
+  }
+  return 'ok';
+}
+
+/**
+ * Collect every `outputSchema` declared anywhere in the flow's step tree,
+ * keyed by step id.
+ */
+function collectOutputSchemas(flow: Flow): Map<string, FlowOutputSchema> {
+  const out = new Map<string, FlowOutputSchema>();
+  const nestedKeys = getNestedStepsKeys();
+  function walk(steps: FlowStep[]): void {
+    for (const step of steps) {
+      if (step.outputSchema && isOutputSchemaObject(step.outputSchema)) {
+        out.set(step.id, step.outputSchema);
+      }
+      for (const { configKey, fieldName } of nestedKeys) {
+        const config = (step as unknown as Record<string, unknown>)[configKey] as Record<string, unknown> | undefined;
+        if (config && Array.isArray(config[fieldName])) {
+          walk(config[fieldName] as FlowStep[]);
+        }
+      }
+    }
+  }
+  walk(flow.steps);
+  return out;
+}
+
+/**
+ * For every step with a declared outputSchema, find downstream
+ * `$.steps.<id>.output.<field>...` references and verify the field path
+ * exists in the schema. Reports "unknown-field" mismatches as errors —
+ * "opaque" walks (path runs past a primitive) are silently allowed.
+ */
+export function validateOutputSchemas(flow: Flow): ValidationError[] {
+  const errors: ValidationError[] = [];
+  const schemas = collectOutputSchemas(flow);
+  if (schemas.size === 0) return errors;
+
+  // Validate the schemas themselves
+  for (const [stepId, schema] of schemas) {
+    const schemaErrors = validateOutputSchemaShape(schema, `step "${stepId}".outputSchema`);
+    errors.push(...schemaErrors);
+  }
+
+  const SELECTOR_RE = /\$\.steps\.([a-zA-Z_][\w-]*)\.output((?:\.[a-zA-Z_][\w-]*)+)/g;
+
+  function checkText(text: unknown, location: string): void {
+    if (typeof text !== 'string') return;
+    for (const m of text.matchAll(SELECTOR_RE)) {
+      const stepId = m[1];
+      const tail = m[2].slice(1).split('.');
+      const schema = schemas.get(stepId);
+      if (!schema) continue; // step has no declared schema — nothing to check
+      const result = walkOutputSchema(schema, tail);
+      if (result === 'unknown-field') {
+        errors.push({
+          path: location,
+          message: `Selector "${m[0]}" references field "${tail.join('.')}" which is not declared in step "${stepId}".outputSchema. Either fix the field name or update the outputSchema declaration.`,
+        });
+      }
+    }
+  }
+
+  function walkValue(value: unknown, location: string): void {
+    if (typeof value === 'string') {
+      checkText(value, location);
+    } else if (Array.isArray(value)) {
+      value.forEach((v, i) => walkValue(v, `${location}[${i}]`));
+    } else if (value && typeof value === 'object') {
+      for (const [k, v] of Object.entries(value)) {
+        walkValue(v, `${location}.${k}`);
+      }
+    }
+  }
+
+  const nestedKeys = getNestedStepsKeys();
+  // Build a set of "configKey.fieldName" combos that contain nested steps,
+  // so walkValue can skip them and avoid double-reporting (each nested step
+  // tree is visited explicitly by walkSteps further down).
+  const nestedFieldSet = new Set(nestedKeys.map(k => `${k.configKey}.${k.fieldName}`));
+
+  function walkConfig(config: unknown, configKey: string, pathPrefix: string): void {
+    if (!config || typeof config !== 'object' || Array.isArray(config)) {
+      walkValue(config, pathPrefix);
+      return;
+    }
+    for (const [k, v] of Object.entries(config)) {
+      if (nestedFieldSet.has(`${configKey}.${k}`)) continue; // visited via walkSteps
+      walkValue(v, `${pathPrefix}.${k}`);
+    }
+  }
+
+  function walkSteps(steps: FlowStep[], pathPrefix: string): void {
+    steps.forEach((step, i) => {
+      const stepPath = `${pathPrefix}[${i}]`;
+      // Check if/unless
+      if (step.if) checkText(step.if, `${stepPath}.if`);
+      if (step.unless) checkText(step.unless, `${stepPath}.unless`);
+      if (Array.isArray(step.requires)) {
+        step.requires.forEach((s, ri) => checkText(s, `${stepPath}.requires[${ri}]`));
+      }
+      // Check the type-specific config (skipping nested steps arrays — they
+      // get walked explicitly below to avoid duplicate error reporting).
+      const descriptor = getStepTypeDescriptor(step.type);
+      if (descriptor) {
+        const config = (step as unknown as Record<string, unknown>)[descriptor.configKey];
+        if (config) walkConfig(config, descriptor.configKey, `${stepPath}.${descriptor.configKey}`);
+        for (const { configKey, fieldName } of nestedKeys) {
+          const c = (step as unknown as Record<string, unknown>)[configKey] as Record<string, unknown> | undefined;
+          if (c && Array.isArray(c[fieldName])) {
+            walkSteps(c[fieldName] as FlowStep[], `${stepPath}.${configKey}.${fieldName}`);
+          }
+        }
+      }
+    });
+  }
+  walkSteps(flow.steps, 'steps');
+  return errors;
+}
+
+function validateOutputSchemaShape(schema: unknown, location: string): ValidationError[] {
+  const errors: ValidationError[] = [];
+  if (!isOutputSchemaObject(schema)) {
+    errors.push({ path: location, message: 'outputSchema must be an object' });
+    return errors;
+  }
+  for (const [key, val] of Object.entries(schema)) {
+    const where = `${location}.${key}`;
+    if (typeof val === 'string') {
+      if (!VALID_OUTPUT_SCHEMA_TYPES.has(val)) {
+        errors.push({
+          path: where,
+          message: `outputSchema field "${key}" has unknown type "${val}". Allowed: ${[...VALID_OUTPUT_SCHEMA_TYPES].join(', ')}.`,
+        });
+      }
+    } else if (isOutputSchemaObject(val)) {
+      errors.push(...validateOutputSchemaShape(val, where));
+    } else {
+      errors.push({ path: where, message: `outputSchema field "${key}" must be a type string or a nested object` });
+    }
+  }
+  return errors;
+}
+
 // ── Main entry point ──
 
 export function validateFlow(flow: unknown, rootDir?: string): ValidationError[] {
@@ -481,6 +660,7 @@ export function validateFlow(flow: unknown, rootDir?: string): ValidationError[]
   return [
     ...validateStepIds(f),
     ...validateSelectorReferences(f),
+    ...validateOutputSchemas(f),
     ...(rootDir ? validateCodeModules(f, rootDir) : []),
   ];
 }
