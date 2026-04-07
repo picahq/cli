@@ -21,6 +21,8 @@ import { configCommand } from './config.js';
 import open from 'open';
 import * as output from '../lib/output.js';
 import type { Agent } from '../lib/types.js';
+import { writeInstalledSkillVersion } from '../lib/skill-sync.js';
+import { getCurrentVersion } from './update.js';
 
 export async function initCommand(options: { yes?: boolean; global?: boolean; project?: boolean }): Promise<void> {
   if (output.isAgentMode()) {
@@ -407,6 +409,9 @@ function installSkillForAgents(agentIds: string[]): { installed: string[]; faile
       fs.rmSync(canonical, { recursive: true });
     }
     copyDirSync(source, canonical);
+    // Stamp the canonical install with the CLI version so skill-sync can
+    // auto-refresh it on future CLI upgrades without re-running `one init`.
+    writeInstalledSkillVersion(getCurrentVersion());
   } catch {
     return { installed: [], failed: ['canonical copy'] };
   }

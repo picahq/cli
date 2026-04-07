@@ -380,6 +380,17 @@ one config
 
 Settings propagate automatically to all installed agent configs.
 
+#### `one config skills status` / `one config skills sync`
+
+`one init` copies the packaged skill files (`SKILL.md`, `references/`) into `~/.agents/skills/one/` and symlinks per-agent paths to that canonical directory. When the CLI self-updates, the skill files in the canonical dir would normally stay frozen at the version that was installed. To prevent stale docs, every CLI command checks a `.one-cli-version` marker in the canonical dir and silently refreshes the skill files if they don't match the running CLI version. No user action required.
+
+| Command | What it does |
+|---------|--------------|
+| `one config skills status` | Show installed skill version, current CLI version, and path |
+| `one config skills sync` | Force a re-copy of packaged skill files (for troubleshooting) |
+
+Auto-sync refuses to resurrect skills if you opted out of skill installation during `one init` — the canonical dir has to already exist.
+
 ## The workflow
 
 The power of One is in the workflow. Every interaction follows the same pattern:

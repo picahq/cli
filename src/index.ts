@@ -34,7 +34,8 @@ import { cacheClearCommand, cacheListCommand, cacheUpdateAllCommand } from './co
 import { guideCommand } from './commands/guide.js';
 import { onboardCommand } from './commands/onboard.js';
 import { updateCommand, checkLatestVersionCached, getCurrentVersion, isNewerVersion, autoUpdate } from './commands/update.js';
-import { setAgentMode } from './lib/output.js';
+import { setAgentMode, isAgentMode, json as outputJson } from './lib/output.js';
+import { syncSkillsIfStale, forceSyncSkills, getSkillStatus } from './lib/skill-sync.js';
 
 const require = createRequire(import.meta.url);
 const { version } = require('../package.json');
@@ -110,6 +111,12 @@ program.hook('preAction', (thisCommand) => {
   if (commandName !== 'update') {
     updateCheckPromise = checkLatestVersionCached();
   }
+  // Keep the installed skill files in lockstep with the CLI version. Cheap
+  // no-op when the marker matches current version; copies packaged skills
+  // into the canonical install dir when they drift. See lib/skill-sync.ts.
+  if (commandName !== 'init' && commandName !== 'update') {
+    try { syncSkillsIfStale(); } catch { /* best-effort, never block a command */ }
+  }
 });
 
 program.hook('postAction', async () => {
@@ -132,11 +139,62 @@ program
     await initCommand(options);
   });
 
-program
+const config = program
   .command('config')
-  .description('Configure MCP access control (permissions, connections, actions)')
+  .description('Configure the CLI (access control, skills, ...)')
   .action(async () => {
+    // Default action: interactive access-control editor (unchanged behavior).
     await configCommand();
+  });
+
+const configSkills = config
+  .command('skills')
+  .description('Manage locally-installed skill files');
+
+configSkills
+  .command('sync')
+  .description('Re-copy packaged skill files over the local install (runs automatically after CLI upgrades)')
+  .action(async () => {
+    const result = forceSyncSkills();
+    if (isAgentMode()) {
+      outputJson({ command: 'config skills sync', ...result });
+      return;
+    }
+    if (result.reason === 'not-installed') {
+      console.log("No skill is installed yet. Run 'one init' first and opt in to skill installation.");
+      return;
+    }
+    if (result.synced) {
+      console.log(`✓ Skills synced to v${result.to}`);
+      return;
+    }
+    if (result.reason === 'source-missing') {
+      console.log('✗ Packaged skill source not found in this CLI build');
+      return;
+    }
+    console.log(`✗ Sync failed${result.error ? ': ' + result.error : ''}`);
+  });
+
+configSkills
+  .command('status')
+  .description('Show installed skill version and whether it matches the current CLI')
+  .action(async () => {
+    const status = getSkillStatus();
+    if (isAgentMode()) {
+      outputJson({ command: 'config skills status', ...status });
+      return;
+    }
+    if (!status.installed) {
+      console.log("Skill is not installed. Run 'one init' to install it.");
+      console.log(`Canonical path (empty): ${status.canonicalPath}`);
+      return;
+    }
+    const marker = status.installedVersion ?? '(no marker — pre-sync install)';
+    const state = status.upToDate ? '✓ up to date' : '⚠ stale — will sync on next command';
+    console.log(`Skill: ${state}`);
+    console.log(`  installed: ${marker}`);
+    console.log(`  current:   ${status.currentVersion}`);
+    console.log(`  path:      ${status.canonicalPath}`);
   });
 
 const connection = program

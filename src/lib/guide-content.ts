@@ -101,6 +101,7 @@ Request specific sections:
 - Always use the **exact action ID** from search results — don't guess
 - Always read **knowledge** before executing any action
 - Connection keys come from \`one connection list\` — don't hardcode them
+- Skills stay in lockstep with the CLI version automatically — every command checks a \`.one-cli-version\` marker in the canonical skill dir and refreshes the files if the CLI has been upgraded. Check manually with \`one config skills status\`; force a resync with \`one config skills sync\`
 `;
 
 export const GUIDE_ACTIONS = `# One Actions — Reference
