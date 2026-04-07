@@ -1,6 +1,33 @@
 # One Workflows — Multi-Step API Workflows
 
-Workflows chain actions across platforms as JSON files stored at `.one/flows/<key>.flow.json`. Like n8n/Zapier but file-based.
+Workflows chain actions across platforms. Like n8n/Zapier but file-based.
+
+## Before you execute a flow you did NOT author — READ THIS
+
+Nothing about a flow's runtime requirements is guessable from its name. Before `flow execute`, do one of these:
+
+1. **Recommended:** `one --agent flow list` — the JSON output includes `requiresBash`, `usesCodeModules`, `inputs` (with `autoResolvable`), `stepTypes`, and the flow's `description`. Fastest path to knowing what you need.
+2. Read the flow's `description` field from the JSON. Authors are required (see "Author conventions" below) to state `--allow-bash` requirements and non-auto-resolving inputs there.
+3. `one --agent flow execute <key> --dry-run` to see resolved inputs and step plan without side effects.
+
+If you skip this, you will hit errors like *"Workflow X contains bash steps. Re-run with --allow-bash."* — the CLI pre-flights and fails fast, but the error is entirely avoidable by reading first.
+
+## Author conventions — write flows that are safe to execute blind
+
+The `description` field is the contract with future executors. It MUST state:
+
+- **`--allow-bash` if any step is type `bash`.** e.g. *"Fetches recent Gmail and summarizes with Claude Haiku. Requires `--allow-bash`."*
+- **Every input that does NOT have a `connection` hint.** Connection inputs auto-resolve when exactly one matching connection exists; everything else must be passed via `-i name=value`.
+- **Any files/directories the flow writes to.**
+
+If a flow's description doesn't tell you how to run it, treat that as a bug in the flow and fix it.
+
+**Storage layout:**
+
+- **Folder layout (REQUIRED for new flows):** `.one/flows/<key>/flow.json`, with an optional `lib/` subfolder for `.mjs` code modules. Like a skill — the folder groups the spec with its helper code, so the whole flow is shareable. **Always create new flows here.**
+- **Legacy single-file layout (DEPRECATED):** `.one/flows/<key>.flow.json`. Still loads and runs for backward compatibility, but do not create new flows in this layout. When touching an existing single-file flow, migrate it: move `<key>.flow.json` to `<key>/flow.json` and extract any non-trivial `code.source` blocks into `<key>/lib/*.mjs` modules.
+
+`one flow create` always writes the folder layout.
 
 ## Building a Workflow
 
@@ -37,7 +64,65 @@ You MUST call knowledge for every action in the workflow — it tells you the ex
 one --agent flow create <key> --definition '<json>'
 ```
 
-Or write directly to `.one/flows/<key>.flow.json`.
+Or write directly to `.one/flows/<key>/flow.json` (folder layout) or the legacy `.one/flows/<key>.flow.json`.
+
+### Code modules (`lib/` folder)
+
+A `code` step can reference an external `.mjs` module instead of inlining JS as a JSON string:
+
+```
+.one/flows/my-flow/
+├── flow.json
+└── lib/
+    └── process-data.mjs
+```
+
+```js
+// lib/process-data.mjs
+const $ = JSON.parse(await new Response(process.stdin).text());
+const items = $.steps.fetch.response.data ?? [];
+process.stdout.write(JSON.stringify(items.filter(i => i.active)));
+```
+
+```json
+{
+  "id": "processData",
+  "name": "Process",
+  "type": "code",
+  "code": { "module": "lib/process-data.mjs" }
+}
+```
+
+The module runs as a child `node` process: the flow context `$` is piped to stdin as JSON, and stdout is parsed as JSON and used as the step's output. Modules have full Node APIs available (unlike inline `code.source`, which is sandboxed). Use `code.module` for anything non-trivial; keep `code.source` for one-liners.
+
+Whatever JSON a module writes to stdout becomes both `$.steps.<id>.output` and `$.steps.<id>.response` (aliases). Downstream steps can reference either.
+
+### Migrating a legacy single-file flow
+
+If you touch an existing `.one/flows/<key>.flow.json`, migrate it:
+
+1. `mkdir -p .one/flows/<key>/lib`
+2. `mv .one/flows/<key>.flow.json .one/flows/<key>/flow.json`
+3. Extract non-trivial `code.source` blocks into `lib/<step-id>.mjs` and swap the step config from `{ "source": "..." }` to `{ "module": "lib/<step-id>.mjs" }`. One-liners can stay inline.
+4. `one --agent flow validate <key>`
+5. Execute and confirm behavior is unchanged.
+
+**Inline source → module translation.** Inline `code.source` is an async function body where `$` is in scope and you `return` the result. A module reads `$` from stdin and writes the result to stdout. Mechanical transform:
+
+Before (inline):
+```js
+const items = $.steps.fetch.response.data;
+return { active: items.filter(i => i.active) };
+```
+
+After (`lib/<step-id>.mjs`):
+```js
+const $ = JSON.parse(await new Response(process.stdin).text());
+const items = $.steps.fetch.response.data;
+process.stdout.write(JSON.stringify({ active: items.filter(i => i.active) }));
+```
+
+Two rules: (1) prepend the stdin-read line, (2) replace `return X` with `process.stdout.write(JSON.stringify(X))`.
 
 ### Step 5: Validate
 

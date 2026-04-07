@@ -109,13 +109,14 @@ export const FLOW_SCHEMA: FlowSchemaDescriptor = {
     {
       type: 'code',
       configKey: 'code',
-      description: 'Multi-line async JS with explicit return',
+      description: 'JS code — inline source or an external .mjs module under the flow\'s lib/ folder',
       fields: {
-        source: { type: 'string', required: true, description: 'JS function body (flow context as $, supports await)' },
+        source: { type: 'string', required: false, description: 'Inline JS function body (flow context as $, supports await). Mutually exclusive with "module".' },
+        module: { type: 'string', required: false, description: 'Relative path to a .mjs file under the flow folder (e.g. "lib/normalize.mjs"). Reads $ from stdin as JSON, writes result to stdout as JSON. Mutually exclusive with "source".' },
       },
       example: {
         id: 'processData', name: 'Process and enrich data', type: 'code',
-        code: { source: 'const items = $.steps.fetch.response.data;\nreturn items.filter(i => i.active);' },
+        code: { module: 'lib/process-data.mjs' },
       },
     },
     {
@@ -254,11 +255,11 @@ export const FLOW_SCHEMA: FlowSchemaDescriptor = {
     {
       type: 'bash',
       configKey: 'bash',
-      description: 'Shell command (requires --allow-bash)',
+      description: 'Shell command (requires --allow-bash). Output shape: $.steps.<id>.output is the parsed JSON when parseJson:true, otherwise the trimmed stdout string. $.steps.<id>.response always exposes { stdout, stderr, exitCode }.',
       fields: {
         command:   { type: 'string', required: true, description: 'Shell command to execute (supports selectors)' },
         timeout:   { type: 'number', required: false, description: 'Timeout in ms (default: 30000)' },
-        parseJson: { type: 'boolean', required: false, description: 'Parse stdout as JSON (default: false)' },
+        parseJson: { type: 'boolean', required: false, description: 'Parse stdout as JSON (default: false). When true, $.steps.<id>.output is the parsed object/array; when false, it is the trimmed stdout string.' },
         cwd:       { type: 'string', required: false, description: 'Working directory (supports selectors)' },
         env:       { type: 'object', required: false, description: 'Additional environment variables' },
       },
@@ -318,7 +319,32 @@ export function generateFlowGuide(): string {
 
 ## Overview
 
-Workflows are JSON files at \`.one/flows/<key>.flow.json\` that chain actions across platforms.
+Workflows live in \`.one/flows/\` (relative to your current working directory — the CLI does NOT walk up parent directories or fall back to a global location) and chain actions across platforms. Two layouts are supported:
+
+- **Folder layout (REQUIRED for new flows)** — \`.one/flows/<key>/flow.json\`, with an optional \`lib/\` subfolder for JavaScript modules. This is like a skill: the folder groups the JSON spec with any JavaScript modules it needs, so the whole flow is shareable. **Always create new flows in this layout.**
+- **Single-file layout (DEPRECATED)** — \`.one/flows/<key>.flow.json\`. Still loads and runs for backward compatibility, but is deprecated. Do not create new flows in this layout. When editing an existing single-file flow, migrate it to the folder layout: move \`<key>.flow.json\` to \`<key>/flow.json\` and extract any non-trivial \`code.source\` blocks into \`<key>/lib/*.mjs\` modules.
+
+When resolving a flow by key, the CLI checks the folder layout first, then the deprecated legacy file. The \`loadFlow\` helper in agent integrations behaves the same.
+
+## Before you execute a flow you did NOT author — READ THIS
+
+**Agents: always inspect a flow before running it.** Nothing about a flow's runtime requirements is guessable from its name. Before \`flow execute\`, do one of these:
+
+1. Run \`one --agent flow list\` — the JSON output includes \`requiresBash\`, \`usesCodeModules\`, \`inputs\` (with \`autoResolvable\` flags), \`stepTypes\`, and the flow's \`description\`. This is the fastest path.
+2. Read the flow's \`description\` field directly from the JSON. Flow authors are required (see "Author conventions" below) to state any \`--allow-bash\` requirement and any non-auto-resolving inputs in the description.
+3. Run \`one --agent flow execute <key> --dry-run\` to see the resolved inputs and step plan without side effects.
+
+If you skip this step you will hit errors like *"Workflow X contains bash steps. Re-run with --allow-bash."* — the CLI now pre-flights and fails fast, so you won't waste a long run, but the error is still avoidable by reading first.
+
+## Author conventions — WRITE flows that are safe to execute blind
+
+When you create a flow, its \`description\` field is the contract with future executors (human or agent). It MUST state:
+
+- **\`--allow-bash\` if any step is type \`bash\`.** Example: *"Fetches recent Gmail threads and summarizes them with Claude Haiku. Requires \`--allow-bash\`."*
+- **Every input that does NOT have a \`connection\` hint.** Connection inputs auto-resolve when exactly one matching connection exists; everything else must be passed via \`-i name=value\` and the description must name it.
+- **Any files/directories the flow writes to** so operators know what will be modified on disk.
+
+A good description is one paragraph. If a flow's description doesn't tell you how to run it, treat that as a bug in the flow and fix it.
 
 ## Commands
 
@@ -335,7 +361,69 @@ one --agent flow resume <runId>                        # Resume failed run
 one --agent flow scaffold [template]                   # Generate a starter template
 \`\`\`
 
-You can also write the JSON file directly to \`.one/flows/<key>.flow.json\` — this is often easier than passing large JSON via --definition.
+You can also write the JSON file directly to \`.one/flows/<key>/flow.json\` — often easier than passing large JSON via --definition. (The legacy \`.one/flows/<key>.flow.json\` single-file location is deprecated; don't use it for new flows.)
+
+## Code modules (flow \`lib/\` folder)
+
+A \`code\` step can either inline JS (\`code.source\`) or reference an external \`.mjs\` module (\`code.module\`). Modules live under the flow's \`lib/\` folder and run as a child \`node\` process:
+
+\`\`\`
+.one/flows/my-flow/
+├── flow.json
+└── lib/
+    └── process-data.mjs
+\`\`\`
+
+**Module contract:** the flow context \`$\` is piped to stdin as JSON; the module writes its result to stdout as JSON. That's the whole interface — no framework imports, no magic.
+
+\`\`\`js
+// lib/process-data.mjs
+const $ = JSON.parse(await new Response(process.stdin).text());
+const items = $.steps.fetch.response.data ?? [];
+process.stdout.write(JSON.stringify(items.filter(i => i.active)));
+\`\`\`
+
+\`\`\`json
+{
+  "id": "processData",
+  "name": "Process and enrich data",
+  "type": "code",
+  "code": { "module": "lib/process-data.mjs" }
+}
+\`\`\`
+
+Modules are full Node processes — \`fs\`, \`https\`, any npm package installed in the host project, etc. are all available. Use this for anything non-trivial; keep \`code.source\` for one-liners.
+
+**Step output shape:** whatever JSON a module writes to stdout becomes both \`$.steps.<id>.output\` and \`$.steps.<id>.response\` (aliases). Downstream steps can reference either; convention is to use \`.output\` for code/transform step results and \`.response\` for action step API payloads.
+
+## Migrating a legacy single-file flow to the folder layout
+
+If you're editing an existing \`.one/flows/<key>.flow.json\`, migrate it — it takes a minute and the result is cleaner. Checklist:
+
+1. \`mkdir -p .one/flows/<key>/lib\`
+2. Move the file: \`mv .one/flows/<key>.flow.json .one/flows/<key>/flow.json\`
+3. For each non-trivial \`code\` step with inline \`source\`, extract it into \`lib/<step-id>.mjs\` (see translation pattern below) and swap the step config from \`{ "source": "..." }\` to \`{ "module": "lib/<step-id>.mjs" }\`. One-liners can stay inline.
+4. Validate: \`one --agent flow validate <key>\`.
+5. Run it and confirm behavior is unchanged.
+
+**Inline source → module translation pattern.** Inline \`code.source\` is an async function body where \`$\` is already in scope and you \`return\` the result. A module is a standalone script where you read \`$\` from stdin and write the result to stdout as JSON. The transform is mechanical:
+
+Before (inline \`code.source\`):
+\`\`\`js
+const items = $.steps.fetch.response.data;
+const active = items.filter(i => i.active);
+return { active, count: active.length };
+\`\`\`
+
+After (\`lib/<step-id>.mjs\`):
+\`\`\`js
+const $ = JSON.parse(await new Response(process.stdin).text());
+const items = $.steps.fetch.response.data;
+const active = items.filter(i => i.active);
+process.stdout.write(JSON.stringify({ active, count: active.length }));
+\`\`\`
+
+The only differences: (1) prepend the stdin-read line, (2) replace \`return X\` with \`process.stdout.write(JSON.stringify(X))\`. That's it.
 
 ## Building a Workflow
 
@@ -584,7 +672,8 @@ Set timeout to at least 180000ms (3 min). Run Claude-heavy flows sequentially, n
 
 - Connection keys are **inputs**, not hardcoded
 - Action IDs in examples are placeholders — always use \`actions search\`
-- Code steps allow \`crypto\`, \`buffer\`, \`url\`, \`path\` — \`fs\`, \`http\`, \`child_process\` are blocked
+- Inline \`code.source\` steps allow \`require('crypto' | 'buffer' | 'url' | 'path')\` — \`fs\`, \`http\`, \`child_process\` are blocked
+- For anything beyond one-liners, use \`code.module\` to point at a \`.mjs\` file in the flow's \`lib/\` folder — runs as a child \`node\` process with full Node APIs, reads \`$\` from stdin, writes JSON to stdout
 - Bash steps require \`--allow-bash\` flag
 - State is persisted after every step — resume picks up where it left off`);
 

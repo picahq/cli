@@ -52,7 +52,10 @@ export interface FlowFileWriteConfig {
 }
 
 export interface FlowCodeConfig {
-  source: string;
+  /** Inline JS source (async function body). Mutually exclusive with `module`. */
+  source?: string;
+  /** Path to a .mjs file relative to the flow's root directory (e.g. "lib/normalize.mjs"). Mutually exclusive with `source`. */
+  module?: string;
 }
 
 export interface FlowWhileConfig {
@@ -164,5 +167,7 @@ export interface FlowExecuteOptions {
   mock?: boolean;
   verbose?: boolean;
   allowBash?: boolean;
+  /** Absolute directory that contains this flow's `flow.json` (or the legacy `.one/flows/` dir). Used to resolve code.module paths. */
+  rootDir?: string;
   onEvent?: (event: FlowEvent) => void;
 }

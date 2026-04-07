@@ -173,6 +173,27 @@ function validateStepsArray(steps: unknown[], pathPrefix: string, errors: Valida
         }
       }
     }
+
+    // Special: code step — require exactly one of source/module and validate module path
+    if (descriptor.type === 'code') {
+      const hasSource = typeof config.source === 'string' && (config.source as string).length > 0;
+      const hasModule = typeof config.module === 'string' && (config.module as string).length > 0;
+      if (!hasSource && !hasModule) {
+        errors.push({ path: `${path}.${configKey}`, message: 'Code step must define either "source" (inline JS) or "module" (path to .mjs file)' });
+      } else if (hasSource && hasModule) {
+        errors.push({ path: `${path}.${configKey}`, message: 'Code step cannot define both "source" and "module" — pick one' });
+      }
+      if (hasModule) {
+        const m = config.module as string;
+        if (m.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(m)) {
+          errors.push({ path: `${path}.${configKey}.module`, message: 'Code module path must be relative to the flow folder (no absolute paths)' });
+        } else if (m.split(/[\\/]/).includes('..')) {
+          errors.push({ path: `${path}.${configKey}.module`, message: 'Code module path must not escape the flow folder ("..")' });
+        } else if (!m.endsWith('.mjs')) {
+          errors.push({ path: `${path}.${configKey}.module`, message: 'Code module must be a .mjs file' });
+        }
+      }
+    }
   }
 }
 

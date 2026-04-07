@@ -237,7 +237,7 @@ flow
   .command('create [key]')
   .description('Create a new workflow from JSON definition')
   .option('--definition <json>', 'Workflow definition as JSON string')
-  .option('-o, --output <path>', 'Custom output path (default .one/flows/<key>.flow.json)')
+  .option('-o, --output <path>', 'Custom output path (default .one/flows/<key>/flow.json)')
   .action(async (key: string | undefined, options: { definition?: string; output?: string }) => {
     await flowCreateCommand(key, options);
   });

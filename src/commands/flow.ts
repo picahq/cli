@@ -4,7 +4,7 @@ import { OneApi } from '../lib/api.js';
 import * as output from '../lib/output.js';
 import { printTable } from '../lib/table.js';
 import { validateFlow } from '../lib/flow-validator.js';
-import { FlowRunner, loadFlow, listFlows, saveFlow, resolveFlowPath } from '../lib/flow-runner.js';
+import { FlowRunner, loadFlowWithMeta, listFlows, saveFlow, resolveFlowPath, flowRequiresBash } from '../lib/flow-runner.js';
 import type { Flow, FlowEvent } from '../lib/flow-types.js';
 import type { PermissionLevel } from '../lib/types.js';
 import fs from 'node:fs';
@@ -159,8 +159,13 @@ export async function flowExecuteCommand(
   spinner.start(`Loading workflow "${keyOrPath}"...`);
 
   let flow: Flow;
+  let rootDir: string;
+  let flowFilePath: string;
   try {
-    flow = loadFlow(keyOrPath);
+    const loaded = loadFlowWithMeta(keyOrPath);
+    flow = loaded.flow;
+    rootDir = loaded.rootDir;
+    flowFilePath = loaded.filePath;
   } catch (err) {
     spinner.stop('Workflow not found');
     output.error(err instanceof Error ? err.message : String(err));
@@ -168,6 +173,27 @@ export async function flowExecuteCommand(
   }
 
   spinner.stop(`Workflow: ${flow.name} (${flow.steps.length} steps)`);
+
+  // Deprecation warning: legacy single-file layout (`.one/flows/<key>.flow.json`)
+  if (flowFilePath.endsWith('.flow.json')) {
+    const msg = `Workflow "${flow.key}" uses the deprecated single-file layout. Migrate to .one/flows/${flow.key}/flow.json (see: one guide flows).`;
+    if (output.isAgentMode()) {
+      output.json({ event: 'flow:deprecation', flowKey: flow.key, warning: msg });
+    } else {
+      console.error(pc.yellow(`⚠ ${msg}`));
+    }
+  }
+
+  // Pre-flight: if the flow has bash steps, require --allow-bash upfront so
+  // we fail fast instead of partway through a long run.
+  if (!options.allowBash && flowRequiresBash(flow)) {
+    const msg = `Workflow "${flow.key}" contains bash steps. Re-run with --allow-bash to permit shell execution.`;
+    if (output.isAgentMode()) {
+      output.json({ error: msg, requiresBash: true, flowKey: flow.key });
+      process.exit(1);
+    }
+    output.error(msg);
+  }
 
   const inputs = parseInputs(options.input || []);
   const resolvedInputs = await autoResolveConnectionInputs(flow, inputs, api);
@@ -212,6 +238,7 @@ export async function flowExecuteCommand(
       mock: options.mock,
       verbose: options.verbose,
       allowBash: options.allowBash,
+      rootDir,
       onEvent,
     });
 
@@ -291,16 +318,18 @@ export async function flowListCommand(): Promise<void> {
     [
       { key: 'key', label: 'Key' },
       { key: 'name', label: 'Name' },
-      { key: 'description', label: 'Description' },
+      { key: 'layout', label: 'Layout' },
       { key: 'inputCount', label: 'Inputs' },
       { key: 'stepCount', label: 'Steps' },
+      { key: 'flags', label: 'Requires' },
     ],
     flows.map(f => ({
       key: f.key,
       name: f.name,
-      description: f.description || '',
+      layout: f.layout,
       inputCount: String(f.inputCount),
       stepCount: String(f.stepCount),
+      flags: f.requiresBash ? '--allow-bash' : '',
     })),
   );
   console.log();
@@ -366,8 +395,11 @@ export async function flowResumeCommand(runId: string): Promise<void> {
   const api = new OneApi(apiKey, getApiBase());
 
   let flow: Flow;
+  let rootDir: string;
   try {
-    flow = loadFlow(state!.flowKey);
+    const loaded = loadFlowWithMeta(state!.flowKey);
+    flow = loaded.flow;
+    rootDir = loaded.rootDir;
   } catch (err) {
     output.error(`Could not load workflow "${state!.flowKey}": ${err instanceof Error ? err.message : String(err)}`);
     return;
@@ -385,7 +417,7 @@ export async function flowResumeCommand(runId: string): Promise<void> {
   spinner.start(`Resuming run ${runId} (${state!.completedSteps.length} steps already completed)...`);
 
   try {
-    const context = await runner.resume(flow, api, permissions, actionIds, { onEvent });
+    const context = await runner.resume(flow, api, permissions, actionIds, { onEvent, rootDir });
     spinner.stop('Workflow completed');
 
     if (output.isAgentMode()) {

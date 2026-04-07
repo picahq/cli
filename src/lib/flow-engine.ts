@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { exec } from 'node:child_process';
+import { exec, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { OneApi } from './api.js';
 import { isMethodAllowed, isActionAllowed } from './api.js';
@@ -216,13 +216,104 @@ function executeTransformStep(step: FlowStep, context: FlowContext): StepResult 
   return { status: 'success', output, response: output };
 }
 
-async function executeCodeStep(step: FlowStep, context: FlowContext): Promise<StepResult> {
-  const source = step.code!.source;
+async function executeCodeStep(
+  step: FlowStep,
+  context: FlowContext,
+  options: FlowExecuteOptions,
+): Promise<StepResult> {
+  const config = step.code!;
+
+  if (config.module) {
+    const output = await executeCodeModule(step.id, config.module, context, options);
+    return { status: 'success', output, response: output };
+  }
+
+  if (typeof config.source !== 'string') {
+    throw new Error(`Code step "${step.id}" must define either "source" or "module"`);
+  }
+
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
   const sandboxedRequire = createSandboxedRequire();
-  const fn = new AsyncFunction('$', 'require', source);
+  const fn = new AsyncFunction('$', 'require', config.source);
   const output = await fn(context, sandboxedRequire);
   return { status: 'success', output, response: output };
+}
+
+/**
+ * Execute a code step that references an external .mjs module. The module is
+ * spawned as a child `node` process; the flow context `$` is piped to stdin
+ * as JSON and the module's stdout is parsed as JSON and returned.
+ *
+ * Contract for module authors (see guide):
+ *
+ *   const $ = JSON.parse(await new Response(process.stdin).text());
+ *   // ...compute...
+ *   process.stdout.write(JSON.stringify(result));
+ */
+async function executeCodeModule(
+  stepId: string,
+  modulePath: string,
+  context: FlowContext,
+  options: FlowExecuteOptions,
+): Promise<unknown> {
+  const rootDir = options.rootDir;
+  if (!rootDir) {
+    throw new Error(`Code step "${stepId}" uses module "${modulePath}" but no flow rootDir is available. Flows that use code modules must be loaded via loadFlowWithMeta.`);
+  }
+
+  // Safety: reject absolute paths and path traversal outside rootDir.
+  if (path.isAbsolute(modulePath)) {
+    throw new Error(`Code module path must be relative to the flow root, got absolute: "${modulePath}"`);
+  }
+  const absPath = path.resolve(rootDir, modulePath);
+  const relFromRoot = path.relative(rootDir, absPath);
+  if (relFromRoot.startsWith('..') || path.isAbsolute(relFromRoot)) {
+    throw new Error(`Code module "${modulePath}" resolves outside the flow directory`);
+  }
+
+  if (!fs.existsSync(absPath)) {
+    throw new Error(`Code module not found: ${absPath}`);
+  }
+
+  // Strip `env` — don't leak process.env into arbitrary user scripts via $.
+  const { env: _omitEnv, ...safeContext } = context;
+  void _omitEnv;
+  const stdinPayload = JSON.stringify(safeContext);
+
+  return await new Promise<unknown>((resolve, reject) => {
+    const child = spawn(process.execPath, [absPath], {
+      cwd: rootDir,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    child.stdout.on('data', (c: Buffer) => stdoutChunks.push(c));
+    child.stderr.on('data', (c: Buffer) => stderrChunks.push(c));
+
+    child.on('error', err => reject(err));
+    child.on('close', (code) => {
+      const stdout = Buffer.concat(stdoutChunks).toString('utf-8');
+      const stderr = Buffer.concat(stderrChunks).toString('utf-8');
+      if (code !== 0) {
+        reject(new Error(`Code module "${modulePath}" exited with code ${code}${stderr ? `: ${stderr.trim()}` : ''}`));
+        return;
+      }
+      const trimmed = stdout.trim();
+      if (trimmed === '') {
+        resolve(undefined);
+        return;
+      }
+      try {
+        resolve(JSON.parse(stripCodeFences(trimmed)));
+      } catch (err) {
+        reject(new Error(`Code module "${modulePath}" did not print valid JSON to stdout: ${(err as Error).message}`));
+      }
+    });
+
+    child.stdin.write(stdinPayload);
+    child.stdin.end();
+  });
 }
 
 async function executeConditionStep(
@@ -482,16 +573,17 @@ async function executeSubflowStep(
   }
 
   // Dynamic import to avoid circular dependency at module level
-  const { loadFlow } = await import('./flow-runner.js');
-  const subFlow = loadFlow(resolvedKey);
+  const { loadFlowWithMeta } = await import('./flow-runner.js');
+  const { flow: subFlow, rootDir: subRootDir } = loadFlowWithMeta(resolvedKey);
 
+  // Sub-flows resolve their own code modules against their own rootDir.
   const subContext = await executeFlow(
     subFlow,
     resolvedInputs,
     api,
     permissions,
     allowedActionIds,
-    options,
+    { ...options, rootDir: subRootDir },
     undefined,
     [...flowStack, resolvedKey],
   );
@@ -671,7 +763,7 @@ export async function executeSingleStep(
           result = executeTransformStep(step, context);
           break;
         case 'code':
-          result = await executeCodeStep(step, context);
+          result = await executeCodeStep(step, context, options);
           break;
         case 'condition':
           result = await executeConditionStep(step, context, api, permissions, allowedActionIds, options, flowStack);

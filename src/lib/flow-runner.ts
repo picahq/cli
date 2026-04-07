@@ -11,6 +11,8 @@ import type {
   FlowExecuteOptions,
 } from './flow-types.js';
 import { executeFlow } from './flow-engine.js';
+import { getNestedStepsKeys } from './flow-schema.js';
+import type { FlowStep, FlowStepType } from './flow-types.js';
 
 const FLOWS_DIR = '.one/flows';
 const RUNS_DIR = '.one/flows/.runs';
@@ -276,60 +278,208 @@ export class FlowRunner {
 
 // ── Flow File Helpers ──
 
+/**
+ * Resolve a flow key or path to its file location.
+ *
+ * Resolution order for bare keys:
+ *   1. `.one/flows/<key>/flow.json` (folder layout — preferred for new flows)
+ *   2. `.one/flows/<key>.flow.json` (legacy single-file layout)
+ *
+ * Returns the first existing path. If neither exists, returns the folder-layout
+ * path so error messages point at the modern convention.
+ */
 export function resolveFlowPath(keyOrPath: string): string {
-  // If it looks like a file path (contains / or \ or ends with .json)
+  // Explicit path or .json filename → use as-is
   if (keyOrPath.includes('/') || keyOrPath.includes('\\') || keyOrPath.endsWith('.json')) {
     return path.resolve(keyOrPath);
   }
-  // Otherwise treat as a flow key
-  return path.resolve(FLOWS_DIR, `${keyOrPath}.flow.json`);
+  const folderPath = path.resolve(FLOWS_DIR, keyOrPath, 'flow.json');
+  const legacyPath = path.resolve(FLOWS_DIR, `${keyOrPath}.flow.json`);
+  if (fs.existsSync(folderPath)) return folderPath;
+  if (fs.existsSync(legacyPath)) return legacyPath;
+  return folderPath;
+}
+
+/**
+ * Given a flow's JSON file path, return the directory that code modules
+ * should resolve against. For folder flows this is the directory containing
+ * `flow.json`; for legacy single-file flows it's `.one/flows/`.
+ */
+export function getFlowRootDir(flowFilePath: string): string {
+  const dir = path.dirname(flowFilePath);
+  const base = path.basename(flowFilePath);
+  // Folder layout: <key>/flow.json → root is <key>/
+  if (base === 'flow.json') return dir;
+  // Legacy: .one/flows/<key>.flow.json → root is .one/flows/
+  return dir;
+}
+
+export interface LoadedFlow {
+  flow: Flow;
+  filePath: string;
+  rootDir: string;
+}
+
+export function loadFlowWithMeta(keyOrPath: string): LoadedFlow {
+  const filePath = resolveFlowPath(keyOrPath);
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`Flow not found: ${filePath}`);
+  }
+  const content = fs.readFileSync(filePath, 'utf-8');
+  const flow = JSON.parse(content) as Flow;
+  return { flow, filePath, rootDir: getFlowRootDir(filePath) };
 }
 
 export function loadFlow(keyOrPath: string): Flow {
-  const flowPath = resolveFlowPath(keyOrPath);
-
-  if (!fs.existsSync(flowPath)) {
-    throw new Error(`Flow not found: ${flowPath}`);
-  }
-
-  const content = fs.readFileSync(flowPath, 'utf-8');
-  return JSON.parse(content) as Flow;
+  return loadFlowWithMeta(keyOrPath).flow;
 }
 
-export function listFlows(): { key: string; name: string; description?: string; inputCount: number; stepCount: number; path: string }[] {
+/**
+ * Walk a flow's steps (including nested steps in condition/loop/parallel/while)
+ * and invoke `visit` for each step. Returns true if any visit returned true —
+ * useful for "does this flow contain a bash step" type queries.
+ */
+export function walkSteps(steps: FlowStep[], visit: (step: FlowStep) => boolean | void): boolean {
+  const nested = getNestedStepsKeys();
+  for (const step of steps) {
+    if (visit(step)) return true;
+    for (const { configKey, fieldName } of nested) {
+      const config = (step as Record<string, unknown>)[configKey] as Record<string, unknown> | undefined;
+      if (config && Array.isArray(config[fieldName])) {
+        if (walkSteps(config[fieldName] as FlowStep[], visit)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/** Collect unique step types used in the flow (recursively). */
+export function collectStepTypes(flow: Flow): FlowStepType[] {
+  const types = new Set<FlowStepType>();
+  walkSteps(flow.steps, step => { types.add(step.type); });
+  return Array.from(types).sort();
+}
+
+/** True if any step (recursively) is a bash step. */
+export function flowRequiresBash(flow: Flow): boolean {
+  return walkSteps(flow.steps, step => step.type === 'bash');
+}
+
+/** True if any code step (recursively) uses an external module file. */
+export function flowUsesCodeModules(flow: Flow): boolean {
+  return walkSteps(flow.steps, step => step.type === 'code' && !!step.code?.module);
+}
+
+export interface FlowInputSummary {
+  name: string;
+  type: string;
+  required: boolean;
+  default?: unknown;
+  description?: string;
+  connection?: { platform: string };
+  autoResolvable: boolean;
+}
+
+export function summarizeFlowInputs(flow: Flow): FlowInputSummary[] {
+  return Object.entries(flow.inputs).map(([name, decl]) => ({
+    name,
+    type: decl.type,
+    required: decl.required !== false,
+    default: decl.default,
+    description: decl.description,
+    connection: decl.connection,
+    // An input is auto-resolvable if it points to a connection (the engine
+    // will pick it automatically when exactly one matching connection exists).
+    autoResolvable: !!decl.connection,
+  }));
+}
+
+type FlowListEntry = {
+  key: string;
+  name: string;
+  description?: string;
+  inputCount: number;
+  stepCount: number;
+  path: string;
+  layout: 'folder' | 'legacy';
+  stepTypes: FlowStepType[];
+  requiresBash: boolean;
+  usesCodeModules: boolean;
+  inputs: FlowInputSummary[];
+};
+
+export function listFlows(): FlowListEntry[] {
   const flowsDir = path.resolve(FLOWS_DIR);
   if (!fs.existsSync(flowsDir)) return [];
 
-  const files = fs.readdirSync(flowsDir).filter(f => f.endsWith('.flow.json'));
-  const flows: { key: string; name: string; description?: string; inputCount: number; stepCount: number; path: string }[] = [];
+  const flows: FlowListEntry[] = [];
+  const seenKeys = new Set<string>();
 
-  for (const file of files) {
+  const readFlowFile = (filePath: string): void => {
     try {
-      const content = fs.readFileSync(path.join(flowsDir, file), 'utf-8');
+      const content = fs.readFileSync(filePath, 'utf-8');
       const flow = JSON.parse(content) as Flow;
+      if (seenKeys.has(flow.key)) return;
+      seenKeys.add(flow.key);
       flows.push({
         key: flow.key,
         name: flow.name,
         description: flow.description,
         inputCount: Object.keys(flow.inputs).length,
         stepCount: flow.steps.length,
-        path: path.join(flowsDir, file),
+        path: filePath,
+        layout: path.basename(filePath) === 'flow.json' ? 'folder' : 'legacy',
+        stepTypes: collectStepTypes(flow),
+        requiresBash: flowRequiresBash(flow),
+        usesCodeModules: flowUsesCodeModules(flow),
+        inputs: summarizeFlowInputs(flow),
       });
     } catch {
       // Skip malformed flow files
+    }
+  };
+
+  for (const entry of fs.readdirSync(flowsDir, { withFileTypes: true })) {
+    if (entry.name.startsWith('.')) continue; // skip .runs, .logs, etc.
+    const full = path.join(flowsDir, entry.name);
+    if (entry.isDirectory()) {
+      const flowJson = path.join(full, 'flow.json');
+      if (fs.existsSync(flowJson)) readFlowFile(flowJson);
+    } else if (entry.isFile() && entry.name.endsWith('.flow.json')) {
+      readFlowFile(full);
     }
   }
 
   return flows;
 }
 
+/**
+ * Save a flow. New flows default to the folder layout
+ * (`.one/flows/<key>/flow.json`), creating `<key>/lib/` alongside. An explicit
+ * `outputPath` is respected as-is for backward compatibility.
+ */
 export function saveFlow(flow: Flow, outputPath?: string): string {
-  const flowPath = outputPath
-    ? path.resolve(outputPath)
-    : path.resolve(FLOWS_DIR, `${flow.key}.flow.json`);
+  let flowPath: string;
+  if (outputPath) {
+    flowPath = path.resolve(outputPath);
+  } else {
+    const legacyPath = path.resolve(FLOWS_DIR, `${flow.key}.flow.json`);
+    const folderPath = path.resolve(FLOWS_DIR, flow.key, 'flow.json');
+    // Preserve layout if a flow with this key already exists
+    if (fs.existsSync(legacyPath) && !fs.existsSync(folderPath)) {
+      flowPath = legacyPath;
+    } else {
+      flowPath = folderPath;
+    }
+  }
 
   const dir = path.dirname(flowPath);
   ensureDir(dir);
+
+  // For folder layout, scaffold an empty lib/ so users know where modules go.
+  if (path.basename(flowPath) === 'flow.json') {
+    ensureDir(path.join(dir, 'lib'));
+  }
 
   fs.writeFileSync(flowPath, JSON.stringify(flow, null, 2) + '\n');
   return flowPath;
