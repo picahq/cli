@@ -424,6 +424,35 @@ Alternatively, pass values as environment variables (also shell-safe) and refere
 }
 ```
 
+## Step Input Contracts (`requires`)
+
+Declare the data a step depends on so the engine fails fast — with a useful error — when an upstream value is missing. Without `requires`, a skipped or failed upstream step silently leaves `undefined` in the context and the consumer either crashes deep in user code or burns an LLM call on empty input.
+
+```json
+{
+  "id": "summarizeFounder",
+  "type": "code",
+  "requires": [
+    "$.steps.fetchProfile.output.bio",
+    "$.input.founderName"
+  ],
+  "code": { "module": "lib/summarize.mjs" }
+}
+```
+
+Each entry is a `$.input.X` or `$.steps.X.output...` selector. A selector is considered missing when it resolves to `undefined`, `null`, `""`, or `[]` (empty objects are allowed). On a miss, the engine throws **before** the step runs:
+
+```
+Step "summarizeFounder" requires $.steps.fetchProfile.output.bio but it
+resolved to undefined (upstream step "fetchProfile" was skipped)
+```
+
+The "because…" suffix tells you exactly why — skipped, failed, or timed out — so you can fix the upstream wiring instead of guessing.
+
+`requires` failures honor the step's `onError` strategy: pair `requires` with `onError: { strategy: "continue" }` to skip optional consumers gracefully, or leave the default `fail` to halt the flow on contract violations.
+
+Forward references are caught at flow load time: if `requires` points at a step declared after the current step, validation rejects the flow.
+
 ## Error Handling
 
 ```json

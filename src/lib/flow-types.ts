@@ -117,6 +117,15 @@ export interface FlowStep {
    * from a normal failure.
    */
   timeoutMs?: number;
+  /**
+   * Presence preconditions for this step. Each entry is a `$.input.X` or
+   * `$.steps.X.output...` selector that must resolve to a non-empty value
+   * (not undefined, null, '', or []) before the step runs. If any selector
+   * is missing the step fails with a descriptive error — including *why*
+   * the upstream value is missing (e.g. the source step was skipped or
+   * failed). Failures honor the step's `onError` strategy.
+   */
+  requires?: string[];
   onError?: FlowStepErrorConfig;
   action?: FlowActionConfig;
   transform?: FlowTransformConfig;

@@ -843,6 +843,49 @@ async function executeBashStep(
   };
 }
 
+// ── Requires precondition check ──
+
+/**
+ * A required selector is "missing" if it resolves to undefined, null, an
+ * empty string, or an empty array. Empty objects are intentionally allowed
+ * — `{}` is a valid value for many step types.
+ */
+function isMissing(value: unknown): boolean {
+  if (value === undefined || value === null) return true;
+  if (typeof value === 'string' && value.length === 0) return true;
+  if (Array.isArray(value) && value.length === 0) return true;
+  return false;
+}
+
+/**
+ * Build a "...because step X was skipped" suffix when a required selector
+ * points at an upstream step whose status explains the missing value.
+ */
+function explainMissing(selector: string, context: FlowContext): string {
+  const parts = selector.slice(2).split('.');
+  if (parts[0] !== 'steps' || parts.length < 2) return '';
+  const stepId = parts[1].replace(/\[.*$/, '');
+  const upstream = context.steps[stepId];
+  if (!upstream) return ` (upstream step "${stepId}" has not run)`;
+  if (upstream.status === 'skipped') return ` (upstream step "${stepId}" was skipped)`;
+  if (upstream.status === 'failed') return ` (upstream step "${stepId}" failed: ${upstream.error ?? 'unknown error'})`;
+  if (upstream.status === 'timeout') return ` (upstream step "${stepId}" timed out)`;
+  return '';
+}
+
+export function checkRequires(step: FlowStep, context: FlowContext): void {
+  if (!step.requires || step.requires.length === 0) return;
+  for (const selector of step.requires) {
+    const value = resolveSelector(selector, context);
+    if (isMissing(value)) {
+      const why = explainMissing(selector, context);
+      throw new Error(
+        `Step "${step.id}" requires ${selector} but it resolved to ${value === undefined ? 'undefined' : value === null ? 'null' : Array.isArray(value) ? 'an empty array' : 'an empty string'}${why}`
+      );
+    }
+  }
+}
+
 // ── Core Execution ──
 
 export async function executeSingleStep(
@@ -889,6 +932,11 @@ export async function executeSingleStep(
         });
         await sleep(delay);
       }
+
+      // Presence preconditions: fail fast (and via onError) if any required
+      // selector resolves to a missing value. Run before mock dispatch so
+      // contract violations surface even in dry runs.
+      checkRequires(step, context);
 
       // Feature 7: Mock mode — mock external steps, run logic steps normally
       if (options.mock && (step.type === 'action' || step.type === 'paginate' || step.type === 'bash')) {

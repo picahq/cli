@@ -107,6 +107,22 @@ function validateStepsArray(steps: unknown[], pathPrefix: string, errors: Valida
       continue; // can't validate type-specific config without a valid type
     }
 
+    // requires validation: must be an array of $.x.y.z selector strings
+    if (s.requires !== undefined) {
+      if (!Array.isArray(s.requires)) {
+        errors.push({ path: `${path}.requires`, message: '"requires" must be an array of selector strings (e.g. ["$.steps.foo.output.bar"])' });
+      } else {
+        for (let r = 0; r < s.requires.length; r++) {
+          const sel = s.requires[r];
+          if (typeof sel !== 'string') {
+            errors.push({ path: `${path}.requires[${r}]`, message: '"requires" entry must be a selector string' });
+          } else if (!sel.startsWith('$.')) {
+            errors.push({ path: `${path}.requires[${r}]`, message: `"requires" entry "${sel}" must be a selector starting with "$." (e.g. "$.steps.foo.output.bar")` });
+          }
+        }
+      }
+    }
+
     // onError validation
     if (s.onError && typeof s.onError === 'object') {
       const oe = s.onError as Record<string, unknown>;
@@ -378,6 +394,17 @@ export function validateSelectorReferences(flow: Flow): ValidationError[] {
     // if/unless are JS expressions — validate selector references but allow operators
     if (step.if) checkSelectors(extractSelectors(step.if), `${pathPrefix}.if`, preceding);
     if (step.unless) checkSelectors(extractSelectors(step.unless), `${pathPrefix}.unless`, preceding);
+
+    // requires entries are pure selectors — every entry must reference a real
+    // input or a preceding step (forward refs always resolve to undefined).
+    if (Array.isArray((step as { requires?: unknown }).requires)) {
+      const reqs = (step as { requires: unknown[] }).requires;
+      reqs.forEach((sel, i) => {
+        if (typeof sel === 'string' && sel.startsWith('$.')) {
+          checkSelectors([sel], `${pathPrefix}.requires[${i}]`, preceding);
+        }
+      });
+    }
 
     // Check selectors in all config objects
     const descriptor = getStepTypeDescriptor(step.type);

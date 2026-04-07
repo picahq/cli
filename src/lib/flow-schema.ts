@@ -69,6 +69,7 @@ export const FLOW_SCHEMA: FlowSchemaDescriptor = {
     if:     { type: 'string', required: false, description: 'JS expression — skip step if falsy' },
     unless: { type: 'string', required: false, description: 'JS expression — skip step if truthy' },
     timeoutMs: { type: 'number', required: false, description: 'Wall-clock timeout (ms). On expiry the step fails with errorCode:"TIMEOUT"; with onError:continue the result gets status:"timeout".' },
+    requires:  { type: 'array', required: false, description: 'Presence preconditions: array of $.input.X or $.steps.X.output... selectors that must resolve to a non-empty value before the step runs. Failures honor onError.' },
   },
 
   stepTypes: [
