@@ -60,6 +60,7 @@ export const FLOW_SCHEMA: FlowSchemaDescriptor = {
     default:     { type: 'unknown', required: false, description: 'Default value if not provided' },
     description: { type: 'string', required: false, description: 'Human-readable description' },
     connection:  { type: 'object', required: false, description: 'Connection metadata: { platform: "gmail" } — enables auto-resolution' },
+    enum:        { type: 'array',  required: false, description: 'Allowed values. Resolved input must equal one of these (post-coercion).' },
   },
 
   stepCommonFields: {

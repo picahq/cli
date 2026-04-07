@@ -186,8 +186,28 @@ one --agent flow execute <key> -i connectionKey=xxx -i param=value
 | `default` | Default value if not provided |
 | `description` | Human-readable description |
 | `connection` | `{ "platform": "gmail" }` — enables auto-resolution |
+| `enum` | Array of allowed values; rejected if input doesn't match (post-coercion) |
 
 Connection inputs with a `connection` field auto-resolve if the user has exactly one connection for that platform.
+
+**Validation, coercion, and enums.** At flow start the engine validates every declared input:
+
+1. **Required check** — `required: true` (the default) inputs without a value or `default` cause `Missing required input: "X"`.
+2. **Type coercion** — narrow, bidirectional fixes only:
+   - `number`: numeric strings (`"5"`) become `5`. Non-numeric strings throw.
+   - `boolean`: `"true"`/`"1"`/`1` → `true`; `"false"`/`"0"`/`0` → `false`. Anything else throws.
+   - `array` / `object`: JSON strings are parsed. Non-JSON throws.
+   - `string`: anything else is `String(value)`-coerced.
+3. **Enum check** — if `enum` is set, the (coerced) value must be `===` one of the allowed entries. Errors quote both the allowed list and the actual value.
+
+This eliminates the per-flow `if (!$.input.x) throw ...` boilerplate. Errors look like:
+
+```
+Input "tier" must be a number, got string ("lots")
+Input "stage" must be one of ["pre_seed","seed","series_a"], got "ipo"
+```
+
+The same checks run when a step calls a sub-flow, so type/enum guarantees hold across the call boundary.
 
 ## Selector Syntax
 

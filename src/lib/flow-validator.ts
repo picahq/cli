@@ -55,6 +55,11 @@ export function validateFlowSchema(flow: unknown): ValidationError[] {
       if (!d.type || !FLOW_SCHEMA.validInputTypes.includes(d.type as string)) {
         errors.push({ path: `${prefix}.type`, message: `Input type must be one of: ${FLOW_SCHEMA.validInputTypes.join(', ')}` });
       }
+      if (d.enum !== undefined) {
+        if (!Array.isArray(d.enum) || d.enum.length === 0) {
+          errors.push({ path: `${prefix}.enum`, message: '"enum" must be a non-empty array of allowed values' });
+        }
+      }
       if (d.connection !== undefined) {
         if (!d.connection || typeof d.connection !== 'object') {
           errors.push({ path: `${prefix}.connection`, message: 'Connection metadata must be an object' });

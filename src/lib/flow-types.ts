@@ -4,6 +4,12 @@ export interface FlowInputDeclaration {
   default?: unknown;
   description?: string;
   connection?: { platform: string };
+  /**
+   * Allowed values. If set, the resolved input must be strictly equal to one
+   * of these (compared after type coercion). Useful for tier/stage/category
+   * inputs where only a fixed vocabulary is valid.
+   */
+  enum?: unknown[];
 }
 
 export interface FlowActionConfig {

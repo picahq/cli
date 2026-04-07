@@ -843,6 +843,15 @@ async function executeBashStep(
   };
 }
 
+// ── Input describe helper (for type-error messages) ──
+
+function describe(value: unknown): string {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return `array (${JSON.stringify(value)})`;
+  if (typeof value === 'object') return `object (${JSON.stringify(value)})`;
+  return `${typeof value} (${JSON.stringify(value)})`;
+}
+
 // ── Requires precondition check ──
 
 /**
@@ -1113,30 +1122,86 @@ export async function executeFlow(
   resumeState?: { context: FlowContext; completedSteps: string[] },
   flowStack: string[] = [],
 ): Promise<FlowContext> {
-  // Validate required inputs
-  for (const [name, decl] of Object.entries(flow.inputs)) {
-    if (decl.required !== false && inputs[name] === undefined && decl.default === undefined) {
-      throw new Error(`Missing required input: "${name}" — ${decl.description || ''}`);
-    }
-  }
-
-  // Build resolved inputs with defaults
+  // Validate, coerce, and apply defaults to inputs.
+  // Coercion is intentionally narrow: it only fixes the cases where a value
+  // arrived as the "wrong" primitive (string from a CLI flag, JSON-parsed
+  // value from a subflow caller). It never silently drops information.
   const resolvedInputs: Record<string, unknown> = {};
   for (const [name, decl] of Object.entries(flow.inputs)) {
-    if (inputs[name] !== undefined) {
-      resolvedInputs[name] = inputs[name];
-    } else if (decl.default !== undefined) {
-      resolvedInputs[name] = decl.default;
+    const provided = inputs[name];
+    const isMissing = provided === undefined || provided === null;
+
+    if (isMissing) {
+      if (decl.required !== false && decl.default === undefined) {
+        throw new Error(`Missing required input: "${name}"${decl.description ? ` — ${decl.description}` : ''}`);
+      }
+      if (decl.default !== undefined) {
+        resolvedInputs[name] = decl.default;
+      }
+      continue;
     }
+
+    let value: unknown = provided;
+
+    // Type coercion + check
+    switch (decl.type) {
+      case 'string':
+        if (typeof value !== 'string') value = String(value);
+        break;
+      case 'number':
+        if (typeof value === 'string' && value.trim() !== '' && !Number.isNaN(Number(value))) {
+          value = Number(value);
+        }
+        if (typeof value !== 'number' || Number.isNaN(value)) {
+          throw new Error(`Input "${name}" must be a number, got ${describe(provided)}`);
+        }
+        break;
+      case 'boolean':
+        if (value === 'true' || value === '1' || value === 1) value = true;
+        else if (value === 'false' || value === '0' || value === 0) value = false;
+        if (typeof value !== 'boolean') {
+          throw new Error(`Input "${name}" must be a boolean, got ${describe(provided)}`);
+        }
+        break;
+      case 'array':
+        if (typeof value === 'string') {
+          try { value = JSON.parse(value); } catch { /* leave as-is, fail below */ }
+        }
+        if (!Array.isArray(value)) {
+          throw new Error(`Input "${name}" must be an array, got ${describe(provided)}`);
+        }
+        break;
+      case 'object':
+        if (typeof value === 'string') {
+          try { value = JSON.parse(value); } catch { /* leave as-is, fail below */ }
+        }
+        if (!value || typeof value !== 'object' || Array.isArray(value)) {
+          throw new Error(`Input "${name}" must be an object, got ${describe(provided)}`);
+        }
+        break;
+    }
+
+    // Enum check (post-coercion)
+    if (Array.isArray(decl.enum) && decl.enum.length > 0) {
+      if (!decl.enum.some(allowed => allowed === value)) {
+        throw new Error(`Input "${name}" must be one of ${JSON.stringify(decl.enum)}, got ${JSON.stringify(value)}`);
+      }
+    }
+
+    resolvedInputs[name] = value;
   }
 
-  // Build context
+  // Build context. When resuming (or when FlowRunner pre-creates the
+  // context), the caller's `input` map is the raw, un-coerced one — we
+  // overwrite it with the validated/coerced inputs so that `$.input.X`
+  // selectors see the right types.
   const context: FlowContext = resumeState?.context || {
     input: resolvedInputs,
     env: process.env as Record<string, string | undefined>,
     steps: {},
     loop: {},
   };
+  context.input = resolvedInputs;
 
   const completedStepIds = resumeState
     ? new Set(resumeState.completedSteps)
