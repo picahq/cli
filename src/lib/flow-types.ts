@@ -89,6 +89,16 @@ export interface FlowStepErrorConfig {
   strategy: 'fail' | 'continue' | 'retry' | 'fallback';
   retries?: number;
   retryDelayMs?: number;
+  /**
+   * Delay growth between retries.
+   * - `fixed` (default): every retry waits `retryDelayMs`.
+   * - `exponential`: retry N waits `retryDelayMs * 2^(N-1)`, capped at `maxDelayMs`.
+   * - `exponential-jitter`: same as exponential, but each wait is multiplied by a
+   *    uniform random factor in [0.5, 1.0) to spread retries and avoid thundering herds.
+   */
+  backoff?: 'fixed' | 'exponential' | 'exponential-jitter';
+  /** Upper bound for backoff delays. Defaults to 30000 (30s). */
+  maxDelayMs?: number;
   fallbackStepId?: string;
 }
 

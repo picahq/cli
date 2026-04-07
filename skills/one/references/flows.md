@@ -95,6 +95,21 @@ process.stdout.write(JSON.stringify(items.filter(i => i.active)));
 
 The module runs as a child `node` process: the flow context `$` is piped to stdin as JSON, and stdout is parsed as JSON and used as the step's output. Modules have full Node APIs available (unlike inline `code.source`, which is sandboxed). Use `code.module` for anything non-trivial; keep `code.source` for one-liners.
 
+#### Inline `code.source` sandbox
+
+Inline `code.source` runs inside an async function with a restricted `require`. Only the following Node built-ins are importable:
+
+- `node:buffer`
+- `node:crypto`
+- `node:url`
+- `node:path`
+
+Everything else — `fs`, `http`, `https`, `net`, `child_process`, `process`, `os`, `cluster`, `dgram`, `tls`, `vm`, `worker_threads` — is **blocked** and will throw `Module "<name>" is blocked in code steps`. The runtime also does not expose `process`, `__dirname`, `__filename`, `setTimeout`, or `fetch`.
+
+If you need any of those (filesystem reads, network calls, timers, etc.), use a `code.module` step instead — modules run as a real child `node` process and have the full Node API surface.
+
+When an inline `code.source` step throws at runtime, the error message reports the user-relative line and column plus the offending line of source — e.g. `Code step "blowup" failed at line 3:34\n  const c = $.steps.mk.output.data.score;\n  Cannot read properties of null (reading 'score')`. No need to bisect the step manually.
+
 Whatever JSON a module writes to stdout becomes both `$.steps.<id>.output` and `$.steps.<id>.response` (aliases). Downstream steps can reference either.
 
 ### Migrating a legacy single-file flow
@@ -129,6 +144,8 @@ Two rules: (1) prepend the stdin-read line, (2) replace `return X` with `process
 ```bash
 one --agent flow validate <key>
 ```
+
+`flow validate` parses every inline `code.source` and runs `node --check` on every `code.module` file, so syntax errors (brace/paren mismatches, duplicate `let`, etc.) surface here instead of after upstream steps have already run. It also extracts `$.steps.X` and `$.input.X` references from inside `code.source` and `transform.expression` and reports any reference to an undefined step/input or to a step declared **after** the current one (forward references resolve to `undefined` at runtime — silent data loss). The same checks run automatically at the start of `flow execute` so a broken step in position 15 fails the run immediately rather than 15 minutes in.
 
 ### Step 6: Execute
 
@@ -186,6 +203,16 @@ Connection inputs with a `connection` field auto-resolve if the user has exactly
 | `"Hello {{$.steps.getUser.response.data.name}}"` | String interpolation |
 
 A pure `$.xxx` value resolves to the raw type. A string containing `{{$.xxx}}` does string interpolation.
+
+**Passing objects and arrays:** `{{ }}` interpolation always produces a string — if the resolved value is an object or array it will be JSON-stringified and the engine will log a warning. To pass an object/array as a native value to the next step, use a **direct selector without `{{ }}`**:
+
+```json
+// ✗ Wrong — becomes a JSON string, triggers a runtime warning
+"files": "{{$.steps.extract.output.allFiles}}"
+
+// ✓ Right — passes the array as an array
+"files": "$.steps.extract.output.allFiles"
+```
 
 ### Selectors vs expressions
 
@@ -343,6 +370,14 @@ After a parallel step, access each substep's output by its `id`: `$.steps.fetchE
 }
 ```
 
+A sub-flow step exposes the sub-flow's **step results map** at both `.output` and `.response` (they are aliases — pick whichever reads better). Access a specific sub-step's data with:
+
+```
+$.steps.<parent>.output.<subStepId>.output.<field>
+```
+
+e.g. if sub-flow `enrich-customer` has a step `load` that returns `{ TEAM: "acme" }`, the caller reads it as `$.steps.enrich.output.load.output.TEAM`. There is no longer any `.response.<subStepId>` vs `.output.<subStepId>` ambiguity.
+
 ### `paginate` — Auto-collect paginated results
 
 ```json
@@ -369,6 +404,26 @@ After a parallel step, access each substep's output by its `id`: `$.steps.fetchE
 }
 ```
 
+**Safe interpolation.** Plain `{{$.input.x}}` does string substitution and is **unsafe** for bash — values containing quotes, `$`, backticks, `&`, etc. will break the command (or worse). Use the `q` helper to POSIX-shell-quote the value:
+
+```json
+{ "command": "echo {{q $.input.companyName}} | tr '[:upper:]' '[:lower:]'" }
+```
+
+`{{q $.input.companyName}}` resolves `O'Reilly Media & Co` to `'O'\''Reilly Media & Co'` — a single argv token bash will parse cleanly. Use `{{q ...}}` for **every** interpolation of user-controlled data into a bash command.
+
+Alternatively, pass values as environment variables (also shell-safe) and reference them with `$VAR`:
+
+```json
+{
+  "type": "bash",
+  "bash": {
+    "env": { "COMPANY": "$.input.companyName" },
+    "command": "echo \"$COMPANY\" | tr '[:upper:]' '[:lower:]'"
+  }
+}
+```
+
 ## Error Handling
 
 ```json
@@ -376,6 +431,30 @@ After a parallel step, access each substep's output by its `id`: `$.steps.fetchE
 ```
 
 Strategies: `fail` (default), `continue`, `retry`, `fallback`.
+
+**Retry backoff.** By default each retry waits exactly `retryDelayMs`. For rate-limited APIs add `"backoff": "exponential"` (or `"exponential-jitter"`) and an optional `"maxDelayMs"` cap (defaults to 30000):
+
+```json
+{
+  "onError": {
+    "strategy": "retry",
+    "retries": 4,
+    "retryDelayMs": 1000,
+    "backoff": "exponential-jitter",
+    "maxDelayMs": 10000
+  }
+}
+```
+
+`exponential` waits `retryDelayMs * 2^(retryIndex)` (1s, 2s, 4s, 8s…) capped at `maxDelayMs`. `exponential-jitter` multiplies each wait by a random factor in [0.5, 1.0) so concurrent retries spread out.
+
+**Inspecting retry outcomes.** Every retried step exposes how it ended on its `StepResult`:
+
+- `$.steps.<id>.status` — `"success"` or `"failed"`
+- `$.steps.<id>.retries` — number of retries actually performed (0 if first attempt succeeded)
+- `$.steps.<id>.error` — last error message (only set when `status === "failed"` under `continue`/`fallback` strategies)
+
+A successful-after-retry step also emits a `step:retry-success` event with the retry count, so you can distinguish a clean first-attempt success from a recovered one in logs.
 
 Conditional execution: `"if": "$.steps.find.response.data.length > 0"`
 

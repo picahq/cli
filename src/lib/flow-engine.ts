@@ -21,6 +21,29 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+/**
+ * Compute the delay before retry attempt N (1-indexed first retry = attempt 2
+ * in the executor loop). Honours `backoff` and `maxDelayMs` from the step's
+ * onError config; defaults to fixed-delay so existing flows are unchanged.
+ */
+function computeRetryDelay(onError: import('./flow-types.js').FlowStepErrorConfig, attempt: number): number {
+  const base = onError.retryDelayMs ?? 1000;
+  const max = onError.maxDelayMs ?? 30_000;
+  const backoff = onError.backoff ?? 'fixed';
+  // attempt == 2 is the first retry, so the exponent is (attempt - 2)
+  const retryIndex = attempt - 2;
+  let delay: number;
+  if (backoff === 'exponential' || backoff === 'exponential-jitter') {
+    delay = Math.min(base * Math.pow(2, retryIndex), max);
+    if (backoff === 'exponential-jitter') {
+      delay = delay * (0.5 + Math.random() * 0.5);
+    }
+  } else {
+    delay = base;
+  }
+  return Math.round(delay);
+}
+
 // ── Selector Resolution ──
 
 export function resolveSelector(selectorPath: string, context: FlowContext): unknown {
@@ -60,12 +83,32 @@ export function resolveSelector(selectorPath: string, context: FlowContext): unk
   return current;
 }
 
+/**
+ * POSIX-shell-quote a string so it can be safely interpolated into a bash
+ * command. Wraps in single quotes and escapes any embedded single quotes
+ * using the standard `'\''` close-reopen trick.
+ */
+export function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
 export function interpolateString(str: string, context: FlowContext): string {
-  return str.replace(/\{\{(\$\.[^}]+)\}\}/g, (_match, selector) => {
+  // Supports two token shapes:
+  //   {{$.path.to.value}}        — raw stringification (string interp)
+  //   {{q $.path.to.value}}      — POSIX-shell-quoted, safe for bash steps
+  return str.replace(/\{\{\s*(q\s+)?(\$\.[^}\s]+)\s*\}\}/g, (_match, qFlag, selector) => {
     const value = resolveSelector(selector, context);
-    if (value === undefined || value === null) return '';
-    if (typeof value === 'object') return JSON.stringify(value);
-    return String(value);
+    if (value === undefined || value === null) return qFlag ? `''` : '';
+    if (typeof value === 'object') {
+      console.warn(
+        `[flow] WARNING: Handlebars expression "{{${qFlag ? 'q ' : ''}${selector}}}" resolved to ${Array.isArray(value) ? 'an array' : 'an object'} and was stringified as JSON. ` +
+        `To pass objects/arrays as native values, use a direct selector without {{ }}: "${selector}"`
+      );
+      const json = JSON.stringify(value);
+      return qFlag ? shellQuote(json) : json;
+    }
+    const str = String(value);
+    return qFlag ? shellQuote(str) : str;
   });
 }
 
@@ -75,8 +118,8 @@ export function resolveValue(value: unknown, context: FlowContext): unknown {
     if (value.startsWith('$.') && !value.includes('{{')) {
       return resolveSelector(value, context);
     }
-    // String with interpolation
-    if (value.includes('{{$.')) {
+    // String with interpolation ({{$.x}} or {{q $.x}})
+    if (value.includes('{{$.') || /\{\{\s*q\s+\$\./.test(value)) {
       return interpolateString(value, context);
     }
     return value;
@@ -234,9 +277,51 @@ async function executeCodeStep(
 
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
   const sandboxedRequire = createSandboxedRequire();
-  const fn = new AsyncFunction('$', 'require', config.source);
-  const output = await fn(context, sandboxedRequire);
-  return { status: 'success', output, response: output };
+  // Tag the source with a sourceURL so V8 stack frames are attributable to
+  // this specific code step, then run it. On error, rewrite the stack so the
+  // line numbers reference the user's source (not the AsyncFunction wrapper)
+  // and prepend the offending line of code.
+  const sourceURL = `code:${step.id}`;
+  const taggedSource = `${config.source}\n//# sourceURL=${sourceURL}`;
+  const fn = new AsyncFunction('$', 'require', taggedSource);
+  try {
+    const output = await fn(context, sandboxedRequire);
+    return { status: 'success', output, response: output };
+  } catch (err) {
+    throw rewriteCodeStepError(err, step.id, config.source, sourceURL);
+  }
+}
+
+/**
+ * Rewrite an error thrown from inside a code step so the message points at
+ * the user's source line instead of the AsyncFunction wrapper. The
+ * `new AsyncFunction(...)` wrapper prepends 2 lines (`async function
+ * anonymous($, require\n) {`) before the user's body, so stack frame line
+ * numbers are off by 2.
+ */
+function rewriteCodeStepError(err: unknown, stepId: string, source: string, sourceURL: string): Error {
+  if (!(err instanceof Error)) return new Error(String(err));
+  const WRAPPER_LINE_OFFSET = 2;
+  const sourceLines = source.split('\n');
+  const stack = err.stack || '';
+  // Match frames like "at code:stepId:LINE:COL" or "at <anonymous> (code:stepId:LINE:COL)"
+  const re = new RegExp(`${sourceURL.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}:(\\d+):(\\d+)`);
+  const match = stack.match(re);
+  if (!match) {
+    err.message = `Code step "${stepId}" failed: ${err.message}`;
+    return err;
+  }
+  const wrappedLine = parseInt(match[1], 10);
+  const col = parseInt(match[2], 10);
+  const userLine = wrappedLine - WRAPPER_LINE_OFFSET;
+  const lineContent = sourceLines[userLine - 1] ?? '';
+  const trimmed = lineContent.trim();
+  err.message = `Code step "${stepId}" failed at line ${userLine}:${col}\n  ${trimmed}\n  ${err.message}`;
+  // Also rewrite stack frames so further tooling sees user-relative lines.
+  err.stack = stack.replace(new RegExp(`(${sourceURL.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}:)(\\d+)`, 'g'), (_m, prefix, l) =>
+    `${prefix}${parseInt(l, 10) - WRAPPER_LINE_OFFSET}`,
+  );
+  return err;
 }
 
 /**
@@ -588,10 +673,15 @@ async function executeSubflowStep(
     [...flowStack, resolvedKey],
   );
 
+  // Canonicalise sub-flow output: both `.output` and `.response` expose the
+  // same value — the sub-flow's steps map, keyed by sub-step id. Previously
+  // `.response` returned the full sub-flow context (which also contained
+  // `.steps`, `.input`, `.env`), so callers saw two different shapes
+  // depending on which alias they used (cli#47).
   return {
     status: 'success',
     output: subContext.steps,
-    response: subContext,
+    response: subContext.steps,
   };
 }
 
@@ -729,13 +819,14 @@ export async function executeSingleStep(
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       if (attempt > 1) {
+        const delay = computeRetryDelay(step.onError!, attempt);
         options.onEvent?.({
           event: 'step:retry',
           stepId: step.id,
           attempt,
           maxRetries: step.onError!.retries!,
+          delayMs: delay,
         });
-        const delay = step.onError?.retryDelayMs || 1000;
         await sleep(delay);
       }
 
@@ -797,7 +888,17 @@ export async function executeSingleStep(
       }
 
       result.durationMs = Date.now() - startTime;
-      if (attempt > 1) result.retries = attempt - 1;
+      if (attempt > 1) {
+        result.retries = attempt - 1;
+        // Surface a clear "succeeded after N retries" event so observers
+        // (and downstream tooling) can distinguish a clean run from a
+        // recovered run.
+        options.onEvent?.({
+          event: 'step:retry-success',
+          stepId: step.id,
+          retries: attempt - 1,
+        });
+      }
       context.steps[step.id] = result;
       return result;
     } catch (err) {
@@ -813,12 +914,14 @@ export async function executeSingleStep(
   // Handle error with strategy
   const errorMessage = lastError?.message || 'Unknown error';
   const strategy = step.onError?.strategy || 'fail';
+  const retriesUsed = Math.max(0, maxAttempts - 1);
 
   if (strategy === 'continue') {
     const result: StepResult = {
       status: 'failed',
       error: errorMessage,
       durationMs: Date.now() - startTime,
+      retries: retriesUsed,
     };
     context.steps[step.id] = result;
     return result;
@@ -831,6 +934,7 @@ export async function executeSingleStep(
       status: 'failed',
       error: errorMessage,
       durationMs: Date.now() - startTime,
+      retries: retriesUsed,
     };
     context.steps[step.id] = result;
     return result;

@@ -8,6 +8,7 @@ import { FlowRunner, loadFlowWithMeta, listFlows, saveFlow, resolveFlowPath, flo
 import type { Flow, FlowEvent } from '../lib/flow-types.js';
 import type { PermissionLevel } from '../lib/types.js';
 import fs from 'node:fs';
+import path from 'node:path';
 
 function getConfig() {
   const apiKey = getApiKey();
@@ -173,6 +174,16 @@ export async function flowExecuteCommand(
   }
 
   spinner.stop(`Workflow: ${flow.name} (${flow.steps.length} steps)`);
+
+  // Pre-flight validation — catches schema/syntax errors before any step runs.
+  const preflightErrors = validateFlow(flow, rootDir);
+  if (preflightErrors.length > 0) {
+    if (output.isAgentMode()) {
+      output.json({ error: 'Validation failed', errors: preflightErrors });
+      process.exit(1);
+    }
+    output.error(`Validation failed:\n${preflightErrors.map(e => `  ${e.path}: ${e.message}`).join('\n')}`);
+  }
 
   // Deprecation warning: legacy single-file layout (`.one/flows/<key>.flow.json`)
   if (flowFilePath.endsWith('.flow.json')) {
@@ -342,16 +353,27 @@ export async function flowValidateCommand(keyOrPath: string): Promise<void> {
   spinner.start(`Validating "${keyOrPath}"...`);
 
   let flowData: unknown;
+  let rootDir: string | undefined;
   try {
-    const flowPath = resolveFlowPath(keyOrPath);
-    const content = fs.readFileSync(flowPath, 'utf-8');
-    flowData = JSON.parse(content);
+    // Prefer loadFlowWithMeta so we get rootDir for code-module syntax checks.
+    // Fall back to a raw JSON read if the path doesn't resolve (e.g. malformed
+    // flows that loadFlowWithMeta refuses to parse).
+    try {
+      const loaded = loadFlowWithMeta(keyOrPath);
+      flowData = loaded.flow;
+      rootDir = loaded.rootDir;
+    } catch {
+      const flowPath = resolveFlowPath(keyOrPath);
+      const content = fs.readFileSync(flowPath, 'utf-8');
+      flowData = JSON.parse(content);
+      rootDir = path.dirname(flowPath);
+    }
   } catch (err) {
     spinner.stop('Validation failed');
     output.error(`Could not read workflow: ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  const errors = validateFlow(flowData);
+  const errors = validateFlow(flowData, rootDir);
 
   if (errors.length > 0) {
     spinner.stop('Validation failed');

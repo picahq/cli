@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import type { Flow, FlowStep, FlowStepType } from './flow-types.js';
 import { FLOW_SCHEMA, getStepTypeDescriptor, getNestedStepsKeys } from './flow-schema.js';
 
@@ -193,6 +196,14 @@ function validateStepsArray(steps: unknown[], pathPrefix: string, errors: Valida
           errors.push({ path: `${path}.${configKey}.module`, message: 'Code module must be a .mjs file' });
         }
       }
+      // Static syntax check of inline code source — catches brace/paren mismatches,
+      // duplicate declarations, etc. before the flow runs.
+      if (hasSource) {
+        const syntaxError = checkCodeSourceSyntax(config.source as string);
+        if (syntaxError) {
+          errors.push({ path: `${path}.${configKey}.source`, message: `Syntax error in code step: ${syntaxError}` });
+        }
+      }
     }
   }
 }
@@ -211,6 +222,28 @@ function detectFlatConfigHint(step: Record<string, unknown>, descriptor: ReturnT
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+// ── Code step syntax check ──
+
+const AsyncFunctionCtor = Object.getPrototypeOf(async function () {}).constructor as FunctionConstructor;
+
+/**
+ * Parse-check an inline code step source the same way the engine will execute
+ * it (as the body of an async function with `$` and `require` in scope). The
+ * Function constructor parses the body but does not run it, so this is a
+ * static check — it catches syntax errors but not runtime errors.
+ *
+ * Returns the SyntaxError message, or null if the source parses cleanly.
+ */
+export function checkCodeSourceSyntax(source: string): string | null {
+  try {
+    new AsyncFunctionCtor('$', 'require', source);
+    return null;
+  } catch (err) {
+    if (err instanceof SyntaxError) return err.message;
+    return (err as Error).message;
+  }
 }
 
 // ── Step ID uniqueness ──
@@ -295,7 +328,7 @@ export function validateSelectorReferences(flow: Flow): ValidationError[] {
     return selectors;
   }
 
-  function checkSelectors(selectors: string[], path: string): void {
+  function checkSelectors(selectors: string[], path: string, precedingStepIds?: Set<string>): void {
     for (const selector of selectors) {
       const parts = selector.split('.');
       if (parts.length < 3) continue;
@@ -307,9 +340,14 @@ export function validateSelectorReferences(flow: Flow): ValidationError[] {
           errors.push({ path, message: `Selector "${selector}" references undefined input "${inputName}"` });
         }
       } else if (root === 'steps') {
-        const stepId = parts[2];
+        const stepId = parts[2].replace(/[\[\]]/g, '').split(/[\[\]]/)[0];
         if (!allStepIds.has(stepId)) {
           errors.push({ path, message: `Selector "${selector}" references undefined step "${stepId}"` });
+        } else if (precedingStepIds && !precedingStepIds.has(stepId)) {
+          errors.push({
+            path,
+            message: `Selector "${selector}" references step "${stepId}" which is declared after the current step. Steps execute in declaration order, so this will always resolve to undefined at runtime — move the dependency earlier in the steps array.`,
+          });
         }
       }
     }
@@ -336,17 +374,16 @@ export function validateSelectorReferences(flow: Flow): ValidationError[] {
     }
   }
 
-  function checkStep(step: FlowStep, pathPrefix: string): void {
+  function checkStep(step: FlowStep, pathPrefix: string, preceding: Set<string>): void {
     // if/unless are JS expressions — validate selector references but allow operators
-    if (step.if) checkSelectors(extractSelectors(step.if), `${pathPrefix}.if`);
-    if (step.unless) checkSelectors(extractSelectors(step.unless), `${pathPrefix}.unless`);
+    if (step.if) checkSelectors(extractSelectors(step.if), `${pathPrefix}.if`, preceding);
+    if (step.unless) checkSelectors(extractSelectors(step.unless), `${pathPrefix}.unless`, preceding);
 
     // Check selectors in all config objects
     const descriptor = getStepTypeDescriptor(step.type);
     if (descriptor) {
       const config = (step as Record<string, unknown>)[descriptor.configKey];
       if (config && typeof config === 'object') {
-        // Skip deep checking for expressions (transform, code) — they use $ directly
         if (step.type !== 'transform' && step.type !== 'code') {
           for (const [fieldName, fd] of Object.entries(descriptor.fields)) {
             if (fd.stepsArray) continue; // steps are checked recursively below
@@ -354,37 +391,57 @@ export function validateSelectorReferences(flow: Flow): ValidationError[] {
             if (value !== undefined) {
               const fieldKey = `${descriptor.configKey}.${fieldName}`;
               const fieldPath = `${pathPrefix}.${fieldKey}`;
-              checkSelectors(extractSelectors(value), fieldPath);
+              checkSelectors(extractSelectors(value), fieldPath, preceding);
               // For non-expression fields, detect operators that won't work at runtime
               if (!EXPRESSION_FIELDS.has(fieldKey)) {
                 checkOperatorsInSelectorField(value, fieldPath);
               }
             }
           }
+        } else {
+          // Code/transform steps: extract $.steps.X / $.input.X tokens directly
+          // from their source/expression so forward references and undefined
+          // step IDs are caught at load time (cli#44).
+          const c = config as Record<string, unknown>;
+          const codeSource = step.type === 'code' ? (c.source as string | undefined) : undefined;
+          const transformExpr = step.type === 'transform' ? (c.expression as string | undefined) : undefined;
+          const text = codeSource ?? transformExpr;
+          if (typeof text === 'string') {
+            const fieldName = step.type === 'code' ? 'source' : 'expression';
+            checkSelectors(extractSelectors(text), `${pathPrefix}.${descriptor.configKey}.${fieldName}`, preceding);
+          }
         }
       }
 
-      // Recurse into nested steps
+      // Recurse into nested steps. Inside a nested array, the parent's
+      // `preceding` set carries over (parent + earlier siblings) and we
+      // accumulate sibling IDs as we walk.
       for (const { configKey, fieldName } of nestedKeys) {
         if (configKey === descriptor.configKey) {
           const c = (step as Record<string, unknown>)[configKey] as Record<string, unknown> | undefined;
           if (c && Array.isArray(c[fieldName])) {
-            (c[fieldName] as FlowStep[]).forEach((s, i) =>
-              checkStep(s, `${pathPrefix}.${configKey}.${fieldName}[${i}]`),
-            );
+            const childPreceding = new Set(preceding);
+            (c[fieldName] as FlowStep[]).forEach((s, i) => {
+              checkStep(s, `${pathPrefix}.${configKey}.${fieldName}[${i}]`, childPreceding);
+              childPreceding.add(s.id);
+            });
           }
         }
       }
     }
   }
 
-  flow.steps.forEach((step, i) => checkStep(step, `steps[${i}]`));
+  const preceding = new Set<string>();
+  flow.steps.forEach((step, i) => {
+    checkStep(step, `steps[${i}]`, preceding);
+    preceding.add(step.id);
+  });
   return errors;
 }
 
 // ── Main entry point ──
 
-export function validateFlow(flow: unknown): ValidationError[] {
+export function validateFlow(flow: unknown, rootDir?: string): ValidationError[] {
   const schemaErrors = validateFlowSchema(flow);
   if (schemaErrors.length > 0) return schemaErrors;
 
@@ -392,5 +449,55 @@ export function validateFlow(flow: unknown): ValidationError[] {
   return [
     ...validateStepIds(f),
     ...validateSelectorReferences(f),
+    ...(rootDir ? validateCodeModules(f, rootDir) : []),
   ];
+}
+
+// ── Code module syntax check ──
+
+/**
+ * Read every `code.module` file referenced by the flow and syntax-check its
+ * contents. Catches brace/paren mismatches in `.mjs` modules at flow load
+ * time instead of after upstream steps have already run.
+ */
+export function validateCodeModules(flow: Flow, rootDir: string): ValidationError[] {
+  const errors: ValidationError[] = [];
+  const nestedKeys = getNestedStepsKeys();
+
+  function walk(steps: FlowStep[], pathPrefix: string): void {
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i];
+      const stepPath = `${pathPrefix}[${i}]`;
+      if (step.type === 'code' && step.code?.module) {
+        const m = step.code.module;
+        const abs = path.resolve(rootDir, m);
+        if (!fs.existsSync(abs)) {
+          errors.push({
+            path: `${stepPath}.code.module`,
+            message: `Code module "${m}" not found at ${abs}`,
+          });
+        } else {
+          // Use `node --check` so import/export and other module-only syntax parses correctly.
+          const res = spawnSync(process.execPath, ['--check', abs], { encoding: 'utf-8' });
+          if (res.status !== 0) {
+            const msg = (res.stderr || '').split('\n').find(l => l.includes('SyntaxError') || l.includes('Error')) || res.stderr || 'Syntax check failed';
+            errors.push({
+              path: `${stepPath}.code.module`,
+              message: `Syntax error in code module "${m}": ${msg.trim()}`,
+            });
+          }
+        }
+      }
+      // Recurse into nested step arrays
+      for (const { configKey, fieldName } of nestedKeys) {
+        const config = (step as unknown as Record<string, unknown>)[configKey] as Record<string, unknown> | undefined;
+        if (config && Array.isArray(config[fieldName])) {
+          walk(config[fieldName] as FlowStep[], `${stepPath}.${configKey}.${fieldName}`);
+        }
+      }
+    }
+  }
+
+  walk(flow.steps, 'steps');
+  return errors;
 }

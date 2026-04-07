@@ -504,7 +504,7 @@ Every step MUST have \`id\`, \`name\`, and \`type\`. The \`type\` determines whi
     sections.push(`| \`${name}\` | ${fd.type} | ${fd.required ? 'yes' : 'no'} | ${fd.description} |`);
   }
 
-  sections.push(`| \`onError\` | object | no | Error handling: \`{ "strategy": "${FLOW_SCHEMA.errorStrategies.join(' | ')}", "retries": 3, "retryDelayMs": 1000 }\` |`);
+  sections.push(`| \`onError\` | object | no | Error handling: \`{ "strategy": "${FLOW_SCHEMA.errorStrategies.join(' | ')}", "retries": 3, "retryDelayMs": 1000, "backoff": "fixed \\| exponential \\| exponential-jitter", "maxDelayMs": 30000 }\` |`);
 
   // Step types table
   sections.push(`
