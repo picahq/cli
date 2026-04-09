@@ -391,6 +391,30 @@ Settings propagate automatically to all installed agent configs.
 
 Auto-sync refuses to resurrect skills if you opted out of skill installation during `one init` — the canonical dir has to already exist.
 
+### Project config (`.onerc`)
+
+Drop a `.onerc` file in your project root to override global settings per-project. Simple `KEY=VALUE` format; `#` for comments. Read from the current working directory (no parent lookup).
+
+| Key | Purpose |
+|-----|---------|
+| `ONE_SECRET` | API key (also honored as env var) |
+| `ONE_API_BASE` | API base URL (also honored as env var) |
+| `ONE_PERMISSIONS` | `admin` / `write` / `read` |
+| `ONE_CONNECTION_KEYS` | Comma-separated connection-key allowlist |
+| `ONE_ACTION_IDS` | Comma-separated action-ID allowlist |
+| `ONE_KNOWLEDGE_AGENT` | `true` / `false` — knowledge-only mode |
+
+Precedence: env var > `.onerc` > `~/.one/config.json`.
+
+```bash
+# .onerc
+ONE_SECRET=sk_live_xxx
+ONE_API_BASE=https://development-api.withone.ai
+ONE_PERMISSIONS=read
+```
+
+> ⚠️ **Add `.onerc` to your `.gitignore`.** If you put `ONE_SECRET` in it, committing the file will leak your API key. Treat `.onerc` like `.env` — never check it in.
+
 ## The workflow
 
 The power of One is in the workflow. Every interaction follows the same pattern:

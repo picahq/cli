@@ -103,6 +103,13 @@ export function getAccessControl(): AccessControlSettings {
 const DEFAULT_API_BASE = 'https://api.withone.ai/v1';
 
 export function getApiBase(): string {
+  // Priority: env var > .onerc > ~/.one/config.json > default
+  const envBase = process.env.ONE_API_BASE;
+  if (envBase) return `${envBase.replace(/\/+$/, '').replace(/\/v1$/, '')}/v1`;
+
+  const rc = readOneRc();
+  if (rc.ONE_API_BASE) return `${rc.ONE_API_BASE.replace(/\/+$/, '').replace(/\/v1$/, '')}/v1`;
+
   const config = readConfig();
   if (config?.apiBase) return `${config.apiBase}/v1`;
   return DEFAULT_API_BASE;
