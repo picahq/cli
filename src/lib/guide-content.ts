@@ -5,7 +5,7 @@ export const GUIDE_OVERVIEW = `# One CLI — Agent Guide
 
 ## Setup
 
-1. Run \`one init\` to configure your API key
+1. Run \`one init\` to configure your API key (interactive — can be global or per-project)
 2. Run \`one add <platform>\` to connect platforms via OAuth
 3. Run \`one --agent connection list\` to verify connections
 

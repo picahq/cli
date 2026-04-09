@@ -4,7 +4,22 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { writeConfig, readConfig, getConfigPath, getApiBase, getAccessControl } from '../lib/config.js';
+import {
+  writeConfig,
+  readConfig,
+  getConfigPath,
+  getApiBase,
+  getAccessControl,
+  resolveConfig,
+  readGlobalConfig,
+  readProjectConfig,
+  getGlobalConfigPath,
+  getProjectConfigPath,
+  getProjectRoot,
+  globalConfigExists,
+  projectConfigExists,
+  type ConfigScope,
+} from '../lib/config.js';
 import {
   getAllAgents,
   installMcpConfig,
@@ -29,21 +44,127 @@ export async function initCommand(options: { yes?: boolean; global?: boolean; pr
     output.error('This command requires interactive input. Run without --agent.');
   }
 
-  const existingConfig = readConfig();
-
   printBanner();
 
-  if (existingConfig) {
-    await handleExistingConfig(existingConfig.apiKey, options);
+  // Determine which scope (global vs project) this init run should edit.
+  const scope = await chooseConfigScope(options);
+  if (scope === null) {
+    p.cancel('Setup cancelled.');
     return;
   }
-  await freshSetup(options);
+
+  // Read the config at the chosen scope directly — not the resolved one,
+  // which would fall back to global when editing an uninitialized project.
+  const existingConfig = scope === 'project' ? readProjectConfig() : readGlobalConfig();
+
+  if (existingConfig) {
+    await handleExistingConfig(existingConfig.apiKey, scope, options);
+    return;
+  }
+  await freshSetup(scope, options);
+}
+
+// ── Scope picker ─────────────────────────────────────────────────────
+//
+// Config resolution at read-time is: project → global. So when a user runs
+// `one init` inside a project that already has a project config, we edit
+// that. When they run it in a fresh project with a global config already
+// set up, we default to creating a project config so they can have a
+// dedicated setup without touching their global one. When nothing exists
+// anywhere, we default to global so the single setup applies everywhere.
+
+async function chooseConfigScope(
+  options: { global?: boolean; project?: boolean },
+): Promise<ConfigScope | null> {
+  // Explicit flags skip the picker — used by scripts/agents.
+  if (options.global) return 'global';
+  if (options.project) return 'project';
+
+  const resolved = resolveConfig();
+  const hasGlobal = globalConfigExists();
+  const hasProject = projectConfigExists();
+  const projectRoot = resolved.projectRoot;
+  const projectName = path.basename(projectRoot);
+  const homeGlobal = tildify(getGlobalConfigPath());
+  const homeProject = tildify(getProjectConfigPath(projectRoot));
+
+  // If a project config already exists for this cwd, go straight into
+  // editing it — but let the user flip to global editing from the menu.
+  if (hasProject) {
+    console.log();
+    console.log(`  ${pc.dim('Project:')}  ${projectName}   ${pc.dim(projectRoot)}`);
+    console.log(`  ${pc.bold('Active config:')} ${pc.cyan('project')} ${pc.dim('· ' + homeProject)}`);
+    console.log();
+
+    if (hasGlobal) {
+      const which = await p.select<ConfigScope>({
+        message: 'Which config do you want to edit?',
+        options: [
+          { value: 'project', label: `This project (${projectName})`, hint: homeProject },
+          { value: 'global',  label: 'Global (all folders)',           hint: homeGlobal },
+        ],
+        initialValue: 'project',
+      });
+      if (p.isCancel(which)) return null;
+      return which;
+    }
+    return 'project';
+  }
+
+  // No project config yet — explain the choice and pick a sensible default.
+  console.log();
+  console.log(`  ${pc.bold('Initializing One')}`);
+  console.log(`  ${pc.dim('─'.repeat(42))}`);
+  console.log(`  ${pc.dim('Project:')}  ${projectName}   ${pc.dim(projectRoot)}`);
+  console.log(`  ${pc.dim('Global:')}   ${hasGlobal ? pc.green('✓ configured') : pc.yellow('— not set up')}   ${pc.dim(homeGlobal)}`);
+  console.log(`  ${pc.dim('Project:')}  ${pc.yellow('— not set up')}   ${pc.dim(homeProject)}`);
+  console.log();
+
+  const defaultScope: ConfigScope = hasGlobal ? 'project' : 'global';
+  const hint = hasGlobal
+    ? 'Your global config stays as-is. This folder gets its own setup.'
+    : 'No global config yet — this becomes your default for every folder.';
+  p.note(hint, defaultScope === 'project' ? 'Recommended: project' : 'Recommended: global');
+
+  const which = await p.select<ConfigScope>({
+    message: 'Where should this setup live?',
+    options: [
+      {
+        value: 'project',
+        label: `This project only  (${projectName})`,
+        hint: 'different API key / connections just for this folder',
+      },
+      {
+        value: 'global',
+        label: 'Globally (all folders)',
+        hint: 'applies everywhere you run `one`',
+      },
+    ],
+    initialValue: defaultScope,
+  });
+
+  if (p.isCancel(which)) return null;
+  return which;
+}
+
+function tildify(filePath: string): string {
+  const home = os.homedir();
+  return filePath.startsWith(home) ? '~' + filePath.slice(home.length) : filePath;
+}
+
+function scopeLabel(scope: ConfigScope): string {
+  return scope === 'project' ? pc.cyan('[project]') : pc.magenta('[global]');
+}
+
+function scopedMessage(scope: ConfigScope, message: string): string {
+  return `${scopeLabel(scope)} ${message}`;
 }
 
 // ── Status display + action menu when config already exists ──────────
 
 async function handleExistingConfig(
   apiKey: string,
+  scope: ConfigScope,
   options: { yes?: boolean; global?: boolean; project?: boolean },
 ): Promise<void> {
   const statuses = getAgentStatuses();
@@ -51,13 +172,15 @@ async function handleExistingConfig(
   // Display current setup
   const masked = maskApiKey(apiKey);
   const skillInstalled = isSkillInstalled();
+  const activeConfigPath =
+    scope === 'project' ? getProjectConfigPath() : getGlobalConfigPath();
 
   console.log();
-  console.log(`  ${pc.bold('Current Setup')}`);
+  console.log(`  ${pc.bold('Current Setup')} ${scopeLabel(scope)}`);
   console.log(`  ${pc.dim('─'.repeat(42))}`);
   console.log(`  ${pc.dim('API Key:')}  ${masked}`);
   console.log(`  ${pc.dim('Skill:')}    ${skillInstalled ? pc.green('installed') : pc.yellow('not installed')}`);
-  console.log(`  ${pc.dim('Config:')}   ${getConfigPath()}`);
+  console.log(`  ${pc.dim('Config:')}   ${tildify(activeConfigPath)}`);
 
   // Show access control summary if non-default settings are configured
   const ac = getAccessControl();
@@ -111,7 +234,7 @@ async function handleExistingConfig(
   });
 
   const action = await p.select({
-    message: 'What would you like to do?',
+    message: scopedMessage(scope, 'What would you like to do?'),
     options: actionOptions,
   });
 
@@ -140,24 +263,24 @@ async function handleExistingConfig(
       p.outro('Done.');
       break;
     case 'update-key':
-      await handleUpdateKey(statuses);
+      await handleUpdateKey(statuses, scope);
       break;
     case 'access-control':
       await configCommand();
       break;
     case 'start-fresh':
-      await freshSetup({ yes: true });
+      await freshSetup(scope, { yes: true });
       break;
   }
 }
 
 // ── Action handlers ──────────────────────────────────────────────────
 
-async function handleUpdateKey(statuses: AgentStatus[]): Promise<void> {
-  p.note(`Get your API key at:\n${pc.cyan(getApiKeyUrl())}`, 'API Key');
+async function handleUpdateKey(statuses: AgentStatus[], scope: ConfigScope): Promise<void> {
+  p.note(`Get your API key at:\n${pc.cyan(getApiKeyUrl())}`, `API Key ${scopeLabel(scope)}`);
 
   const openBrowser = await p.confirm({
-    message: 'Open browser to get API key?',
+    message: scopedMessage(scope, 'Open browser to get API key?'),
     initialValue: true,
   });
 
@@ -171,7 +294,7 @@ async function handleUpdateKey(statuses: AgentStatus[]): Promise<void> {
   }
 
   const newKey = await p.text({
-    message: 'Enter your new One API key:',
+    message: scopedMessage(scope, 'Enter your new One API key:'),
     placeholder: 'sk_live_...',
     validate: (value) => {
       if (!value) return 'API key is required';
@@ -216,14 +339,19 @@ async function handleUpdateKey(statuses: AgentStatus[]): Promise<void> {
     }
   }
 
-  // Update config (preserve accessControl)
-  const config = readConfig();
-  writeConfig({
-    apiKey: newKey,
-    installedAgents: config?.installedAgents ?? [],
-    createdAt: config?.createdAt ?? new Date().toISOString(),
-    accessControl: config?.accessControl,
-  });
+  // Update config (preserve accessControl) at the active scope.
+  const current = scope === 'project' ? readProjectConfig() : readGlobalConfig();
+  writeConfig(
+    {
+      apiKey: newKey,
+      installedAgents: current?.installedAgents ?? [],
+      createdAt: current?.createdAt ?? new Date().toISOString(),
+      accessControl: current?.accessControl,
+      apiBase: current?.apiBase,
+      cacheTtl: current?.cacheTtl,
+    },
+    scope,
+  );
 
   if (reinstalled.length > 0) {
     p.log.success(`Updated MCP configs: ${reinstalled.join(', ')}`);
@@ -665,12 +793,15 @@ async function promptAndInstallMcp(
 
 // ── First-run setup (no existing config) ─────────────────────────────
 
-async function freshSetup(options: { yes?: boolean; global?: boolean; project?: boolean }): Promise<void> {
+async function freshSetup(
+  scope: ConfigScope,
+  options: { yes?: boolean; global?: boolean; project?: boolean },
+): Promise<void> {
   // Step 1: Get API key
-  p.note(`Get your API key at:\n${pc.cyan(getApiKeyUrl())}`, 'API Key');
+  p.note(`Get your API key at:\n${pc.cyan(getApiKeyUrl())}`, `API Key ${scopeLabel(scope)}`);
 
   const openBrowser = await p.confirm({
-    message: 'Open browser to get API key?',
+    message: scopedMessage(scope, 'Open browser to get API key?'),
     initialValue: true,
   });
 
@@ -684,7 +815,7 @@ async function freshSetup(options: { yes?: boolean; global?: boolean; project?: 
   }
 
   const apiKey = await p.text({
-    message: 'Enter your One API key:',
+    message: scopedMessage(scope, 'Enter your One API key:'),
     placeholder: 'sk_live_...',
     validate: (value) => {
       if (!value) return 'API key is required';
@@ -715,12 +846,15 @@ async function freshSetup(options: { yes?: boolean; global?: boolean; project?: 
 
   spinner.stop('API key validated');
 
-  // Save API key to config
-  writeConfig({
-    apiKey,
-    installedAgents: [],
-    createdAt: new Date().toISOString(),
-  });
+  // Save API key to config at the chosen scope
+  writeConfig(
+    {
+      apiKey,
+      installedAgents: [],
+      createdAt: new Date().toISOString(),
+    },
+    scope,
+  );
 
   // Step 2: Install skill
   await promptSkillInstall();
@@ -728,9 +862,18 @@ async function freshSetup(options: { yes?: boolean; global?: boolean; project?: 
   // Step 3: Connect integrations
   await promptConnectIntegrations(apiKey);
 
+  const savedPath =
+    scope === 'project' ? getProjectConfigPath() : getGlobalConfigPath();
+
+  const resolutionHint =
+    scope === 'project'
+      ? `When you run ${pc.cyan('one')} from ${pc.bold(path.basename(getProjectRoot()))}, it uses this project config.\n` +
+        `From anywhere else, it falls back to your global config.`
+      : `This config applies to every folder unless a project config is set.`;
+
   p.note(
-    `Config saved to: ${pc.dim(getConfigPath())}`,
-    'Setup Complete'
+    `${scopeLabel(scope)} Config saved to:\n${pc.dim(tildify(savedPath))}\n\n${resolutionHint}`,
+    'Setup Complete',
   );
 
   printOnboardingPrompt();

@@ -5,33 +5,167 @@ import type { Config, AccessControlSettings, PermissionLevel } from './types.js'
 
 const CONFIG_DIR = path.join(os.homedir(), '.one');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
+const PROJECTS_DIR = path.join(CONFIG_DIR, 'projects');
 
-export function getConfigPath(): string {
+export type ConfigScope = 'project' | 'global';
+
+export interface ResolvedConfig {
+  config: Config | null;
+  scope: ConfigScope | null;   // null when no config exists anywhere
+  path: string;                // path that was read (or would be read)
+  projectRoot: string;         // detected project root for cwd
+  projectSlug: string;         // slug used for project config dir
+}
+
+// ── Project detection ────────────────────────────────────────────────
+
+/**
+ * Walk up from cwd looking for a project marker (.git, package.json).
+ * Falls back to cwd if nothing is found.
+ */
+export function getProjectRoot(cwd: string = process.cwd()): string {
+  let dir = path.resolve(cwd);
+  const root = path.parse(dir).root;
+  while (dir !== root) {
+    if (
+      fs.existsSync(path.join(dir, '.git')) ||
+      fs.existsSync(path.join(dir, 'package.json'))
+    ) {
+      return dir;
+    }
+    dir = path.dirname(dir);
+  }
+  return path.resolve(cwd);
+}
+
+/**
+ * Encode an absolute path into a slug, matching Claude Code's convention:
+ * replace path separators with '-'. e.g.
+ *   /Users/moe/projects/acme → -Users-moe-projects-acme
+ */
+export function getProjectSlug(projectRoot: string = getProjectRoot()): string {
+  return projectRoot.replace(/[\\/]/g, '-');
+}
+
+export function getProjectConfigDir(projectRoot: string = getProjectRoot()): string {
+  return path.join(PROJECTS_DIR, getProjectSlug(projectRoot));
+}
+
+export function getProjectConfigPath(projectRoot: string = getProjectRoot()): string {
+  return path.join(getProjectConfigDir(projectRoot), 'config.json');
+}
+
+export function getGlobalConfigPath(): string {
   return CONFIG_FILE;
 }
 
-export function configExists(): boolean {
-  return fs.existsSync(CONFIG_FILE);
+// ── Resolver ─────────────────────────────────────────────────────────
+
+/**
+ * Resolve which config to use for the current cwd. Project config wins when
+ * present; otherwise the global config. Callers that need scope-awareness
+ * should use this; convenience wrappers below preserve the legacy API.
+ */
+export function resolveConfig(): ResolvedConfig {
+  const projectRoot = getProjectRoot();
+  const projectSlug = getProjectSlug(projectRoot);
+  const projectPath = getProjectConfigPath(projectRoot);
+
+  if (fs.existsSync(projectPath)) {
+    const config = readConfigFile(projectPath);
+    if (config) {
+      return { config, scope: 'project', path: projectPath, projectRoot, projectSlug };
+    }
+  }
+
+  if (fs.existsSync(CONFIG_FILE)) {
+    const config = readConfigFile(CONFIG_FILE);
+    if (config) {
+      return { config, scope: 'global', path: CONFIG_FILE, projectRoot, projectSlug };
+    }
+  }
+
+  return { config: null, scope: null, path: CONFIG_FILE, projectRoot, projectSlug };
 }
 
-export function readConfig(): Config | null {
-  if (!configExists()) {
-    return null;
-  }
+function readConfigFile(filePath: string): Config | null {
   try {
-    const content = fs.readFileSync(CONFIG_FILE, 'utf-8');
+    const content = fs.readFileSync(filePath, 'utf-8');
     return JSON.parse(content) as Config;
   } catch {
     return null;
   }
 }
 
-export function writeConfig(config: Config): void {
+// ── Legacy API (preserves existing call sites) ───────────────────────
+
+export function getConfigPath(): string {
+  return resolveConfig().path;
+}
+
+export function configExists(): boolean {
+  return resolveConfig().config !== null;
+}
+
+export function globalConfigExists(): boolean {
+  return fs.existsSync(CONFIG_FILE);
+}
+
+export function projectConfigExists(projectRoot: string = getProjectRoot()): boolean {
+  return fs.existsSync(getProjectConfigPath(projectRoot));
+}
+
+export function getActiveScope(): ConfigScope | null {
+  return resolveConfig().scope;
+}
+
+export function readConfig(): Config | null {
+  return resolveConfig().config;
+}
+
+/**
+ * Read only the global config, regardless of project scope. Used by init
+ * when presenting scope choices or switching between them.
+ */
+export function readGlobalConfig(): Config | null {
+  if (!fs.existsSync(CONFIG_FILE)) return null;
+  return readConfigFile(CONFIG_FILE);
+}
+
+/**
+ * Read only the project config for the current cwd, regardless of fallback.
+ */
+export function readProjectConfig(): Config | null {
+  const projectPath = getProjectConfigPath();
+  if (!fs.existsSync(projectPath)) return null;
+  return readConfigFile(projectPath);
+}
+
+/**
+ * Write config. When `scope` is omitted, writes to whichever scope is
+ * currently active (project if one exists for cwd, else global). This keeps
+ * callers like updateAccessControl/updateApiBase scope-preserving.
+ */
+export function writeConfig(config: Config, scope?: ConfigScope): void {
+  const targetScope: ConfigScope = scope ?? resolveConfig().scope ?? 'global';
+
+  if (targetScope === 'project') {
+    const dir = getProjectConfigDir();
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    }
+    const filePath = getProjectConfigPath();
+    fs.writeFileSync(filePath, JSON.stringify(config, null, 2), { mode: 0o600 });
+    return;
+  }
+
   if (!fs.existsSync(CONFIG_DIR)) {
     fs.mkdirSync(CONFIG_DIR, { mode: 0o700 });
   }
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), { mode: 0o600 });
 }
+
+// ── .onerc override (unchanged behavior) ─────────────────────────────
 
 function readOneRc(): Record<string, string> {
   const rcPath = path.join(process.cwd(), '.onerc');
@@ -56,7 +190,7 @@ function readOneRc(): Record<string, string> {
 }
 
 export function getApiKey(): string | null {
-  // Priority: env var > .onerc > ~/.one/config.json
+  // Priority: env var > .onerc > project config > global config
   if (process.env.ONE_SECRET) return process.env.ONE_SECRET;
 
   const rc = readOneRc();
@@ -103,13 +237,6 @@ export function getAccessControl(): AccessControlSettings {
 const DEFAULT_API_BASE = 'https://api.withone.ai/v1';
 
 export function getApiBase(): string {
-  // Priority: env var > .onerc > ~/.one/config.json > default
-  const envBase = process.env.ONE_API_BASE;
-  if (envBase) return `${envBase.replace(/\/+$/, '').replace(/\/v1$/, '')}/v1`;
-
-  const rc = readOneRc();
-  if (rc.ONE_API_BASE) return `${rc.ONE_API_BASE.replace(/\/+$/, '').replace(/\/v1$/, '')}/v1`;
-
   const config = readConfig();
   if (config?.apiBase) return `${config.apiBase}/v1`;
   return DEFAULT_API_BASE;

@@ -4,6 +4,13 @@ import { createRequire } from 'module';
 import { Command } from 'commander';
 import { initCommand } from './commands/init.js';
 import { configCommand } from './commands/config.js';
+import {
+  resolveConfig,
+  getGlobalConfigPath,
+  getProjectConfigPath,
+  globalConfigExists,
+  projectConfigExists,
+} from './lib/config.js';
 import { connectionAddCommand, connectionListCommand, connectionDeleteCommand } from './commands/connection.js';
 import { platformsCommand } from './commands/platforms.js';
 import { actionsSearchCommand, actionsKnowledgeCommand, actionsExecuteCommand } from './commands/actions.js';
@@ -131,10 +138,10 @@ program.hook('postAction', async () => {
 
 program
   .command('init')
-  .description('Set up One and install MCP to your AI agents')
+  .description('Set up One and install MCP to your AI agents (interactive: picks global or project scope)')
   .option('-y, --yes', 'Skip confirmations')
-  .option('-g, --global', 'Install MCP globally (available in all projects)')
-  .option('-p, --project', 'Install MCP for this project only (creates .mcp.json)')
+  .option('-g, --global', 'Write the One config globally (~/.one/config.json) — skips the scope picker')
+  .option('-p, --project', 'Write the One config for this project only (~/.one/projects/<slug>/) — skips the scope picker')
   .action(async (options) => {
     await initCommand(options);
   });
@@ -145,6 +152,46 @@ const config = program
   .action(async () => {
     // Default action: interactive access-control editor (unchanged behavior).
     await configCommand();
+  });
+
+config
+  .command('path')
+  .description('Show the active config path, scope, and the fallback chain (project → global)')
+  .action(() => {
+    const resolved = resolveConfig();
+    const globalPath = getGlobalConfigPath();
+    const projectPath = getProjectConfigPath(resolved.projectRoot);
+    const hasGlobal = globalConfigExists();
+    const hasProject = projectConfigExists(resolved.projectRoot);
+
+    if (isAgentMode()) {
+      outputJson({
+        command: 'config path',
+        scope: resolved.scope,
+        path: resolved.path,
+        projectRoot: resolved.projectRoot,
+        projectSlug: resolved.projectSlug,
+        fallback: {
+          project: { path: projectPath, exists: hasProject },
+          global:  { path: globalPath,  exists: hasGlobal  },
+        },
+      });
+      return;
+    }
+
+    if (!resolved.scope) {
+      console.log('No One config found.');
+      console.log(`  project: ${projectPath} (not set up)`);
+      console.log(`  global:  ${globalPath} (not set up)`);
+      console.log("\nRun 'one init' to get started.");
+      return;
+    }
+
+    console.log(`Active:   ${resolved.scope}`);
+    console.log(`Path:     ${resolved.path}`);
+    console.log(`\nResolution order (first match wins):`);
+    console.log(`  1. project  ${projectPath}  ${hasProject ? '✓' : '—'}`);
+    console.log(`  2. global   ${globalPath}   ${hasGlobal  ? '✓' : '—'}`);
   });
 
 const configSkills = config

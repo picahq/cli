@@ -22,6 +22,8 @@ description: |
 
 You have access to the One CLI which lets you interact with 250+ third-party platforms through their APIs. Always include the `--agent` flag right after `one` for structured JSON output.
 
+If the user wants a separate API key / connections for a specific project (vs. their default), walk them through running `one init` from that project folder and picking the "project" scope — see `references/scoping.md`.
+
 ## Core Workflow: search -> knowledge -> execute
 
 Always follow this sequence when the user wants to do something on a connected platform:
