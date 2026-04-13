@@ -246,6 +246,30 @@ one actions execute stripe <actionId> <connectionKey> \
 | `--form-data` | Send as multipart/form-data |
 | `--form-url-encoded` | Send as application/x-www-form-urlencoded |
 | `--dry-run` | Show the request without executing it |
+| `--mock` | Return example response without making an API call |
+| `--skip-validation` | Skip input validation against the action schema |
+
+The CLI validates required parameters (path variables, query params, body fields) against the action schema before executing. Missing params return a clear error with the flag name and description. Pass `--skip-validation` to bypass.
+
+#### Parallel execution
+
+Execute multiple actions concurrently with `--parallel`, separating each action with `--`:
+
+```bash
+one --agent actions execute --parallel \
+  gmail send-email conn123 -d '{"to":"a@b.com","subject":"Hi","body":"Hello"}' \
+  -- slack post-message conn456 -d '{"channel":"#general","text":"Done"}' \
+  -- google-sheets append-row conn789 -d '{"values":["x","y"]}'
+```
+
+Each segment follows the same format: `<platform> <actionId> <connectionKey> [-d ...] [--path-vars ...] [--query-params ...]`. All segments are validated upfront before any execution starts. Results are collected via `Promise.allSettled` — if one fails, the rest still complete.
+
+| Option | What it does |
+|--------|-------------|
+| `--parallel` | Enable parallel mode |
+| `--max-concurrency <n>` | Max concurrent actions per batch (default: 5) |
+
+Agent-mode output includes `parallel: true`, per-action `status`/`durationMs`/`response`, plus `totalDurationMs`, `succeeded`, and `failed` counts.
 
 ### `one cache`
 
@@ -271,6 +295,48 @@ Default TTL is 1 hour. Configure via `ONE_CACHE_TTL` environment variable or `ca
 
 Note: `actions execute` is never cached — it always hits the API fresh.
 
+### `one sync`
+
+Sync platform data into local SQLite for instant queries, full-text search, scheduled refresh, and change-driven automation. The sync engine (`better-sqlite3`) is an optional dependency — install it once per machine:
+
+```bash
+one sync install && one sync doctor
+```
+
+```bash
+# Discover → init (one command: infer + auto-resolve key + auto-test) → run
+one sync models stripe
+one sync init stripe balanceTransactions    # connectionKey auto-resolved, test auto-run
+one sync run stripe --since 90d
+
+# Query, search, SQL
+one sync query stripe/balanceTransactions --where "status=available" --limit 20
+one sync search "refund"
+one sync sql stripe "SELECT count(*) FROM balanceTransactions"
+
+# Schedule unattended syncs + change hooks
+one sync schedule add stripe --every 1h
+one sync init stripe balanceTransactions --config '{"onInsert":"one flow execute handle-new-txn"}'
+
+# Deletion detection
+one sync run stripe --full-refresh
+```
+
+| Subcommand | What it does |
+|------------|-------------|
+| `install` / `doctor` | Install + verify the SQLite engine |
+| `models <platform>` | Discover available data models |
+| `init <platform> <model>` | Create profile (auto-infers all fields, auto-resolves key, auto-runs test) |
+| `test <platform>/<model>` | Validate + auto-fix profile from real API response (also runs inside init) |
+| `run <platform>` | Sync data (`--full-refresh`, `--since`, `--dry-run`) |
+| `query <platform>/<model>` | Query with `--where`, `--after/before`, `--refresh` |
+| `search <query>` | FTS5 across all synced data |
+| `sql <platform> <sql>` | Raw SELECT queries |
+| `schedule add/list/status/remove/repair` | Cron-backed scheduled syncs with drift detection |
+| `remove <platform>` | Delete local data (`--dry-run` to preview) |
+
+Change hooks (`onInsert`, `onUpdate`, `onChange`) fire per-page during sync — pipe to a shell command, a flow, or an event log. Run `one guide sync` for the full reference.
+
 ### `one guide [topic]`
 
 Get the full CLI usage guide, designed for AI agents that only have the binary (no MCP, no IDE skills).
@@ -285,7 +351,7 @@ one --agent guide         # full guide as structured JSON
 one --agent guide flows   # single topic as JSON
 ```
 
-Topics: `overview`, `actions`, `flows`, `relay`, `cache`, `all` (default).
+Topics: `overview`, `actions`, `flows`, `relay`, `cache`, `sync`, `all` (default).
 
 In agent mode (`--agent`), the JSON response includes the guide content and an `availableTopics` array so agents can discover what sections exist.
 
@@ -333,7 +399,8 @@ Press Ctrl+C during execution to pause - the run can be resumed later with `one 
 |--------|-------------|
 | `-i, --input <name=value>` | Input parameter (repeatable) |
 | `--dry-run` | Validate and show execution plan without running |
-| `--mock` | With `--dry-run`: execute transforms/code with mock API responses |
+| `--mock` | With `--dry-run`: execute transforms/code with realistic mock API responses |
+| `--skip-validation` | Skip input validation against action schemas |
 | `--allow-bash` | Allow bash step execution (disabled by default for security) |
 | `-v, --verbose` | Show full request/response for each step |
 

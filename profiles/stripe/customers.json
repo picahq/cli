@@ -1,0 +1,18 @@
+{
+  "description": "Stripe customers — customer records with email, name, payment methods, and subscription status",
+  "platform": "stripe",
+  "model": "customers",
+  "connectionKey": "AUTO",
+  "actionId": "conn_mod_def::GGx6clhYjSQ::customers-list",
+  "resultsPath": "data",
+  "idField": "id",
+  "identityKey": "email",
+  "pagination": {
+    "type": "id",
+    "passAs": "query:starting_after",
+    "hasMorePath": "has_more",
+    "idField": "id"
+  },
+  "defaultLimit": 100,
+  "limitParam": "limit"
+}

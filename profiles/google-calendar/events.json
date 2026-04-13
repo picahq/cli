@@ -1,0 +1,17 @@
+{
+  "description": "Google Calendar events — meetings, appointments, and all-day events with attendees and location",
+  "platform": "google-calendar",
+  "model": "events",
+  "connectionKey": "AUTO",
+  "actionId": "conn_mod_def::GJ5x5pOh2TU::gcal-events-list",
+  "resultsPath": "items",
+  "idField": "id",
+  "pagination": {
+    "type": "token",
+    "nextPath": "nextPageToken",
+    "passAs": "query:pageToken"
+  },
+  "pathVars": { "calendarId": "primary" },
+  "defaultLimit": 250,
+  "limitParam": "maxResults"
+}

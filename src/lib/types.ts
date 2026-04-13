@@ -70,6 +70,22 @@ export interface AvailableAction {
   method: string;
 }
 
+export interface IoSchemaGroup {
+  required?: string[];
+  properties?: Record<string, { description?: string; type?: string }>;
+}
+
+export interface IoSchema {
+  inputSchema?: {
+    required?: string[];
+    properties?: Record<string, IoSchemaGroup>;
+  };
+  ioExample?: {
+    input?: Record<string, unknown>;
+    output?: Record<string, unknown>;
+  };
+}
+
 export interface ActionDetails {
   _id: string;
   title: string;
@@ -77,6 +93,7 @@ export interface ActionDetails {
   knowledge?: string;
   path: string;
   method: string;
+  ioSchema?: IoSchema;
 }
 
 export interface ActionKnowledgeResponse {

@@ -1,0 +1,16 @@
+{
+  "description": "Attio companies — CRM company records with domains, industry, and custom attributes",
+  "platform": "attio",
+  "model": "attioCompanies",
+  "connectionKey": "AUTO",
+  "actionId": "conn_mod_def::GJt0lFZ6kpk::attio-companies-list",
+  "resultsPath": "companies",
+  "idField": "id",
+  "pagination": {
+    "type": "offset",
+    "passAs": "body:offset"
+  },
+  "limitLocation": "body",
+  "limitParam": "limit",
+  "defaultLimit": 100
+}

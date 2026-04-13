@@ -1,0 +1,17 @@
+{
+  "description": "Attio people — CRM contact records with emails, phone numbers, and custom attributes",
+  "platform": "attio",
+  "model": "attioPeople",
+  "connectionKey": "AUTO",
+  "identityKey": "primary_email_address",
+  "actionId": "conn_mod_def::GJt0lFZ6kpk::attio-people-list",
+  "resultsPath": "people",
+  "idField": "id",
+  "pagination": {
+    "type": "offset",
+    "passAs": "body:offset"
+  },
+  "limitLocation": "body",
+  "limitParam": "limit",
+  "defaultLimit": 100
+}

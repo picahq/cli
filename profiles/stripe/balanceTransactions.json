@@ -1,0 +1,17 @@
+{
+  "description": "Stripe balance transactions — payments, refunds, payouts, and fees with amount, currency, and status",
+  "platform": "stripe",
+  "model": "balanceTransactions",
+  "connectionKey": "AUTO",
+  "actionId": "conn_mod_def::GGx6clhYjSQ::3kEaM3HQTA2JRfW3DzXC4g",
+  "resultsPath": "data",
+  "idField": "id",
+  "pagination": {
+    "type": "id",
+    "passAs": "query:starting_after",
+    "hasMorePath": "has_more",
+    "idField": "id"
+  },
+  "defaultLimit": 100,
+  "limitParam": "limit"
+}

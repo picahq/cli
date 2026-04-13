@@ -26,42 +26,38 @@ export async function platformsCommand(options: { category?: string; json?: bool
     const platforms = await api.listPlatforms();
     spinner.stop(`${platforms.length} platforms available`);
 
+    // Filter by category if specified (applies to all output modes)
+    let filtered = platforms;
+    if (options.category) {
+      filtered = platforms.filter(plat => (plat.category || 'Other') === options.category);
+      if (filtered.length === 0) {
+        const categories = [...new Set(platforms.map(plat => plat.category || 'Other'))].sort();
+        if (output.isAgentMode()) {
+          output.json({ error: `Unknown category "${options.category}"`, availableCategories: categories });
+          process.exit(1);
+        }
+        p.note(`Available categories:\n  ${categories.join(', ')}`, 'Unknown Category');
+        process.exit(1);
+      }
+    }
+
     if (options.json) {
       if (output.isAgentMode()) {
-        output.json({ platforms });
+        output.json({ platforms: filtered });
       } else {
-        console.log(JSON.stringify(platforms, null, 2));
+        console.log(JSON.stringify(filtered, null, 2));
       }
       return;
     }
 
-    // Group by category
-    const byCategory = new Map<string, Platform[]>();
-    for (const plat of platforms) {
-      const category = plat.category || 'Other';
-      if (!byCategory.has(category)) {
-        byCategory.set(category, []);
-      }
-      byCategory.get(category)!.push(plat);
-    }
-
     console.log();
 
-    // Filter by category if specified
     if (options.category) {
-      const categoryPlatforms = byCategory.get(options.category);
-      if (!categoryPlatforms) {
-        const categories = [...byCategory.keys()].sort();
-        p.note(`Available categories:\n  ${categories.join(', ')}`, 'Unknown Category');
-        process.exit(1);
-      }
-
-      const rows = categoryPlatforms
+      const rows = filtered
         .sort((a, b) => a.platform.localeCompare(b.platform))
         .map(plat => ({
           platform: plat.platform,
           name: plat.name,
-          category: plat.category || 'Other',
         }));
 
       printTable(
@@ -72,8 +68,8 @@ export async function platformsCommand(options: { category?: string; json?: bool
         rows
       );
     } else {
-      const rows = platforms
-        .sort((a, b) => a.category.localeCompare(b.category) || a.platform.localeCompare(b.platform))
+      const rows = filtered
+        .sort((a, b) => (a.category || 'Other').localeCompare(b.category || 'Other') || a.platform.localeCompare(b.platform))
         .map(plat => ({
           platform: plat.platform,
           name: plat.name,

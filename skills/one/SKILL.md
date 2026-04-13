@@ -76,6 +76,10 @@ Options:
 - `--form-data` — Send as multipart/form-data
 - `--form-url-encoded` — Send as application/x-www-form-urlencoded
 - `--dry-run` — Preview the request without executing
+- `--mock` — Return example response without making an API call (useful for building UI)
+- `--skip-validation` — Skip input validation against the action schema
+
+The CLI validates required parameters before executing. Missing params return a structured error with the flag name, parameter name, and description. Pass `--skip-validation` to bypass.
 
 Examples:
 ```bash
@@ -96,6 +100,18 @@ one --agent actions execute gmail <actionId> <connectionKey> \
   --path-vars '{"userId": "me", "id": "msg123"}' \
   --query-params '{"format": "metadata", "metadataHeaders": ["From", "Subject", "Date"]}'
 ```
+
+### Parallel execution
+
+Execute multiple actions concurrently with `--parallel`, separating each action with `--`:
+
+```bash
+one --agent actions execute --parallel \
+  gmail send-email conn123 -d '{"to":"a@b.com"}' \
+  -- slack post-message conn456 -d '{"text":"done"}'
+```
+
+All segments are validated before any execution. Failed actions don't block others. Use `--max-concurrency <n>` (default 5) to control batching. Agent-mode output: `{"parallel":true,"results":[...],"succeeded":N,"failed":N,"totalDurationMs":N}`.
 
 ## Error Handling
 
@@ -121,6 +137,33 @@ Knowledge and search responses are cached locally (`~/.one/cache/`). Subsequent 
 - Use `--cache-status` to check cache state without fetching
 - Manage cache: `one cache list`, `one cache clear`, `one cache update-all`
 - `actions execute` is NEVER cached — always fresh
+
+## Local Data Sync
+
+Sync platform data into local SQLite for instant queries, full-text search, scheduled refresh, and change-driven automation.
+
+```bash
+# First time only
+one sync install
+
+# Check built-in profiles (pre-validated configs for common platforms)
+one --agent sync profiles
+
+# Setup (uses built-in if available, otherwise auto-infers + auto-tests)
+one --agent sync init stripe balanceTransactions
+# If _complete: true and _test.ok: true → go straight to sync run
+
+# Sync + query
+one --agent sync run stripe
+one --agent sync query stripe/balanceTransactions --where "status=available" --limit 20
+one --agent sync search "refund"                 # FTS across all synced platforms
+one --agent sync list stripe                     # progress + freshness
+
+# Schedule unattended syncs
+one sync schedule add stripe --every 1h
+```
+
+**Advanced features** (enrich, transform, exclude, identityKey, hooks, --full-refresh, --where-sql delete, cursor resume): run `one guide sync` for the full reference.
 
 ## Beyond Single Actions
 

@@ -13,7 +13,7 @@ import {
 } from './lib/config.js';
 import { connectionAddCommand, connectionListCommand, connectionDeleteCommand } from './commands/connection.js';
 import { platformsCommand } from './commands/platforms.js';
-import { actionsSearchCommand, actionsKnowledgeCommand, actionsExecuteCommand } from './commands/actions.js';
+import { actionsSearchCommand, actionsKnowledgeCommand, actionsExecuteCommand, actionsExecuteParallelCommand } from './commands/actions.js';
 import {
   flowCreateCommand,
   flowExecuteCommand,
@@ -37,11 +37,12 @@ import {
   relayEventTypesCommand,
 } from './commands/relay.js';
 
+import { registerSyncCommands } from './lib/sync/index.js';
 import { cacheClearCommand, cacheListCommand, cacheUpdateAllCommand } from './commands/cache.js';
 import { guideCommand } from './commands/guide.js';
 import { onboardCommand } from './commands/onboard.js';
 import { updateCommand, checkLatestVersionCached, getCurrentVersion, isNewerVersion, autoUpdate } from './commands/update.js';
-import { setAgentMode, isAgentMode, json as outputJson } from './lib/output.js';
+import { setAgentMode, isAgentMode, json as outputJson, error as outputError } from './lib/output.js';
 import { syncSkillsIfStale, forceSyncSkills, getSkillStatus } from './lib/skill-sync.js';
 
 const require = createRequire(import.meta.url);
@@ -74,6 +75,15 @@ program
     one flow create [key]                 Create a workflow from JSON
     one flow execute <key>                Execute a workflow
     one flow validate <key>               Validate a flow
+
+  Data Sync (run "one sync install" first, then "one guide sync" for full reference):
+    one sync models <platform>            Discover available data models
+    one sync init <plat> <model>          Create profile (auto-infers from knowledge)
+    one sync test <plat>/<model>          Validate + auto-fix profile fields
+    one sync run <platform>               Sync data (--full-refresh for deletions)
+    one sync query <plat>/<model>         Query local data (--where, --refresh)
+    one sync search "<query>"             Full-text search across all synced data
+    one sync schedule add <plat> --every  Cron schedule (e.g. 1h) with change hooks
 
   Cache:
     one cache list                        List cached entries with age and status
@@ -310,9 +320,11 @@ actions
   });
 
 actions
-  .command('execute <platform> <actionId> <connectionKey>')
+  .command('execute [platform] [actionId] [connectionKey]')
   .alias('x')
-  .description('Execute an action — pass connectionKey from "one list", actionId from "actions search"')
+  .allowUnknownOption(true)
+  .allowExcessArguments(true)
+  .description('Execute an action (or multiple with --parallel, separated by --)')
   .option('-d, --data <json>', 'Request body as JSON')
   .option('--path-vars <json>', 'Path variables as JSON')
   .option('--query-params <json>', 'Query parameters as JSON')
@@ -320,8 +332,19 @@ actions
   .option('--form-data', 'Send as multipart/form-data')
   .option('--form-url-encoded', 'Send as application/x-www-form-urlencoded')
   .option('--dry-run', 'Show request that would be sent without executing')
-  .action(async (platform: string, actionId: string, connectionKey: string, options: any) => {
-    await actionsExecuteCommand(platform, actionId, connectionKey, {
+  .option('--mock', 'Return example response without making an API call')
+  .option('--skip-validation', 'Skip input validation against the action schema')
+  .option('--parallel', 'Execute multiple actions concurrently (separate actions with --)')
+  .option('--max-concurrency <n>', 'Max concurrent actions when using --parallel (default: 5)', '5')
+  .action(async (platform: string | undefined, actionId: string | undefined, connectionKey: string | undefined, options: any) => {
+    if (options.parallel) {
+      await actionsExecuteParallelCommand();
+      return;
+    }
+    if (!platform || !actionId || !connectionKey) {
+      outputError('Usage: one actions execute <platform> <actionId> <connectionKey> [-d ...]');
+    }
+    await actionsExecuteCommand(platform!, actionId!, connectionKey!, {
       data: options.data,
       pathVars: options.pathVars,
       queryParams: options.queryParams,
@@ -329,6 +352,8 @@ actions
       formData: options.formData,
       formUrlEncoded: options.formUrlEncoded,
       dryRun: options.dryRun,
+      mock: options.mock,
+      skipValidation: options.skipValidation,
     });
   });
 
@@ -353,10 +378,11 @@ flow
   .description('Execute a workflow by key or file path')
   .option('-i, --input <name=value>', 'Input parameter (repeatable)', collect, [])
   .option('--dry-run', 'Validate and show execution plan without running')
-  .option('--mock', 'With --dry-run: execute transforms/code with mock API responses')
+  .option('--mock', 'With --dry-run: execute transforms/code with realistic mock API responses')
+  .option('--skip-validation', 'Skip input validation against action schemas')
   .option('--allow-bash', 'Allow bash step execution (disabled by default for security)')
   .option('-v, --verbose', 'Show full request/response for each step')
-  .action(async (keyOrPath: string, options: { input?: string[]; dryRun?: boolean; verbose?: boolean; mock?: boolean; allowBash?: boolean }) => {
+  .action(async (keyOrPath: string, options: { input?: string[]; dryRun?: boolean; verbose?: boolean; mock?: boolean; allowBash?: boolean; skipValidation?: boolean }) => {
     await flowExecuteCommand(keyOrPath, options);
   });
 
@@ -498,6 +524,10 @@ relay
   });
 
 
+// ── Sync Commands ──
+
+registerSyncCommands(program);
+
 // ── Cache Commands ──
 
 const cache = program
@@ -529,7 +559,7 @@ cache
 
 program
   .command('guide [topic]')
-  .description('Full CLI usage guide for agents (topics: overview, actions, flows, relay, all)')
+  .description('Full CLI usage guide for agents (topics: overview, actions, flows, relay, cache, sync, all)')
   .action(async (topic?: string) => {
     await guideCommand(topic);
   });

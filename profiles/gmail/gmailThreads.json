@@ -1,0 +1,28 @@
+{
+  "description": "Gmail email threads — primary inbox with full message bodies (no attachments)",
+  "platform": "gmail",
+  "model": "gmailThreads",
+  "connectionKey": "AUTO",
+  "actionId": "conn_mod_def::GJ3ok-Q0D40::oLWNlcx4QDORaL_18z-MsQ",
+  "resultsPath": "threads",
+  "idField": "id",
+  "pagination": {
+    "type": "token",
+    "nextPath": "nextPageToken",
+    "passAs": "query:pageToken"
+  },
+  "limitParam": "maxResults",
+  "defaultLimit": 100,
+  "pathVars": { "userId": "me" },
+  "queryParams": { "q": "category:primary" },
+  "enrich": {
+    "actionId": "conn_mod_def::GJ3ok0Eq0R8::AAzgZVLqTg2iBuITKpJLZg",
+    "pathVars": { "userId": "me", "id": "{id}" },
+    "queryParams": { "format": "full" },
+    "exclude": [
+      "messages[].payload.parts[].body.data",
+      "messages[].payload.body.data"
+    ],
+    "concurrency": 5
+  }
+}

@@ -244,6 +244,7 @@ export interface FlowExecuteOptions {
   mock?: boolean;
   verbose?: boolean;
   allowBash?: boolean;
+  skipValidation?: boolean;
   /** Absolute directory that contains this flow's `flow.json` (or the legacy `.one/flows/` dir). Used to resolve code.module paths. */
   rootDir?: string;
   onEvent?: (event: FlowEvent) => void;

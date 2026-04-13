@@ -7,4 +7,5 @@ export default defineConfig({
   clean: true,
   dts: true,
   shims: true,
+  external: ['better-sqlite3'],
 });

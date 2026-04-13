@@ -628,6 +628,7 @@ one --agent flow validate <key>
 one --agent flow execute <key> -i key=value
 one --agent flow execute <key> --dry-run -i key=value
 one --agent flow execute <key> --dry-run --mock -i key=value
+one --agent flow execute <key> --skip-validation -i key=value
 one --agent flow execute <key> --allow-bash -i key=value
 one --agent flow runs [flowKey]
 one --agent flow resume <runId>
@@ -635,9 +636,12 @@ one --agent flow resume <runId>
 
 ## Important Notes
 
+- **Prefer passthrough actions over custom actions.** Custom actions add server-side fan-out that causes timeouts at scale. The flow runner handles pagination, retries, and rate limiting locally. Search with `-t knowledge` to find passthrough endpoints (e.g. GET `/gmail/v1/users/{userId}/threads` instead of POST `/gmail/get-threads`)
 - Connection keys are inputs, not hardcoded — makes workflows portable
 - Action IDs in examples are placeholders — always use `actions search` to find real IDs
 - Code steps support `require('crypto')`, `require('buffer')`, `require('url')`, `require('path')` — `fs`, `http`, `child_process` are blocked
 - Bash steps require `--allow-bash` flag
+- Action steps validate required params before executing — pass `--skip-validation` to bypass
+- `--mock` now returns realistic example data from action schemas (instead of echoed config)
 - State is persisted after every step — resume picks up where it left off
 - For bash+Claude steps, always set timeout to 180000+ and run sequentially (not in parallel)

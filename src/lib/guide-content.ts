@@ -43,6 +43,10 @@ one --agent actions execute <platform> <actionId> <key> -d '{}'  # Execute it
 - \`--query-params <json>\` — Query parameters (arrays expand to repeated params)
 - \`--form-url-encoded\` — Send as form data instead of JSON
 - \`--dry-run\` — Preview request without executing
+- \`--mock\` — Return example response without making an API call (useful for building UI against a response shape)
+- \`--skip-validation\` — Skip input validation against the action schema
+
+The CLI validates required parameters against the action schema before executing. If you're missing a required path variable, query param, or body field, you'll get a clear error listing what's missing and which flag to use. Pass \`--skip-validation\` to bypass.
 
 Do NOT pass path or query parameters in \`-d\` — use the correct flags.
 
@@ -63,7 +67,8 @@ one --agent flow list                                 # List all workflows
 - 12 step types: action, transform, code, condition, loop, parallel, file-read, file-write, while, flow, paginate, bash
 - Data wiring via selectors: \`$.input.param\`, \`$.steps.stepId.response\`, \`$.loop.item\`
 - AI analysis via bash steps: \`claude --print\` with \`parseJson: true\`
-- Use \`--allow-bash\` to enable bash steps, \`--mock\` for dry-run with mock responses
+- Use \`--allow-bash\` to enable bash steps, \`--mock\` for dry-run with realistic mock responses (uses example data from action schemas)
+- Use \`--skip-validation\` to bypass input validation on action steps
 
 ### 3. Relay — Webhook event forwarding between platforms
 Receive webhooks from platforms (Stripe, GitHub, Airtable, Attio, Google Calendar) and forward event data to any connected platform using passthrough actions with Handlebars templates. No middleware, no code.
@@ -84,6 +89,9 @@ one --agent relay deliveries --endpoint-id <id>                 # Check delivery
 - \`--create-webhook\` auto-registers the webhook URL with the source platform
 - Use \`actions knowledge\` to learn both the incoming payload shape AND the destination API shape before building templates
 
+### 4. Sync — Local data sync for instant offline queries
+Sync platform data into local SQLite for instant queries, full-text search, and change-driven automation. Requires a one-time \`one sync install\`. Run \`one guide sync\` for the full reference.
+
 ## Topics
 
 Request specific sections:
@@ -92,6 +100,7 @@ Request specific sections:
 - \`one guide flows\` — Workflow engine reference (step types, selectors, examples)
 - \`one guide relay\` — Webhook relay reference (templates, passthrough actions)
 - \`one guide cache\` — Cache management (TTL, flags, commands)
+- \`one guide sync\` — Data sync reference (profiles, pagination, queries)
 - \`one guide all\` — Everything
 
 ## Important Notes
@@ -158,8 +167,37 @@ one --agent actions execute <platform> <actionId> <connectionKey> [options]
 - \`--headers <json>\` — Additional headers
 - \`--form-data\` / \`--form-url-encoded\` — Alternative content types
 - \`--dry-run\` — Preview without executing
+- \`--mock\` — Return example response without making an API call
+- \`--skip-validation\` — Skip input validation against the action schema
 
 **Do NOT** pass path or query parameters in \`-d\`. Use the correct flags.
+
+### 4b. Parallel Execute
+
+Execute multiple actions concurrently in a single command:
+
+\`\`\`bash
+one --agent actions execute --parallel \\
+  gmail send-email conn123 -d '{"to":"a@b.com"}' \\
+  -- slack post-message conn456 -d '{"text":"done"}' \\
+  -- google-sheets append-row conn789 -d '{"values":["x"]}'
+\`\`\`
+
+Each segment separated by \`--\` follows the same format: \`<platform> <actionId> <connectionKey> [-d ...] [--path-vars ...] [--query-params ...]\`. Global flags (\`--dry-run\`, \`--mock\`, \`--skip-validation\`) apply to all segments.
+
+All segments are validated upfront before any execution starts — if one segment has bad params, nothing runs. Execution uses \`Promise.allSettled\` so if one action fails the rest still complete. Use \`--max-concurrency <n>\` (default 5) to control batch size.
+
+Agent-mode output:
+\`\`\`json
+{"parallel":true,"totalDurationMs":1234,"succeeded":2,"failed":0,"results":[{"segment":1,"platform":"gmail","actionId":"send-email","status":"success","durationMs":800,"response":{...}},{"segment":2,"platform":"slack","actionId":"post-message","status":"success","durationMs":600,"response":{...}}]}
+\`\`\`
+
+## Input Validation
+
+The CLI validates required parameters before executing. Missing params return a structured error:
+\`\`\`json
+{"error": "Validation failed: missing required parameters", "validation": {"missing": [{"flag": "--path-vars", "param": "userId", "description": "..."}]}, "hint": "...pass --skip-validation to bypass..."}
+\`\`\`
 
 ## Error Handling
 
@@ -340,7 +378,277 @@ All cache commands respect \`--agent\` for JSON output.
 | Default | — | 3600 (1 hour) |
 `;
 
-type GuideTopic = 'overview' | 'actions' | 'flows' | 'relay' | 'cache' | 'all';
+export const GUIDE_SYNC = `# One Sync — Reference
+
+Sync platform data into local SQLite for instant queries, full-text search, scheduled refresh, and change-driven automation.
+
+## Getting Started
+
+\`\`\`bash
+one sync install                    # One-time: install the SQLite engine
+one sync doctor                     # Verify it's working
+\`\`\`
+
+## Built-in Profiles
+
+Pre-validated sync configs ship with the CLI for common platforms. Discover them:
+
+\`\`\`bash
+one --agent sync profiles              # list all built-in profiles
+one --agent sync profiles stripe       # filter by platform
+\`\`\`
+
+When a built-in exists, \`sync init\` uses it automatically — no inference needed, no manual config. The agent just needs to match the user's intent to a profile description.
+
+## Action Resolution
+
+Sync profiles MUST prefer passthrough actions over custom actions.
+Custom actions add server-side fan-out and transformation that causes timeouts
+and payload size failures at scale. The sync engine handles pagination, retries,
+rate limiting, and enrichment locally — a server-side middleware layer on top
+of that creates problems, not value.
+
+When resolving actions for sync profiles:
+1. Search with knowledge mode (not execute mode) to include passthrough actions
+2. Prefer GET passthrough endpoints (e.g. /gmail/v1/users/{userId}/threads)
+   over POST custom endpoints (e.g. /gmail/get-threads)
+3. Use enrich config for per-record detail fetching instead of relying on
+   custom actions that fan out server-side
+4. Only fall back to custom actions when no passthrough equivalent exists
+
+This applies to sync models discovery, sync init, and enrich action selection.
+
+## Workflow: init → run → query
+
+\`\`\`bash
+# 1. Discover models
+one --agent sync models stripe
+
+# 2. Init — one command does everything:
+#    - resolves action ID
+#    - infers pagination, resultsPath, idField, pathVars from knowledge
+#    - auto-resolves connectionKey (when only one connection exists)
+#    - auto-runs sync test if profile is complete
+one --agent sync init stripe balanceTransactions
+# Response includes _complete:true and _test results when fully resolved.
+# If connectionKey wasn't auto-resolved (multiple connections), patch it:
+one --agent sync init stripe balanceTransactions --config '{"connectionKey":"<from one list>"}'
+
+# 3. Sync
+one --agent sync run stripe
+
+# 4. Query
+one --agent sync query stripe/balanceTransactions --where "status=available" --limit 20
+one --agent sync search "refund" --platform stripe
+one --agent sync sql stripe "SELECT count(*) FROM balanceTransactions"
+\`\`\`
+
+## Auto-Inference
+
+\`sync init\` without \`--config\` does all of this automatically:
+- **connectionKey** — auto-resolved when there's exactly one connection for the platform
+- **Pagination** — Stripe id-pagination, Notion body-cursor, HubSpot/Google token, offset, link. Inapplicable fields stripped (no nextPath for offset, no passAs for none)
+- **resultsPath** — generic keys (data, results, items) + platform-specific (model name stripped of platform prefix: attioCompanies → companies)
+- **idField** — id, _id, uuid
+- **pathVars** — extracted from URL template with smart defaults (calendarId="primary", userId="me"). Internal keys (INTERNAL_SIGNING_KEY) and record-level IDs (record_id) are stripped automatically
+- **dateFilter** — updated_since, created_after, etc.
+- **limitLocation** — auto-detected as "body" for POST endpoints
+
+When the profile is complete (no FILL_IN values remain), \`sync init\` automatically runs \`sync test\` and includes the results in the response (\`_test: {ok, checks, autoFixed}\`). If test auto-discovers fields the inference missed, it patches the profile on disk.
+
+## Scheduled Syncs
+
+\`\`\`bash
+one sync schedule add stripe --every 1h
+one sync schedule add notion --every 30m --models search
+one --agent sync schedule list            # Works from any directory
+one --agent sync schedule status          # Drift detection + log tails
+one sync schedule remove <id|platform>    # By id (any dir) or platform
+one sync schedule repair <id>             # Re-install broken cron line
+\`\`\`
+Backed by system cron (macOS/Linux). Schedules tracked in a global registry at \`~/.one/sync/schedules.json\`.
+
+## Record Enrichment
+
+When a list endpoint returns lightweight records (e.g. just IDs), add an \`enrich\` config to call a detail endpoint per record and merge the full data before storing:
+
+\`\`\`json
+{
+  "enrich": {
+    "actionId": "<get-message-action-id>",
+    "pathVars": { "messageId": "{{id}}" },
+    "concurrency": 3,
+    "delayMs": 200
+  }
+}
+\`\`\`
+
+- \`pathVars\` / \`queryParams\` / \`body\` support \`{{field}}\` interpolation from the list record
+- \`concurrency\` controls parallel detail requests per page (default: 3, lower = safer for rate limits)
+- \`delayMs\` is the pause between batches (default: 200ms)
+- \`resultsPath\` extracts a sub-object from the detail response before merging
+- \`merge: false\` replaces the record entirely instead of deep-merging
+
+**Rate limiting is first-class:**
+- Honors \`Retry-After\` headers from 429 responses
+- Exponential backoff (2s → 4s → 8s)
+- Adaptive throttle: if any request in a batch hits 429, concurrency halves automatically
+- Records that fail after 3 retries are skipped (sync continues, count reported in \`enrichSkipped\`)
+
+**Important:** \`enrich.resultsPath\` operates on the raw API response, NOT the CLI's \`{dryRun, request, response}\` wrapper you see when testing with \`one --agent actions execute\`. If the CLI shows your data at \`response.thread\`, the enrich resultsPath is just \`"thread"\` (no \`response.\` prefix).
+
+Enrichment runs after list sync completes (Phase 2), not inline. It's inherently resumable — records track an \`_enriched_at\` timestamp, and re-running skips already-enriched rows.
+
+**Limitation:** Each profile supports one enrich action. If you need multiple enrichments (e.g. both summary and transcript from Fathom), create a second profile/model for the second enrichment.
+
+## Record Transform
+
+Pipe records through any shell command or flow between fetch and store. The command receives a JSON array on stdin and must return a JSON array on stdout.
+
+\`\`\`json
+{
+  "transform": "jq '[.[] | . + {flat_title: (.properties.title.title[0].plain_text // null)}]'"
+}
+\`\`\`
+
+Use cases:
+- Flatten nested fields into queryable top-level columns
+- Add computed fields (tags, categories, scores)
+- Filter out records you don't want to store
+- Reshape API responses into a cleaner schema
+
+The transform can be any command: \`jq\`, \`python3\`, a bash script, or \`one flow execute <key>\`. If the command fails, times out (60s), or returns invalid JSON, the original records are used (warning printed, sync continues).
+
+**Pipeline order:** fetch → enrich → transform → **exclude** → create table → schema evolution → upsert → hooks
+
+## Cross-Platform Identity
+
+Add \`identityKey\` to a sync profile to extract a stable cross-platform identifier (e.g. email) into a normalized \`_identity\` column:
+
+\`\`\`json
+{"platform": "hubspot", "model": "contacts", "identityKey": "properties.email"}
+{"platform": "stripe",  "model": "customers", "identityKey": "email"}
+{"platform": "attio",   "model": "attioPeople", "identityKey": "email_addresses[0].email_address"}
+\`\`\`
+
+The value is lowercased and trimmed. Query across platforms:
+\`\`\`bash
+one --agent sync sql hubspot "SELECT * FROM contacts WHERE _identity = 'jane@acme.com'"
+one --agent sync sql stripe "SELECT * FROM customers WHERE _identity = 'jane@acme.com'"
+\`\`\`
+
+## Exclude Fields
+
+Strip large or unwanted fields from records before storing (e.g. base64 attachments, raw HTML bodies):
+
+\`\`\`json
+{ "exclude": ["messages[].body", "messages[].attachments[].data", "payload.parts"] }
+\`\`\`
+
+Supports dot-path notation and array iteration (\`messages[].body\` strips \`body\` from each element of the \`messages\` array). Runs before table creation so excluded columns never exist in the schema.
+
+## Monitoring Progress
+
+\`sync list\` doubles as a progress monitor. The state file is updated after every page, so while a sync is running you can check progress from another context:
+
+\`\`\`bash
+one --agent sync list gmail
+# → {"syncs":[{"model":"gmailThreads","totalRecords":400,"pagesProcessed":8,"status":"syncing",...}]}
+\`\`\`
+
+When \`status\` is \`"syncing"\`, \`totalRecords\` and \`pagesProcessed\` reflect real-time progress. When it flips to \`"idle"\`, the sync is done. No need to babysit — especially when using \`sync schedule\` for unattended runs.
+
+## Change Hooks (CDC)
+
+Add \`onInsert\`, \`onUpdate\`, or \`onChange\` to a sync profile to fire hooks when records change:
+
+\`\`\`json
+{
+  "onInsert": "one flow execute enrich-new-contact",
+  "onUpdate": "log",
+  "onChange": "node ./scripts/handle-change.js"
+}
+\`\`\`
+
+**Hook modes:**
+- **Shell command** — record events piped as NDJSON to stdin
+- **\`"log"\`** — append to \`.one/sync/events/<platform>_<model>.jsonl\`
+- **Flow execution** — \`one flow execute <key>\` with record as input
+
+Hooks fire after each page (not end-of-sync) for real-time processing. Each event:
+\`{"type":"insert|update","platform":"...","model":"...","record":{...},"timestamp":"..."}\`
+
+Every record has a \`_synced_at\` timestamp so you can track when it was last pulled.
+
+## Full Refresh (deletion detection)
+
+\`\`\`bash
+one --agent sync run stripe --full-refresh
+\`\`\`
+Fetches ALL records and deletes local rows whose IDs are no longer in the source. Cannot be combined with \`--since\`.
+
+## Commands Reference
+
+| Command | What it does |
+|---------|-------------|
+| \`sync profiles [platform]\` | List built-in pre-validated profiles |
+| \`sync install\` | Install SQLite engine (first time) |
+| \`sync doctor\` | Verify engine health |
+| \`sync models <platform>\` | Discover available models |
+| \`sync init <plat> <model>\` | Create profile (auto-infers from knowledge) |
+| \`sync test <plat>/<model>\` | Validate profile + auto-fix fields |
+| \`sync run <platform>\` | Sync data (\`--full-refresh\`, \`--since\`, \`--dry-run\`) |
+| \`sync query <plat>/<model>\` | Query with \`--where\`, \`--after/before\`, \`--refresh\` |
+| \`sync search "<query>"\` | FTS5 across all synced data |
+| \`sync sql <plat> "<sql>"\` | Raw SELECT queries |
+| \`sync list [platform]\` | Show profiles, record counts, freshness |
+| \`sync schedule add/list/status/remove/repair\` | Manage cron schedules |
+| \`sync remove <platform>\` | Delete local data (\`--dry-run\` to preview) |
+
+## Sync Profile Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| connectionKey | yes | From \`one list\` |
+| actionId | yes | Auto-resolved by \`sync init\` |
+| resultsPath | yes | Auto-inferred or auto-discovered by \`sync test\` |
+| idField | yes | Auto-inferred or auto-discovered by \`sync test\` |
+| pagination | yes | Auto-inferred (cursor/token/offset/id/link/none) |
+| pathVars | no | Auto-extracted from URL template |
+| dateFilter | no | For incremental sync (auto-detected when available) |
+| limitParam | no | Page size param name (empty string = don't send) |
+| limitLocation | no | "query" (default) or "body" for POST endpoints |
+| enrich | no | Detail endpoint config for record enrichment (actionId, pathVars, concurrency) |
+| transform | no | Shell command to transform records (stdin: JSON array, stdout: JSON array) |
+| identityKey | no | Dot-path to cross-platform identifier (e.g. email) → stored as \`_identity\` column |
+| exclude | no | Dot-path fields to strip before storing (e.g. \`["messages[].body"]\`) |
+| onInsert/onUpdate/onChange | no | Change hooks (shell command, "log", or flow) |
+
+## Pagination Types
+
+- **cursor** — \`{"type":"cursor", "nextPath":"next_cursor", "passAs":"query:cursor"}\`
+- **token** — \`{"type":"token", "nextPath":"paging.next.after", "passAs":"query:after"}\`
+- **offset** — \`{"type":"offset", "passAs":"query:offset", "totalPath":"total"}\`
+- **id** — \`{"type":"id", "passAs":"query:starting_after", "hasMorePath":"has_more"}\`
+- **link** — \`{"type":"link", "nextPath":"link.next.page_info", "passAs":"query:page_info"}\`
+- **none** — single request, no pagination (no limit param injected)
+
+## File Layout
+
+\`\`\`
+.one/sync/
+  profiles/{platform}_{model}.json    # sync profiles
+  data/{platform}.db                  # SQLite databases (WAL mode)
+  sync_state.json                     # checkpoint tracking
+  events/{platform}_{model}.jsonl     # change event logs (if onChange: "log")
+  logs/{platform}.log                 # cron run logs
+  locks/{platform}_{model}/           # cross-process sync locks
+~/.one/sync/
+  schedules.json                      # global schedule registry
+\`\`\`
+`;
+
+type GuideTopic = 'overview' | 'actions' | 'flows' | 'relay' | 'cache' | 'sync' | 'all';
 
 const TOPICS: { topic: GuideTopic; description: string }[] = [
   { topic: 'overview', description: 'Setup, features, and quick start for each' },
@@ -348,6 +656,7 @@ const TOPICS: { topic: GuideTopic; description: string }[] = [
   { topic: 'flows', description: 'Build and execute multi-step workflows' },
   { topic: 'relay', description: 'Receive webhooks and forward to other platforms' },
   { topic: 'cache', description: 'Local caching for knowledge and search responses' },
+  { topic: 'sync', description: 'Sync platform data locally for instant offline queries' },
   { topic: 'all', description: 'Complete guide (all topics combined)' },
 ];
 
@@ -363,10 +672,12 @@ export function getGuideContent(topic: GuideTopic): { title: string; content: st
       return { title: 'One CLI — Agent Guide: Relay', content: GUIDE_RELAY };
     case 'cache':
       return { title: 'One CLI — Agent Guide: Cache', content: GUIDE_CACHE };
+    case 'sync':
+      return { title: 'One CLI — Agent Guide: Sync', content: GUIDE_SYNC };
     case 'all':
       return {
         title: 'One CLI — Agent Guide: Complete',
-        content: [GUIDE_OVERVIEW, GUIDE_ACTIONS, GUIDE_FLOWS, GUIDE_RELAY, GUIDE_CACHE].join('\n---\n\n'),
+        content: [GUIDE_OVERVIEW, GUIDE_ACTIONS, GUIDE_FLOWS, GUIDE_RELAY, GUIDE_CACHE, GUIDE_SYNC].join('\n---\n\n'),
       };
   }
 }

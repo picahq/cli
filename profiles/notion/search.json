@@ -1,0 +1,18 @@
+{
+  "description": "Notion pages and databases — full workspace search with titles, properties, and metadata",
+  "platform": "notion",
+  "model": "search",
+  "connectionKey": "AUTO",
+  "actionId": "conn_mod_def::GJ5En67fz04::-CJAS419SVWm7L2l6brp6A",
+  "resultsPath": "results",
+  "idField": "id",
+  "pagination": {
+    "type": "cursor",
+    "nextPath": "next_cursor",
+    "passAs": "body:start_cursor",
+    "hasMorePath": "has_more"
+  },
+  "limitLocation": "body",
+  "limitParam": "page_size",
+  "defaultLimit": 100
+}
