@@ -97,8 +97,18 @@ export async function updateCommand(): Promise<void> {
   s.stop(`Update available: v${currentVersion} → v${latestVersion}`);
   console.log(`Updating @withone/cli: v${currentVersion} → v${latestVersion}...`);
 
+  // Clear npm cache for this package to avoid stale installs
+  await new Promise<void>((resolve) => {
+    const child = spawn('npm', ['cache', 'clean', '--force'], {
+      stdio: 'ignore',
+      shell: true,
+    });
+    child.on('close', () => resolve());
+    child.on('error', () => resolve());
+  });
+
   const code = await new Promise<number | null>((resolve) => {
-    const child = spawn('npm', ['install', '-g', '@withone/cli@latest', '--force'], {
+    const child = spawn('npm', ['install', '-g', `@withone/cli@${latestVersion}`, '--force'], {
       stdio: output.isAgentMode() ? 'pipe' : 'inherit',
       shell: true,
     });
