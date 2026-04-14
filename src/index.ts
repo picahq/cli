@@ -10,8 +10,14 @@ import {
   getProjectConfigPath,
   globalConfigExists,
   projectConfigExists,
+  getApiKey,
+  getApiBase,
+  getWhoAmI,
+  updateWhoAmI,
+  getEnvFromApiKey,
 } from './lib/config.js';
 import { connectionAddCommand, connectionListCommand, connectionDeleteCommand } from './commands/connection.js';
+import { OneApi } from './lib/api.js';
 import { platformsCommand } from './commands/platforms.js';
 import { actionsSearchCommand, actionsKnowledgeCommand, actionsExecuteCommand, actionsExecuteParallelCommand } from './commands/actions.js';
 import {
@@ -60,6 +66,7 @@ program
     one add <platform>                    Connect a platform via OAuth (e.g. gmail, slack, shopify)
     one connection delete <key>           Remove a connection (alias: one connection rm)
     one config                            Configure access control (permissions, scoping)
+    one whoami                            Show current user, organization, and project
 
   Workflow (use these in order):
     1. one list                           List your connected platforms and connection keys
@@ -577,6 +584,65 @@ program
   .description('Update the One CLI to the latest version')
   .action(async () => {
     await updateCommand();
+  });
+
+program
+  .command('whoami')
+  .description('Show the user, organization, and project for the current API key')
+  .action(async () => {
+    const apiKey = getApiKey();
+    if (!apiKey) {
+      outputError('Not configured. Run `one init` first.');
+      return;
+    }
+
+    const api = new OneApi(apiKey, getApiBase());
+
+    let whoami;
+    try {
+      whoami = await api.whoami();
+      updateWhoAmI(whoami);
+    } catch (error) {
+      outputError(`Failed to fetch account info: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      return;
+    }
+
+    const env = getEnvFromApiKey(apiKey);
+    const resolved = resolveConfig();
+    const configScope = resolved.scope ?? 'global';
+    const apiBase = getApiBase();
+
+    if (isAgentMode()) {
+      outputJson({
+        user: whoami.user,
+        organization: whoami.organization,
+        project: whoami.project,
+        env,
+        configScope,
+        apiBase,
+      });
+      return;
+    }
+
+    const pc = (await import('picocolors')).default;
+    const contextParts: string[] = [];
+    if (whoami.organization) contextParts.push(whoami.organization.name);
+    if (whoami.project) contextParts.push(whoami.project.name);
+    const scopeDisplay = contextParts.length > 0 ? contextParts.join(' / ') : 'Personal';
+    const envLabel = env === 'test' ? pc.yellow('test') : pc.green('live');
+    const configLabel = configScope === 'project'
+      ? pc.cyan('project config')
+      : pc.magenta('global config');
+
+    console.log();
+    console.log(`  ${pc.bold(scopeDisplay)} ${pc.dim('·')} ${envLabel}`);
+    console.log(`  ${whoami.user.name} ${pc.dim(`(${whoami.user.email})`)}`);
+    if (whoami.organization) console.log(`  ${pc.dim('Org:')} ${whoami.organization.name} ${pc.dim(`(${whoami.organization.id})`)}`);
+    if (whoami.project) console.log(`  ${pc.dim('Project:')} ${whoami.project.name} ${pc.dim(`(${whoami.project.id})`)}`);
+    console.log();
+    console.log(`  ${pc.dim('Using')} ${configLabel}`);
+    console.log(`  ${pc.dim('API:')} ${apiBase}`);
+    console.log();
   });
 
 // Shortcuts

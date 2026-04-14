@@ -18,6 +18,8 @@ import {
   getProjectRoot,
   globalConfigExists,
   projectConfigExists,
+  getEnvFromApiKey,
+  getWhoAmI,
   type ConfigScope,
 } from '../lib/config.js';
 import {
@@ -31,7 +33,7 @@ import {
   type AgentStatus,
 } from '../lib/agents.js';
 import { OneApi, TimeoutError } from '../lib/api.js';
-import { getApiKeyUrl, openApiKeyPage, openConnectionPage, getConnectionUrl } from '../lib/browser.js';
+import { getApiKeyUrl, openApiKeyPage, openConnectionPage, getConnectionUrl, type ConnectionUrlParams } from '../lib/browser.js';
 import { configCommand } from './config.js';
 import open from 'open';
 import * as output from '../lib/output.js';
@@ -258,10 +260,17 @@ async function handleExistingConfig(
       printOnboardingPrompt();
       p.outro('Paste the prompt above to your AI agent.');
       break;
-    case 'add-connection':
-      await promptConnectIntegrations(apiKey);
+    case 'add-connection': {
+      const whoamiCached = getWhoAmI();
+      const addConnParams: ConnectionUrlParams = {
+        env: getEnvFromApiKey(apiKey),
+        ...(whoamiCached?.organization && { orgId: whoamiCached.organization.id }),
+        ...(whoamiCached?.project && { projectId: whoamiCached.project.id }),
+      };
+      await promptConnectIntegrations(apiKey, addConnParams);
       p.outro('Done.');
       break;
+    }
     case 'update-key':
       await handleUpdateKey(statuses, scope);
       break;
@@ -315,15 +324,27 @@ async function handleUpdateKey(statuses: AgentStatus[], scope: ConfigScope): Pro
   spinner.start('Validating API key...');
 
   const api = new OneApi(newKey, getApiBase());
-  const isValid = await api.validateApiKey();
+  const whoamiResult = await api.validateApiKey();
 
-  if (!isValid) {
+  if (!whoamiResult) {
     spinner.stop('Invalid API key');
     p.cancel(`Invalid API key. Get a valid key at ${getApiKeyUrl()}`);
     process.exit(1);
   }
 
   spinner.stop('API key validated');
+
+  // Show key context
+  const env = getEnvFromApiKey(newKey);
+  const contextParts: string[] = [];
+  if (whoamiResult.organization) contextParts.push(whoamiResult.organization.name);
+  if (whoamiResult.project) contextParts.push(whoamiResult.project.name);
+  const scopeDisplay = contextParts.length > 0 ? contextParts.join(' / ') : 'Personal';
+  const envLabel = env === 'test' ? pc.yellow('test') : pc.green('live');
+  p.note(
+    `${scopeDisplay} ${pc.dim('·')} ${envLabel}\n${whoamiResult.user.name} ${pc.dim(`(${whoamiResult.user.email})`)}`,
+    'Account',
+  );
 
   // Re-install MCP to every agent that currently has it (preserve scopes)
   const ac = getAccessControl();
@@ -339,7 +360,7 @@ async function handleUpdateKey(statuses: AgentStatus[], scope: ConfigScope): Pro
     }
   }
 
-  // Update config (preserve accessControl) at the active scope.
+  // Update config (preserve accessControl, refresh whoami) at the active scope.
   const current = scope === 'project' ? readProjectConfig() : readGlobalConfig();
   writeConfig(
     {
@@ -349,6 +370,7 @@ async function handleUpdateKey(statuses: AgentStatus[], scope: ConfigScope): Pro
       accessControl: current?.accessControl,
       apiBase: current?.apiBase,
       cacheTtl: current?.cacheTtl,
+      whoami: whoamiResult,
     },
     scope,
   );
@@ -836,9 +858,9 @@ async function freshSetup(
   spinner.start('Validating API key...');
 
   const api = new OneApi(apiKey, getApiBase());
-  const isValid = await api.validateApiKey();
+  const whoami = await api.validateApiKey();
 
-  if (!isValid) {
+  if (!whoami) {
     spinner.stop('Invalid API key');
     p.cancel(`Invalid API key. Get a valid key at ${getApiKeyUrl()}`);
     process.exit(1);
@@ -846,12 +868,27 @@ async function freshSetup(
 
   spinner.stop('API key validated');
 
-  // Save API key to config at the chosen scope
+  // Show key context (org/project scope)
+  const env = getEnvFromApiKey(apiKey);
+  const contextParts: string[] = [];
+  if (whoami.organization) contextParts.push(whoami.organization.name);
+  if (whoami.project) contextParts.push(whoami.project.name);
+  const scope_label = contextParts.length > 0
+    ? contextParts.join(' / ')
+    : 'Personal';
+  const envLabel = env === 'test' ? pc.yellow('test') : pc.green('live');
+  p.note(
+    `${scope_label} ${pc.dim('·')} ${envLabel}\n${whoami.user.name} ${pc.dim(`(${whoami.user.email})`)}`,
+    'Account',
+  );
+
+  // Save API key + whoami to config at the chosen scope
   writeConfig(
     {
       apiKey,
       installedAgents: [],
       createdAt: new Date().toISOString(),
+      whoami,
     },
     scope,
   );
@@ -860,7 +897,12 @@ async function freshSetup(
   await promptSkillInstall();
 
   // Step 3: Connect integrations
-  await promptConnectIntegrations(apiKey);
+  const connParams: ConnectionUrlParams = {
+    env,
+    ...(whoami.organization && { orgId: whoami.organization.id }),
+    ...(whoami.project && { projectId: whoami.project.id }),
+  };
+  await promptConnectIntegrations(apiKey, connParams);
 
   const savedPath =
     scope === 'project' ? getProjectConfigPath() : getGlobalConfigPath();
@@ -906,7 +948,7 @@ const TOP_INTEGRATIONS = [
   { value: 'notion', label: 'Notion', hint: 'Access pages, databases, and docs' },
 ];
 
-async function promptConnectIntegrations(apiKey: string): Promise<void> {
+async function promptConnectIntegrations(apiKey: string, connParams?: ConnectionUrlParams): Promise<void> {
   const api = new OneApi(apiKey, getApiBase());
   const connected: string[] = [];
 
@@ -966,9 +1008,9 @@ async function promptConnectIntegrations(apiKey: string): Promise<void> {
     p.log.info(`Opening browser to connect ${pc.cyan(label)}...`);
 
     try {
-      await openConnectionPage(platform);
+      await openConnectionPage(platform, connParams);
     } catch {
-      const url = getConnectionUrl(platform);
+      const url = getConnectionUrl(platform, connParams);
       p.log.warn('Could not open browser automatically.');
       p.note(url, 'Open manually');
     }

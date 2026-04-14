@@ -1,8 +1,8 @@
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
-import { getApiKey, getApiBase, getAccessControlFromAllSources } from '../lib/config.js';
+import { getApiKey, getApiBase, getAccessControlFromAllSources, ensureWhoAmI, getEnvFromApiKey } from '../lib/config.js';
 import { OneApi, TimeoutError } from '../lib/api.js';
-import { openConnectionPage, getConnectionUrl } from '../lib/browser.js';
+import { openConnectionPage, getConnectionUrl, type ConnectionUrlParams } from '../lib/browser.js';
 import { findPlatform, findSimilarPlatforms } from '../lib/platforms.js';
 import { printTable } from '../lib/table.js';
 import * as output from '../lib/output.js';
@@ -92,13 +92,21 @@ export async function connectionAddCommand(platformArg?: string): Promise<void> 
     }
   }
 
+  // Resolve org/project scope for the connection URL
+  const whoami = await ensureWhoAmI(api);
+  const connParams: ConnectionUrlParams = {
+    env: getEnvFromApiKey(apiKey),
+    ...(whoami?.organization && { orgId: whoami.organization.id }),
+    ...(whoami?.project && { projectId: whoami.project.id }),
+  };
+
   // Open browser
-  const url = getConnectionUrl(platform);
+  const url = getConnectionUrl(platform, connParams);
   p.log.info(`Opening browser to connect ${pc.cyan(platform)}...`);
   p.note(pc.dim(url), 'URL');
 
   try {
-    await openConnectionPage(platform);
+    await openConnectionPage(platform, connParams);
   } catch {
     p.log.warn('Could not open browser automatically.');
     p.note(`Open this URL manually:\n${url}`);
@@ -209,7 +217,10 @@ export async function connectionListCommand(options?: { search?: string; limit?:
       platform: conn.platform,
       state: conn.state,
       key: conn.key,
+      tags: conn.tags?.length ? conn.tags.join(', ') : '',
     }));
+
+    const hasTags = rows.some(r => r.tags);
 
     printTable(
       [
@@ -217,6 +228,7 @@ export async function connectionListCommand(options?: { search?: string; limit?:
         { key: 'platform', label: 'Platform' },
         { key: 'state', label: 'Status' },
         { key: 'key', label: 'Connection Key', color: pc.dim },
+        ...(hasTags ? [{ key: 'tags', label: 'Tags', color: pc.dim }] : []),
       ],
       rows
     );

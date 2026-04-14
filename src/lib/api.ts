@@ -10,6 +10,7 @@ import type {
   ExecutePassthroughResponse,
   SanitizedRequestConfig,
   ApiResponseWithMeta,
+  WhoAmIResponse,
 } from './types.js';
 
 export class ApiError extends Error {
@@ -83,10 +84,13 @@ export class OneApi {
     return JSON.parse(text) as T;
   }
 
-  async validateApiKey(): Promise<boolean> {
+  async whoami(): Promise<WhoAmIResponse> {
+    return this.request<WhoAmIResponse>('/users/whoami');
+  }
+
+  async validateApiKey(): Promise<WhoAmIResponse | false> {
     try {
-      await this.listConnections();
-      return true;
+      return await this.whoami();
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
         return false;

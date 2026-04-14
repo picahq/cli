@@ -115,14 +115,20 @@ export async function relayListCommand(options: {
     }
 
     printTable(
-      ['Status', 'Description', 'Events', 'Actions', 'ID'],
-      endpoints.map((e: any) => [
-        e.active ? pc.green('●') : pc.dim('○'),
-        e.description || pc.dim('(none)'),
-        e.eventFilters?.join(', ') || pc.dim('all'),
-        String(e.actions?.length || 0),
-        pc.dim(e.id.slice(0, 8)),
-      ])
+      [
+        { key: 'status', label: '' },
+        { key: 'description', label: 'Description' },
+        { key: 'events', label: 'Events' },
+        { key: 'actions', label: 'Actions' },
+        { key: 'id', label: 'ID', color: pc.dim },
+      ],
+      endpoints.map((e: any) => ({
+        status: e.active ? pc.green('●') : pc.dim('○'),
+        description: e.description || pc.dim('(none)'),
+        events: e.eventFilters?.join(', ') || pc.dim('all'),
+        actions: String(e.actions?.length || 0),
+        id: e.id.slice(0, 8),
+      }))
     );
   } catch (error) {
     spinner.stop('Failed to list relay endpoints');
@@ -308,13 +314,18 @@ export async function relayEventsCommand(options: {
     }
 
     printTable(
-      ['Platform', 'Event Type', 'Timestamp', 'ID'],
-      events.map((e: any) => [
-        e.platform,
-        e.eventType || pc.dim('unknown'),
-        e.timestamp || e.createdAt,
-        pc.dim(e.id.slice(0, 8)),
-      ])
+      [
+        { key: 'platform', label: 'Platform' },
+        { key: 'eventType', label: 'Event Type' },
+        { key: 'timestamp', label: 'Timestamp' },
+        { key: 'id', label: 'ID', color: pc.dim },
+      ],
+      events.map((e: any) => ({
+        platform: e.platform,
+        eventType: e.eventType || pc.dim('unknown'),
+        timestamp: e.timestamp || e.createdAt,
+        id: e.id.slice(0, 8),
+      }))
     );
   } catch (error) {
     spinner.stop('Failed to list relay events');
@@ -384,14 +395,20 @@ export async function relayDeliveriesCommand(options: {
     }
 
     printTable(
-      ['Status', 'Code', 'Attempt', 'Delivered At', 'Error'],
-      items.map((d: any) => [
-        d.status === 'success' ? pc.green(d.status) : pc.red(d.status),
-        d.statusCode != null ? String(d.statusCode) : pc.dim('-'),
-        String(d.attempt),
-        d.deliveredAt || pc.dim('-'),
-        d.error ? pc.red(d.error.slice(0, 50)) : pc.dim('-'),
-      ])
+      [
+        { key: 'status', label: 'Status' },
+        { key: 'code', label: 'Code' },
+        { key: 'attempt', label: 'Attempt' },
+        { key: 'deliveredAt', label: 'Delivered At' },
+        { key: 'error', label: 'Error' },
+      ],
+      items.map((d: any) => ({
+        status: d.status === 'success' ? pc.green(d.status) : pc.red(d.status),
+        code: d.statusCode != null ? String(d.statusCode) : pc.dim('-'),
+        attempt: String(d.attempt),
+        deliveredAt: d.deliveredAt || pc.dim('-'),
+        error: d.error ? pc.red(d.error.slice(0, 50)) : pc.dim('-'),
+      }))
     );
   } catch (error) {
     spinner.stop('Failed to load deliveries');

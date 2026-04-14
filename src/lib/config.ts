@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import type { Config, AccessControlSettings, PermissionLevel } from './types.js';
+import type { Config, AccessControlSettings, PermissionLevel, WhoAmIResponse } from './types.js';
+import type { OneApi } from './api.js';
 
 const CONFIG_DIR = path.join(os.homedir(), '.one');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
@@ -252,6 +253,9 @@ export function updateApiBase(url: string | null): void {
     delete config.apiBase;
   }
 
+  // Clear cached whoami — base URL changed, so it needs to be re-fetched
+  delete config.whoami;
+
   writeConfig(config);
 }
 
@@ -291,4 +295,34 @@ export function updateAccessControl(settings: AccessControlSettings): void {
   }
 
   writeConfig(config);
+}
+
+// ── WhoAmI helpers ──────────────────────────────────────────────────
+
+export function getWhoAmI(): WhoAmIResponse | null {
+  return readConfig()?.whoami ?? null;
+}
+
+export function updateWhoAmI(whoami: WhoAmIResponse): void {
+  const config = readConfig();
+  if (!config) return;
+  config.whoami = whoami;
+  writeConfig(config);
+}
+
+export async function ensureWhoAmI(api: OneApi): Promise<WhoAmIResponse | null> {
+  const cached = getWhoAmI();
+  if (cached) return cached;
+
+  try {
+    const whoami = await api.whoami();
+    updateWhoAmI(whoami);
+    return whoami;
+  } catch {
+    return null;
+  }
+}
+
+export function getEnvFromApiKey(apiKey: string): 'live' | 'test' {
+  return apiKey.startsWith('sk_test_') ? 'test' : 'live';
 }

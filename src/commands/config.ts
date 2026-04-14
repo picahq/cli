@@ -262,6 +262,7 @@ export async function configCommand(): Promise<void> {
   const updatedConfig = readConfig();
   if (updatedConfig && newApiKey !== config.apiKey) {
     updatedConfig.apiKey = newApiKey;
+    delete updatedConfig.whoami;
     writeConfig(updatedConfig);
   }
 
