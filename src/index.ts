@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { createRequire } from 'module';
+import path from 'node:path';
 import { Command } from 'commander';
 import { initCommand } from './commands/init.js';
 import { configCommand } from './commands/config.js';
@@ -259,6 +260,96 @@ configSkills
     console.log(`  installed: ${marker}`);
     console.log(`  current:   ${status.currentVersion}`);
     console.log(`  path:      ${status.canonicalPath}`);
+  });
+
+config
+  .command('reset')
+  .description('Remove the project config for the current directory (falls back to global)')
+  .option('--global', 'Remove the global config instead')
+  .action(async (opts: { global?: boolean }) => {
+    const resolved = resolveConfig();
+
+    if (opts.global) {
+      const globalPath = getGlobalConfigPath();
+      if (!globalConfigExists()) {
+        if (isAgentMode()) {
+          outputJson({ deleted: false, reason: 'No global config found' });
+        } else {
+          console.log('No global config found.');
+        }
+        return;
+      }
+      if (!isAgentMode()) {
+        const p = await import('@clack/prompts');
+        const confirmed = await p.confirm({
+          message: 'Delete the global config? This removes your API key for all projects without a project config.',
+          initialValue: false,
+        });
+        if (p.isCancel(confirmed) || !confirmed) {
+          console.log('Cancelled.');
+          return;
+        }
+      }
+      const fs = await import('node:fs');
+      fs.unlinkSync(globalPath);
+      if (isAgentMode()) {
+        outputJson({ deleted: true, scope: 'global' });
+      } else {
+        console.log('Global config removed.');
+      }
+      return;
+    }
+
+    // Project reset
+    if (resolved.scope !== 'project') {
+      if (isAgentMode()) {
+        outputJson({ deleted: false, reason: 'No project config found for this directory' });
+      } else {
+        console.log('No project config found for this directory.');
+        console.log(`Currently using: ${resolved.scope ?? 'none'}`);
+      }
+      return;
+    }
+
+    // Determine what config will be used after deletion
+    const fs = await import('node:fs');
+    // Temporarily remove the file to check what resolves next
+    const configContent = fs.readFileSync(resolved.path, 'utf-8');
+    fs.unlinkSync(resolved.path);
+    const next = resolveConfig();
+    // Restore it before confirming
+    fs.mkdirSync(path.dirname(resolved.path), { recursive: true });
+    fs.writeFileSync(resolved.path, configContent);
+
+    let fallbackLabel: string;
+    if (next.scope === 'project') {
+      fallbackLabel = `parent project config (${path.basename(next.projectRoot)})`;
+    } else if (next.scope === 'global') {
+      fallbackLabel = 'global config';
+    } else {
+      fallbackLabel = 'no config';
+    }
+
+    if (!isAgentMode()) {
+      const p = await import('@clack/prompts');
+      const confirmed = await p.confirm({
+        message: `Delete project config for ${path.basename(resolved.projectRoot)}? Will fall back to ${fallbackLabel}.`,
+        initialValue: false,
+      });
+      if (p.isCancel(confirmed) || !confirmed) {
+        console.log('Cancelled.');
+        return;
+      }
+    }
+
+    fs.unlinkSync(resolved.path);
+    try { fs.rmdirSync(path.dirname(resolved.path)); } catch { /* not empty, fine */ }
+
+    if (isAgentMode()) {
+      outputJson({ deleted: true, scope: 'project', projectRoot: resolved.projectRoot, fallback: next.scope });
+    } else {
+      console.log(`Project config removed. Now using ${fallbackLabel}.`);
+    }
   });
 
 const connection = program

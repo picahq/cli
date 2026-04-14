@@ -72,10 +72,26 @@ export function resolveConfig(): ResolvedConfig {
   const projectSlug = getProjectSlug(projectRoot);
   const projectPath = getProjectConfigPath(projectRoot);
 
+  // Check detected project root first
   if (fs.existsSync(projectPath)) {
     const config = readConfigFile(projectPath);
     if (config) {
       return { config, scope: 'project', path: projectPath, projectRoot, projectSlug };
+    }
+  }
+
+  // Walk up from cwd checking each ancestor for a project config
+  const root = path.parse(process.cwd()).root;
+  let dir = path.resolve(process.cwd());
+  while (dir !== root) {
+    dir = path.dirname(dir);
+    const slug = getProjectSlug(dir);
+    const configPath = path.join(PROJECTS_DIR, slug, 'config.json');
+    if (fs.existsSync(configPath)) {
+      const config = readConfigFile(configPath);
+      if (config) {
+        return { config, scope: 'project', path: configPath, projectRoot: dir, projectSlug: slug };
+      }
     }
   }
 
