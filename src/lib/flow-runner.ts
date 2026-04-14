@@ -281,22 +281,58 @@ export class FlowRunner {
 /**
  * Resolve a flow key or path to its file location.
  *
- * Resolution order for bare keys:
- *   1. `.one/flows/<key>/flow.json` (folder layout — preferred for new flows)
+ * Resolution order for bare keys (e.g. "my-flow"):
+ *   1. `.one/flows/<key>/flow.json` (folder layout — preferred)
  *   2. `.one/flows/<key>.flow.json` (legacy single-file layout)
  *
- * Returns the first existing path. If neither exists, returns the folder-layout
+ * Namespaced keys (e.g. "research/company-research"):
+ *   1. `.one/flows/<group>/<key>/flow.json`
+ *
+ * Bare keys also check subdirectories — if `my-flow` doesn't exist at the
+ * top level, the CLI scans group folders for a matching `<group>/my-flow/flow.json`.
+ *
+ * Returns the first existing path. If none exists, returns the folder-layout
  * path so error messages point at the modern convention.
  */
 export function resolveFlowPath(keyOrPath: string): string {
-  // Explicit path or .json filename → use as-is
-  if (keyOrPath.includes('/') || keyOrPath.includes('\\') || keyOrPath.endsWith('.json')) {
+  // Explicit .json filename → use as-is
+  if (keyOrPath.endsWith('.json')) {
     return path.resolve(keyOrPath);
   }
+
+  // Backslash paths are always literal filesystem paths
+  if (keyOrPath.includes('\\')) {
+    return path.resolve(keyOrPath);
+  }
+
+  // Namespaced key: "group/key" — check the nested folder layout
+  if (keyOrPath.includes('/')) {
+    const nestedFolder = path.resolve(FLOWS_DIR, keyOrPath, 'flow.json');
+    if (fs.existsSync(nestedFolder)) return nestedFolder;
+    // Could be a literal filesystem path — try resolving it
+    const literal = path.resolve(keyOrPath);
+    if (fs.existsSync(literal)) return literal;
+    // Fall through to return the nested folder path for error messages
+    return nestedFolder;
+  }
+
+  // Bare key: check top-level folder layout first, then legacy, then scan subdirectories
   const folderPath = path.resolve(FLOWS_DIR, keyOrPath, 'flow.json');
-  const legacyPath = path.resolve(FLOWS_DIR, `${keyOrPath}.flow.json`);
   if (fs.existsSync(folderPath)) return folderPath;
+
+  const legacyPath = path.resolve(FLOWS_DIR, `${keyOrPath}.flow.json`);
   if (fs.existsSync(legacyPath)) return legacyPath;
+
+  // Scan group subdirectories for a matching flow
+  const flowsDir = path.resolve(FLOWS_DIR);
+  if (fs.existsSync(flowsDir)) {
+    for (const entry of fs.readdirSync(flowsDir, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+      const nested = path.join(flowsDir, entry.name, keyOrPath, 'flow.json');
+      if (fs.existsSync(nested)) return nested;
+    }
+  }
+
   return folderPath;
 }
 
@@ -402,6 +438,8 @@ type FlowListEntry = {
   stepCount: number;
   path: string;
   layout: 'folder' | 'legacy';
+  /** Subdirectory group (e.g. "research") if the flow lives under `.one/flows/<group>/<key>/`. */
+  group?: string;
   stepTypes: FlowStepType[];
   requiresBash: boolean;
   usesCodeModules: boolean;
@@ -415,12 +453,14 @@ export function listFlows(): FlowListEntry[] {
   const flows: FlowListEntry[] = [];
   const seenKeys = new Set<string>();
 
-  const readFlowFile = (filePath: string): void => {
+  const readFlowFile = (filePath: string, group?: string): void => {
     try {
       const content = fs.readFileSync(filePath, 'utf-8');
       const flow = JSON.parse(content) as Flow;
-      if (seenKeys.has(flow.key)) return;
-      seenKeys.add(flow.key);
+      // Deduplicate by namespaced key (group/key or just key)
+      const nsKey = group ? `${group}/${flow.key}` : flow.key;
+      if (seenKeys.has(nsKey)) return;
+      seenKeys.add(nsKey);
       flows.push({
         key: flow.key,
         name: flow.name,
@@ -429,6 +469,7 @@ export function listFlows(): FlowListEntry[] {
         stepCount: flow.steps.length,
         path: filePath,
         layout: path.basename(filePath) === 'flow.json' ? 'folder' : 'legacy',
+        group,
         stepTypes: collectStepTypes(flow),
         requiresBash: flowRequiresBash(flow),
         usesCodeModules: flowUsesCodeModules(flow),
@@ -439,17 +480,29 @@ export function listFlows(): FlowListEntry[] {
     }
   };
 
-  for (const entry of fs.readdirSync(flowsDir, { withFileTypes: true })) {
-    if (entry.name.startsWith('.')) continue; // skip .runs, .logs, etc.
-    const full = path.join(flowsDir, entry.name);
-    if (entry.isDirectory()) {
-      const flowJson = path.join(full, 'flow.json');
-      if (fs.existsSync(flowJson)) readFlowFile(flowJson);
-    } else if (entry.isFile() && entry.name.endsWith('.flow.json')) {
-      readFlowFile(full);
+  /** Scan a directory for flows. `group` is the subdirectory prefix (e.g. "research"). */
+  const scanDir = (dir: string, group?: string): void => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name.startsWith('.')) continue; // skip .runs, .logs, etc.
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        const flowJson = path.join(full, 'flow.json');
+        if (fs.existsSync(flowJson)) {
+          // This is a flow folder (<key>/flow.json)
+          readFlowFile(flowJson, group);
+        } else {
+          // No flow.json here — treat as a group subdirectory and recurse one level
+          if (!group) {
+            scanDir(full, entry.name);
+          }
+        }
+      } else if (entry.isFile() && entry.name.endsWith('.flow.json')) {
+        readFlowFile(full, group);
+      }
     }
-  }
+  };
 
+  scanDir(flowsDir);
   return flows;
 }
 
@@ -457,16 +510,34 @@ export function listFlows(): FlowListEntry[] {
  * Save a flow. New flows default to the folder layout
  * (`.one/flows/<key>/flow.json`), creating `<key>/lib/` alongside. An explicit
  * `outputPath` is respected as-is for backward compatibility.
+ *
+ * The key can include a group prefix (e.g. "research/company-research") which
+ * places the flow at `.one/flows/research/company-research/flow.json`. The
+ * flow's `key` field is always the bare key (without group prefix).
  */
-export function saveFlow(flow: Flow, outputPath?: string): string {
+export function saveFlow(flow: Flow, outputPath?: string, group?: string): string {
   let flowPath: string;
   if (outputPath) {
     flowPath = path.resolve(outputPath);
   } else {
-    const legacyPath = path.resolve(FLOWS_DIR, `${flow.key}.flow.json`);
-    const folderPath = path.resolve(FLOWS_DIR, flow.key, 'flow.json');
-    // Preserve layout if a flow with this key already exists
-    if (fs.existsSync(legacyPath) && !fs.existsSync(folderPath)) {
+    // Determine group from the flow key if it contains a slash
+    let bareKey = flow.key;
+    let resolvedGroup = group;
+    if (flow.key.includes('/')) {
+      const parts = flow.key.split('/');
+      bareKey = parts.pop()!;
+      resolvedGroup = resolvedGroup || parts.join('/');
+      flow.key = bareKey; // Store only the bare key in the flow JSON
+    }
+
+    const basePath = resolvedGroup
+      ? path.resolve(FLOWS_DIR, resolvedGroup, bareKey)
+      : path.resolve(FLOWS_DIR, bareKey);
+
+    const legacyPath = path.resolve(FLOWS_DIR, `${bareKey}.flow.json`);
+    const folderPath = path.join(basePath, 'flow.json');
+    // Preserve layout if a flow with this key already exists at top level
+    if (!resolvedGroup && fs.existsSync(legacyPath) && !fs.existsSync(folderPath)) {
       flowPath = legacyPath;
     } else {
       flowPath = folderPath;

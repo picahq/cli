@@ -80,8 +80,8 @@ program
 
   Workflows (multi-step):
     one flow list                         List saved workflows
-    one flow create [key]                 Create a workflow from JSON
-    one flow execute <key>                Execute a workflow
+    one flow create [key]                 Create a workflow from JSON (key can be group/key)
+    one flow execute <key>                Execute a workflow (key can be group/key)
     one flow validate <key>               Validate a flow
 
   Data Sync (run "one sync install" first, then "one guide sync" for full reference):

@@ -121,9 +121,16 @@ export async function flowCreateCommand(
     output.error('Interactive workflow creation not yet supported. Use --definition <json> or pipe JSON via stdin.');
   }
 
-  // Override key if provided as arg
+  // Override key if provided as arg — extract group prefix if present (e.g. "research/company-research")
+  let group: string | undefined;
   if (key) {
-    flow!.key = key;
+    if (key.includes('/')) {
+      const parts = key.split('/');
+      flow!.key = parts.pop()!;
+      group = parts.join('/');
+    } else {
+      flow!.key = key;
+    }
   }
 
   // Validate
@@ -136,7 +143,7 @@ export async function flowCreateCommand(
     output.error(`Validation failed:\n${errors.map(e => `  ${e.path}: ${e.message}`).join('\n')}`);
   }
 
-  const flowPath = saveFlow(flow!, options.output);
+  const flowPath = saveFlow(flow!, options.output, group);
 
   if (output.isAgentMode()) {
     output.json({ created: true, key: flow!.key, path: flowPath });
@@ -336,7 +343,7 @@ export async function flowListCommand(): Promise<void> {
       { key: 'flags', label: 'Requires' },
     ],
     flows.map(f => ({
-      key: f.key,
+      key: f.group ? `${f.group}/${f.key}` : f.key,
       name: f.name,
       layout: f.layout,
       inputCount: String(f.inputCount),

@@ -328,7 +328,18 @@ Workflows live in \`.one/flows/\` (relative to your current working directory �
 - **Folder layout (REQUIRED for new flows)** — \`.one/flows/<key>/flow.json\`, with an optional \`lib/\` subfolder for JavaScript modules. This is like a skill: the folder groups the JSON spec with any JavaScript modules it needs, so the whole flow is shareable. **Always create new flows in this layout.**
 - **Single-file layout (DEPRECATED)** — \`.one/flows/<key>.flow.json\`. Still loads and runs for backward compatibility, but is deprecated. Do not create new flows in this layout. When editing an existing single-file flow, migrate it to the folder layout: move \`<key>.flow.json\` to \`<key>/flow.json\` and extract any non-trivial \`code.source\` blocks into \`<key>/lib/*.mjs\` modules.
 
-When resolving a flow by key, the CLI checks the folder layout first, then the deprecated legacy file. The \`loadFlow\` helper in agent integrations behaves the same.
+**Subdirectory groups** — Flows can be organized into subdirectories: \`.one/flows/<group>/<key>/flow.json\`. For example:
+\`\`\`
+.one/flows/
+  research/
+    company-research/flow.json
+    competitor-research/flow.json
+  deal-ops/
+    deal-log/flow.json
+\`\`\`
+Reference grouped flows with \`group/key\` (e.g. \`one flow execute research/company-research\`) or just the bare key if it's unique (e.g. \`one flow execute company-research\`). Create grouped flows with \`one flow create research/company-research --definition ...\`. \`flow list\` shows the group prefix.
+
+When resolving a flow by key, the CLI checks the folder layout first, then the deprecated legacy file, then scans group subdirectories. The \`loadFlow\` helper in agent integrations behaves the same.
 
 ## Before you execute a flow you did NOT author — READ THIS
 
@@ -353,19 +364,21 @@ A good description is one paragraph. If a flow's description doesn't tell you ho
 ## Commands
 
 \`\`\`bash
-one --agent flow create <key> --definition '<json>'   # Create (or --definition @file.json)
-one --agent flow create <key> --definition @flow.json  # Create from file
-one --agent flow list                                  # List
-one --agent flow validate <key>                        # Validate
-one --agent flow execute <key> -i name=value           # Execute
-one --agent flow execute <key> --dry-run --mock        # Test with mock data
-one --agent flow execute <key> --allow-bash            # Enable bash steps
-one --agent flow runs [flowKey]                        # List past runs
-one --agent flow resume <runId>                        # Resume failed run
-one --agent flow scaffold [template]                   # Generate a starter template
+one --agent flow create <key> --definition '<json>'              # Create (or --definition @file.json)
+one --agent flow create <key> --definition @flow.json            # Create from file
+one --agent flow create <group/key> --definition '<json>'        # Create in a subdirectory group
+one --agent flow list                                            # List (shows group prefixes)
+one --agent flow validate <key>                                  # Validate
+one --agent flow execute <key> -i name=value                     # Execute (bare key)
+one --agent flow execute <group/key> -i name=value               # Execute (namespaced key)
+one --agent flow execute <key> --dry-run --mock                  # Test with mock data
+one --agent flow execute <key> --allow-bash                      # Enable bash steps
+one --agent flow runs [flowKey]                                  # List past runs
+one --agent flow resume <runId>                                  # Resume failed run
+one --agent flow scaffold [template]                             # Generate a starter template
 \`\`\`
 
-You can also write the JSON file directly to \`.one/flows/<key>/flow.json\` — often easier than passing large JSON via --definition. (The legacy \`.one/flows/<key>.flow.json\` single-file location is deprecated; don't use it for new flows.)
+You can also write the JSON file directly to \`.one/flows/<key>/flow.json\` (or \`.one/flows/<group>/<key>/flow.json\` for grouped flows) — often easier than passing large JSON via --definition. (The legacy \`.one/flows/<key>.flow.json\` single-file location is deprecated; don't use it for new flows.)
 
 ## Code modules (flow \`lib/\` folder)
 

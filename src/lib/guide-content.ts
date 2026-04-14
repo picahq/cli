@@ -62,7 +62,7 @@ one --agent flow list                                 # List all workflows
 \`\`\`
 
 **Key concepts:**
-- Workflows live at \`.one/flows/<key>/flow.json\` (folder layout — REQUIRED for new flows). The legacy \`.one/flows/<key>.flow.json\` single-file layout is DEPRECATED but still loads for backward compatibility
+- Workflows live at \`.one/flows/<key>/flow.json\` (folder layout — REQUIRED for new flows). Flows can be organized into subdirectory groups: \`.one/flows/<group>/<key>/flow.json\`. Reference them as \`group/key\` or just the bare key. The legacy \`.one/flows/<key>.flow.json\` single-file layout is DEPRECATED but still loads for backward compatibility
 - Code steps can reference an external \`.mjs\` module under the flow's \`lib/\` folder (stdin JSON in, stdout JSON out) — keeps JS out of JSON strings and makes flows shareable
 - 12 step types: action, transform, code, condition, loop, parallel, file-read, file-write, while, flow, paginate, bash
 - Data wiring via selectors: \`$.input.param\`, \`$.steps.stepId.response\`, \`$.loop.item\`

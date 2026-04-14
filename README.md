@@ -98,7 +98,7 @@ one flow validate welcome-customer
 one flow execute welcome-customer -i email=jane@example.com
 ```
 
-Workflows live under `.one/flows/<key>/flow.json` with an optional `lib/` subfolder for `.mjs` code modules — create new flows in this folder layout. (The legacy single-file layout `.one/flows/<key>.flow.json` is deprecated but still loads for backward compatibility.) Flows support conditions, loops, while loops, parallel steps, transforms, sub-flows, pagination, bash steps, and external `.mjs` code modules. Run `one guide flows` for the full reference.
+Workflows live under `.one/flows/<key>/flow.json` with an optional `lib/` subfolder for `.mjs` code modules — create new flows in this folder layout. Flows can be organized into subdirectory groups: `.one/flows/<group>/<key>/flow.json`. Reference them as `group/key` or just the bare key if unique. (The legacy single-file layout `.one/flows/<key>.flow.json` is deprecated but still loads for backward compatibility.) Flows support conditions, loops, while loops, parallel steps, transforms, sub-flows, pagination, bash steps, and external `.mjs` code modules. Run `one guide flows` for the full reference.
 
 ## How it works
 
@@ -357,11 +357,14 @@ In agent mode (`--agent`), the JSON response includes the guide content and an `
 
 ### `one flow create [key]`
 
-Create a workflow from a JSON definition. New workflows are always saved to the folder layout at `.one/flows/<key>/flow.json` (with a `lib/` subfolder scaffolded for code modules). The legacy `.one/flows/<key>.flow.json` single-file layout is deprecated; existing legacy files continue to load and run unchanged for backward compatibility.
+Create a workflow from a JSON definition. New workflows are always saved to the folder layout at `.one/flows/<key>/flow.json` (with a `lib/` subfolder scaffolded for code modules). Use `group/key` to place flows in a subdirectory group (e.g. `.one/flows/research/company-research/flow.json`). The legacy `.one/flows/<key>.flow.json` single-file layout is deprecated; existing legacy files continue to load and run unchanged for backward compatibility.
 
 ```bash
 # From a --definition flag
 one flow create welcome-customer --definition '{"key":"welcome-customer","name":"Welcome","version":"1","inputs":{},"steps":[]}'
+
+# Create in a subdirectory group
+one flow create research/company-research --definition @flow.json
 
 # From stdin
 cat flow.json | one flow create
