@@ -48,6 +48,8 @@ import { registerSyncCommands } from './lib/sync/index.js';
 import { cacheClearCommand, cacheListCommand, cacheUpdateAllCommand } from './commands/cache.js';
 import { guideCommand } from './commands/guide.js';
 import { onboardCommand } from './commands/onboard.js';
+import { loginCommand } from './commands/login.js';
+import { logoutCommand } from './commands/logout.js';
 import { updateCommand, checkLatestVersionCached, getCurrentVersion, isNewerVersion, autoUpdate } from './commands/update.js';
 import { setAgentMode, isAgentMode, json as outputJson, error as outputError } from './lib/output.js';
 import { syncSkillsIfStale, forceSyncSkills, getSkillStatus } from './lib/skill-sync.js';
@@ -63,6 +65,8 @@ program
   .description(`One CLI — Connect AI agents to 250+ platforms through one interface.
 
   Setup:
+    one login                             Authenticate via browser (opens app.withone.ai)
+    one logout                            Clear local credentials
     one init                              Set up API key and install MCP server
     one add <platform>                    Connect a platform via OAuth (e.g. gmail, slack, shopify)
     one connection delete <key>           Remove a connection (alias: one connection rm)
@@ -162,6 +166,20 @@ program
   .option('-p, --project', 'Write the One config for this project only (~/.one/projects/<slug>/) — skips the scope picker')
   .action(async (options) => {
     await initCommand(options);
+  });
+
+program
+  .command('login')
+  .description('Authenticate with One via browser')
+  .action(async () => {
+    await loginCommand();
+  });
+
+program
+  .command('logout')
+  .description('Clear local credentials')
+  .action(async () => {
+    await logoutCommand();
   });
 
 const config = program

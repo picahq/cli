@@ -24,6 +24,15 @@ You have access to the One CLI which lets you interact with 250+ third-party pla
 
 If the user wants a separate API key / connections for a specific project (vs. their default), walk them through running `one init` from that project folder and picking the "project" scope — see `references/scoping.md`.
 
+## Authentication
+
+```bash
+one login                    # Browser-based login (opens app.withone.ai)
+one logout                   # Clear local credentials
+```
+
+`one login` opens the browser for OAuth authentication and automatically creates and stores an API key. If already logged in, the user can choose to log in globally or for the current directory. `one logout` shows current session info and confirms before clearing credentials. For CI/CD or headless environments, use `one init` to paste a key manually.
+
 ## Core Workflow: search -> knowledge -> execute
 
 Always follow this sequence when the user wants to do something on a connected platform:

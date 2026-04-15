@@ -30,3 +30,12 @@ export async function openConnectionPage(platform: string, params?: ConnectionUr
 export async function openApiKeyPage(): Promise<void> {
   await open(getApiKeyUrl());
 }
+
+export function getCliAuthUrl(port: number, state: string): string {
+  return `${ONE_APP_URL}/cli/auth?port=${port}&state=${encodeURIComponent(state)}`;
+}
+
+export async function openCliAuthPage(port: number, state: string): Promise<void> {
+  const url = getCliAuthUrl(port, state);
+  await open(url);
+}
