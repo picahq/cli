@@ -30,6 +30,7 @@ export async function relayCreateCommand(options: {
   description?: string;
   eventFilters?: string;
   tags?: string;
+  metadata?: string;
   createWebhook?: boolean;
 }): Promise<void> {
   const { apiKey, connectionKeys } = getConfig();
@@ -49,6 +50,7 @@ export async function relayCreateCommand(options: {
     if (options.description) body.description = options.description;
     if (options.eventFilters) body.eventFilters = parseJsonArg(options.eventFilters, '--event-filters');
     if (options.tags) body.tags = parseJsonArg(options.tags, '--tags');
+    if (options.metadata) body.metadata = parseJsonArg(options.metadata, '--metadata');
     if (options.createWebhook) body.createWebhook = true;
 
     const result = await api.createRelayEndpoint(body as any);
@@ -66,6 +68,10 @@ export async function relayCreateCommand(options: {
     if (result.description) console.log(`  ${pc.dim('Description:')} ${result.description}`);
     if (result.eventFilters?.length) console.log(`  ${pc.dim('Events:')}      ${result.eventFilters.join(', ')}`);
     if (result.webhookPayload?.id) console.log(`  ${pc.dim('Webhook ID:')}  ${result.webhookPayload.id}`);
+    if (result.warning) {
+      console.log();
+      console.log(`  ${pc.yellow('⚠ Warning:')} ${result.warning}`);
+    }
     console.log();
   } catch (error) {
     spinner.stop('Failed to create relay endpoint');

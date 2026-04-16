@@ -246,8 +246,32 @@ one --agent relay deliveries --endpoint-id <id>    # Check delivery status
 2. **Get event types** — \`one --agent relay event-types <platform>\`
 3. **Get source knowledge** — understand the incoming webhook payload shape (\`{{payload.*}}\` paths)
 4. **Get destination knowledge** — understand the outgoing API body shape
-5. **Create endpoint** — with \`--create-webhook\` and \`--event-filters\`
-6. **Activate** — with passthrough action mapping source fields to destination fields
+5. **Create endpoint** — with \`--create-webhook\`, \`--event-filters\`, and \`--metadata\` if the source platform requires it
+6. **Activate** — with passthrough action mapping source fields to destination fields. **Do NOT pass \`--webhook-secret\`** when the endpoint was created with \`--create-webhook\` — the correct secret is auto-stored, and supplying a wrong one silently drops every delivery (events arrive, 0 deliveries).
+
+## Platform-Specific Metadata (\`--metadata\`)
+
+Some source platforms need extra identifiers to register a webhook. Pass these via \`--metadata '<json>'\` on \`relay create\`. Without them, \`--create-webhook\` silently fails:
+
+| Platform | Required metadata keys |
+|---|---|
+| \`github\` | \`GITHUB_OWNER\`, \`GITHUB_REPOSITORY\` |
+| \`typeform\` | \`TYPEFORM_FORM_ID\` |
+| \`stripe\` | (none) |
+| \`airtable\` | (none) |
+| \`attio\` | (none) |
+| \`google-calendar\` | (none) |
+
+Example (GitHub):
+
+\`\`\`bash
+one --agent relay create \\
+  --connection-key "live::github::default::<key>" \\
+  --event-filters '["issues","pull_request"]' \\
+  --metadata '{"GITHUB_OWNER":"my-org","GITHUB_REPOSITORY":"my-repo"}' \\
+  --description "GitHub relay" \\
+  --create-webhook
+\`\`\`
 
 ## Template Context
 
@@ -298,6 +322,8 @@ Any connected platform can be a destination via passthrough actions.
 2. \`relay events --platform <p>\` — check events are arriving
 3. \`relay deliveries --event-id <id>\` — check delivery status and errors
 4. \`relay event <id>\` — inspect full payload to verify template paths
+
+**If events arrive but 0 deliveries succeed**: you likely passed a wrong \`--webhook-secret\` on \`relay activate\`. When you created the endpoint with \`--create-webhook\`, the secret was registered with the source platform and stored automatically — do not pass it again on activate. Signature verification will fail silently and every event will be dropped.
 `;
 
 export const GUIDE_CACHE = `# One Cache — Reference

@@ -554,8 +554,9 @@ relay
   .option('--description <desc>', 'Description of the relay endpoint')
   .option('--event-filters <json>', 'JSON array of event types to filter (e.g. \'["customer.created"]\')')
   .option('--tags <json>', 'JSON array of tags')
+  .option('--metadata <json>', 'JSON object of platform-specific metadata required to register the webhook (e.g. GitHub: \'{"GITHUB_OWNER":"org","GITHUB_REPOSITORY":"repo"}\', Typeform: \'{"TYPEFORM_FORM_ID":"abc"}\')')
   .option('--create-webhook', 'Automatically register the webhook with the source platform')
-  .action(async (options: { connectionKey: string; description?: string; eventFilters?: string; tags?: string; createWebhook?: boolean }) => {
+  .action(async (options: { connectionKey: string; description?: string; eventFilters?: string; tags?: string; metadata?: string; createWebhook?: boolean }) => {
     await relayCreateCommand(options);
   });
 

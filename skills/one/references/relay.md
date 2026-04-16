@@ -52,6 +52,25 @@ one --agent relay create \
 
 Always use `--create-webhook` — it registers the webhook URL with the source platform automatically.
 
+**Some source platforms require extra identifiers via `--metadata`:**
+
+| Platform | Required metadata keys |
+|---|---|
+| `github` | `GITHUB_OWNER`, `GITHUB_REPOSITORY` |
+| `typeform` | `TYPEFORM_FORM_ID` |
+| `stripe`, `airtable`, `attio`, `google-calendar` | (none) |
+
+Without metadata, `--create-webhook` silently fails for these platforms. Example for GitHub:
+
+```bash
+one --agent relay create \
+  --connection-key "live::github::default::<key>" \
+  --event-filters '["issues","pull_request"]' \
+  --metadata '{"GITHUB_OWNER":"my-org","GITHUB_REPOSITORY":"my-repo"}' \
+  --description "GitHub relay" \
+  --create-webhook
+```
+
 ### Step 6: Activate with a passthrough action
 
 ```bash
@@ -65,6 +84,8 @@ one --agent relay activate <relay-id> --actions '[{
   "eventFilters": ["event.type"]
 }]'
 ```
+
+**Do NOT pass `--webhook-secret` on activate** when you created the endpoint with `--create-webhook`. The correct secret is registered with the source platform and stored automatically. Supplying a wrong one does not error — events arrive but every delivery is dropped during signature verification (0 deliveries). If you don't have a reason to override the secret, omit the flag.
 
 ## Template Context
 
@@ -177,3 +198,5 @@ one --agent relay deliveries --event-id <id>
 - Event filters on both the endpoint and individual actions must match
 - Multiple actions can be attached to a single relay endpoint
 - Missing template variables resolve to empty strings — verify `{{payload.*}}` paths against the actual payload
+- GitHub and Typeform relays require `--metadata` on create; without it `--create-webhook` silently fails
+- Never pass `--webhook-secret` on activate when the endpoint was created with `--create-webhook` — the auto-stored secret is correct, and a wrong one causes signature verification to drop every event silently
