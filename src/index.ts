@@ -450,6 +450,7 @@ actions
   .option('--dry-run', 'Show request that would be sent without executing')
   .option('--mock', 'Return example response without making an API call')
   .option('--skip-validation', 'Skip input validation against the action schema')
+  .option('--output <path>', 'Save binary response to a file (for non-JSON responses like file downloads)')
   .option('--parallel', 'Execute multiple actions concurrently (separate actions with --)')
   .option('--max-concurrency <n>', 'Max concurrent actions when using --parallel (default: 5)', '5')
   .action(async (platform: string | undefined, actionId: string | undefined, connectionKey: string | undefined, options: any) => {
@@ -470,6 +471,7 @@ actions
       dryRun: options.dryRun,
       mock: options.mock,
       skipValidation: options.skipValidation,
+      output: options.output,
     });
   });
 

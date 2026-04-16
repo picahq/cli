@@ -47,6 +47,7 @@ one --agent actions execute <platform> <actionId> <key> -d '{}'  # Execute it
 - \`--dry-run\` — Preview request without executing
 - \`--mock\` — Return example response without making an API call (useful for building UI against a response shape)
 - \`--skip-validation\` — Skip input validation against the action schema
+- \`--output <path>\` — Save response to a file (for binary downloads like PDFs, images, documents)
 
 The CLI validates required parameters against the action schema before executing. If you're missing a required path variable, query param, or body field, you'll get a clear error listing what's missing and which flag to use. Pass \`--skip-validation\` to bypass.
 
@@ -171,6 +172,7 @@ one --agent actions execute <platform> <actionId> <connectionKey> [options]
 - \`--dry-run\` — Preview without executing
 - \`--mock\` — Return example response without making an API call
 - \`--skip-validation\` — Skip input validation against the action schema
+- \`--output <path>\` — Save response to a file (for binary downloads like PDFs, images, documents)
 
 **Do NOT** pass path or query parameters in \`-d\`. Use the correct flags.
 

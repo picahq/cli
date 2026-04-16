@@ -348,6 +348,7 @@ export async function actionsExecuteCommand(
     dryRun?: boolean;
     mock?: boolean;
     skipValidation?: boolean;
+    output?: string;
   }
 ): Promise<void> {
   output.intro(pc.bgCyan(pc.black(' One ')));
@@ -468,6 +469,7 @@ export async function actionsExecuteCommand(
         isFormData: options.formData,
         isFormUrlEncoded: options.formUrlEncoded,
         dryRun: options.dryRun,
+        output: options.output,
       },
       actionDetails
     );

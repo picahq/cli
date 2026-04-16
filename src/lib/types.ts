@@ -122,6 +122,7 @@ export interface ExecuteActionArgs {
   isFormData?: boolean;
   isFormUrlEncoded?: boolean;
   dryRun?: boolean;
+  output?: string;
 }
 
 export interface SanitizedRequestConfig {
