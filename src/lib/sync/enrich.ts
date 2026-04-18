@@ -4,6 +4,8 @@ import { isAgentMode } from '../output.js';
 import type { EnrichConfig } from './types.js';
 import type { ActionDetails } from '../types.js';
 import type Database from 'better-sqlite3';
+import { transformRecords } from './transform.js';
+import { fireHooks, type ChangeEvent } from './hooks.js';
 
 /**
  * Phase 2 enrichment engine. Runs AFTER the list sync completes.
@@ -145,6 +147,27 @@ export interface EnrichResult {
 }
 
 /**
+ * Profile-level hooks/transforms that must be applied to each enriched row
+ * before it's written back to SQL. Mirrors the Phase 1 pipeline so that
+ * rows produced by enrichment end up with the same columns, identity, and
+ * event stream as rows written during list ingestion.
+ */
+export interface EnrichContext {
+  /** profile.transform — runs on the merged batch after enrich, before upsert. */
+  transform?: string;
+  /** profile.exclude — dot-paths stripped from each merged record. */
+  exclude?: string[];
+  /** profile.identityKey — recomputes `_identity` from the merged record. */
+  identityKey?: string;
+  /** profile.onInsert — not used here: enriched rows always existed, so they're updates. */
+  onInsert?: string;
+  /** profile.onUpdate — fired per row after a successful enrichment UPDATE. */
+  onUpdate?: string;
+  /** profile.onChange — fallback hook fired when onUpdate isn't set. */
+  onChange?: string;
+}
+
+/**
  * Phase 2: Enrich unenriched rows in the local DB.
  *
  * Queries all rows where the timestamp field IS NULL, calls the detail
@@ -158,6 +181,7 @@ export async function enrichPhase(
   idField: string,
   connectionKey: string,
   platform: string,
+  ctx: EnrichContext = {},
 ): Promise<EnrichResult> {
   const startTime = Date.now();
   const tsField = config.timestampField ?? '_enriched_at';
@@ -219,67 +243,111 @@ export async function enrichPhase(
     let batchHitRateLimit = false;
     const now = new Date().toISOString();
 
+    // Step 1: collect successfully-enriched rows as merged records (no writes yet).
+    // Accumulating the whole batch before writing lets us apply profile.transform
+    // across the batch as a single subprocess invocation, matching Phase 1 semantics.
+    type Pending = { merged: Record<string, unknown>; id: unknown };
+    const pending: Pending[] = [];
+
     for (let j = 0; j < results.length; j++) {
       const result = results[j];
       const row = batch[j];
       const id = row[idField];
 
       if (result.status === 'fulfilled' && result.value !== null) {
-        // Merge enriched data into the row
         let enrichedData = result.value;
-
-        // Apply fields filter
         if (config.fields && config.fields.length > 0) {
           enrichedData = pickFields(enrichedData, config.fields);
         }
-
-        // Apply exclude filter
         if (config.exclude && config.exclude.length > 0) {
           stripExcludedFields(enrichedData, config.exclude);
         }
-
-        // Merge
         const merged = config.merge !== false
           ? deepMerge(row, enrichedData)
           : { ...enrichedData, [idField]: id };
-
         merged[tsField] = now;
-
-        // Prepare values for SQL update — stringify objects
-        const setClauses: string[] = [];
-        const values: (string | number | null)[] = [];
-        for (const [key, val] of Object.entries(merged)) {
-          if (key === idField) continue; // don't update the id
-          setClauses.push(`"${key}" = ?`);
-          values.push(prepareValue(val));
-        }
-        values.push(prepareValue(id)); // for WHERE clause
-
-        if (setClauses.length > 0) {
-          // Ensure new columns exist
-          const existingCols = new Set((db.prepare(`PRAGMA table_info("${safeTable}")`).all() as Array<{ name: string }>).map(c => c.name));
-          for (const [key, val] of Object.entries(merged)) {
-            if (!existingCols.has(key)) {
-              const colType = detectColumnType(val);
-              db.exec(`ALTER TABLE "${safeTable}" ADD COLUMN "${key}" ${colType}`);
-              existingCols.add(key);
-            }
-          }
-
-          db.prepare(
-            `UPDATE "${safeTable}" SET ${setClauses.join(', ')} WHERE "${safeIdField}" = ?`
-          ).run(...values);
-        }
-
-        enriched++;
+        pending.push({ merged, id });
       } else if (result.status === 'fulfilled' && result.value === null) {
-        // null means rate-limited after all retries
         rateLimited++;
         skipped++;
         batchHitRateLimit = true;
       } else {
         skipped++;
       }
+    }
+
+    // Step 2: run profile.transform on the merged batch. The transform gets the
+    // post-merge shape (list fields + enriched fields) so it can extract columns
+    // from nested structures that only exist after enrichment (e.g. jq pulling
+    // `subject` out of `messages[0].payload.headers`).
+    let writes: Pending[] = pending;
+    if (ctx.transform && pending.length > 0) {
+      const transformed = await transformRecords(ctx.transform, pending.map(p => p.merged));
+      if (transformed) {
+        // Pair transformed records back to original ids by idField so the UPDATE
+        // hits the right row even if the transform reorders or filters.
+        const byId = new Map<unknown, Record<string, unknown>>();
+        for (const r of transformed) byId.set(r[idField], r);
+        writes = [];
+        for (const p of pending) {
+          const t = byId.get(p.id);
+          if (!t) continue; // transform dropped this record — skip update, row stays unenriched
+          // Re-assert tsField in case the transform omitted it; if we don't,
+          // the row's _enriched_at stays NULL and the next run re-enriches.
+          if (!t[tsField]) t[tsField] = now;
+          writes.push({ merged: t, id: p.id });
+        }
+      }
+    }
+
+    // Step 3: per-row profile-level exclude + identity, schema evolution, UPDATE.
+    const hookEvents: ChangeEvent[] = [];
+    for (const { merged, id } of writes) {
+      if (ctx.exclude && ctx.exclude.length > 0) {
+        stripExcludedFields(merged, ctx.exclude);
+      }
+      if (ctx.identityKey) {
+        const raw = getByDotPath(merged, ctx.identityKey);
+        if (raw !== null && raw !== undefined) {
+          merged._identity = String(raw).toLowerCase().trim();
+        }
+      }
+
+      const setClauses: string[] = [];
+      const values: (string | number | null)[] = [];
+      for (const [key, val] of Object.entries(merged)) {
+        if (key === idField) continue;
+        setClauses.push(`"${key}" = ?`);
+        values.push(prepareValue(val));
+      }
+      values.push(prepareValue(id));
+
+      if (setClauses.length > 0) {
+        const existingCols = new Set((db.prepare(`PRAGMA table_info("${safeTable}")`).all() as Array<{ name: string }>).map(c => c.name));
+        for (const [key, val] of Object.entries(merged)) {
+          if (!existingCols.has(key)) {
+            const colType = detectColumnType(val);
+            db.exec(`ALTER TABLE "${safeTable}" ADD COLUMN "${key}" ${colType}`);
+            existingCols.add(key);
+          }
+        }
+        db.prepare(
+          `UPDATE "${safeTable}" SET ${setClauses.join(', ')} WHERE "${safeIdField}" = ?`
+        ).run(...values);
+      }
+
+      enriched++;
+
+      // Enrichment writes are always "update" events — the row existed in SQL
+      // before this phase ran (Phase 1 inserted it with _enriched_at NULL).
+      if (ctx.onUpdate || ctx.onChange) {
+        hookEvents.push({ type: 'update', platform, model, record: merged, timestamp: now });
+      }
+    }
+
+    if (hookEvents.length > 0) {
+      const hook = ctx.onUpdate || ctx.onChange;
+      if (hook) await fireHooks(hook, hookEvents);
     }
 
     // Shared backoff: if ANY worker in this batch hit a rate limit,

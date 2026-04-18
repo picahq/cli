@@ -547,10 +547,24 @@ export async function syncModel(
       enrichResult = await enrichPhase(
         api, db, profile.enrich, model, profile.idField,
         profile.connectionKey, platform,
+        {
+          transform: profile.transform,
+          exclude: profile.exclude,
+          identityKey: profile.identityKey,
+          onInsert: profile.onInsert,
+          onUpdate: profile.onUpdate,
+          onChange: profile.onChange,
+        },
       );
       enrichedTotal = enrichResult.enriched;
       enrichSkipped = enrichResult.skipped;
       enrichRateLimited = enrichResult.rateLimited;
+
+      // Enrichment writes count as updates for hook metrics (the row already
+      // existed in SQL from Phase 1 — enrichment just fills in detail fields).
+      if (hasHooks && (profile.onUpdate || profile.onChange)) {
+        hooksUpdated += enrichResult.enriched;
+      }
 
       // Rebuild FTS after enrichment added new text content
       if (enrichResult.enriched > 0) {

@@ -551,6 +551,8 @@ The transform can be any command: \`jq\`, \`python3\`, a bash script, or \`one f
 
 **Pipeline order:** fetch → enrich → transform → **exclude** → create table → schema evolution → upsert → hooks
 
+Transform, exclude, identityKey, and hooks all fire in **both** phases. In Phase 1 they run on the raw list page; in Phase 2 they run again on the merged (list + enriched) record so that transforms can extract columns from fields that only appear after enrichment. Phase 2 fires \`onUpdate\`/\`onChange\` for every row it writes — \`onInsert\` is Phase-1-only because the row already exists in SQL by the time enrichment runs.
+
 ## Cross-Platform Identity
 
 Add \`identityKey\` to a sync profile to extract a stable cross-platform identifier (e.g. email) into a normalized \`_identity\` column:

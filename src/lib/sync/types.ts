@@ -60,8 +60,15 @@ export interface SyncProfile {
   exclude?: string[];
   /**
    * Transform records through a shell command or flow before storing.
-   * The command receives the page of records as a JSON array on stdin and
-   * must return a JSON array on stdout. Runs after enrich, before upsert.
+   * The command receives a JSON array on stdin and must return a JSON array
+   * on stdout. Runs in both phases: on each list page during Phase 1, and
+   * on each enrichment batch (after merge, before UPDATE) during Phase 2,
+   * so extracted columns stay consistent regardless of which phase produced
+   * the data.
+   *
+   * Performance note: the transform is spawned once per batch, so a slow
+   * transform combined with a low `enrich.delayMs` and high `enrich.concurrency`
+   * can become throughput-bound.
    *
    * Examples:
    *   "node ./scripts/flatten-properties.js"
