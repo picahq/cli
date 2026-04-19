@@ -1,6 +1,6 @@
 {
   "name": "@withone/cli",
-  "version": "1.37.3",
+  "version": "1.38.0",
   "description": "CLI for managing One",
   "type": "module",
   "files": [
@@ -16,7 +16,8 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "start": "node bin/cli.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@clack/prompts": "^0.9.1",

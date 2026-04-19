@@ -478,7 +478,7 @@ one --agent sync sql stripe "SELECT count(*) FROM balanceTransactions"
 \`sync init\` without \`--config\` does all of this automatically:
 - **connectionKey** — auto-resolved when there's exactly one connection for the platform
 - **Pagination** — Stripe id-pagination, Notion body-cursor, HubSpot/Google token, offset, link. Inapplicable fields stripped (no nextPath for offset, no passAs for none)
-- **resultsPath** — generic keys (data, results, items) + platform-specific (model name stripped of platform prefix: attioCompanies → companies)
+- **resultsPath** — generic keys (data, results, items) + platform-specific (model name stripped of platform prefix: attioCompanies → companies). Use \`""\`, \`"$"\`, or \`"."\` for responses that return a bare array at the root (e.g. Hacker News \`/v0/topstories.json\`); primitive array elements are auto-wrapped as \`{ [idField]: value }\`.
 - **idField** — id, _id, uuid
 - **pathVars** — extracted from URL template with smart defaults (calendarId="primary", userId="me"). Internal keys (INTERNAL_SIGNING_KEY) and record-level IDs (record_id) are stripped automatically
 - **dateFilter** — updated_since, created_after, etc.
@@ -643,7 +643,7 @@ Fetches ALL records and deletes local rows whose IDs are no longer in the source
 |-------|----------|-------------|
 | connectionKey | yes | From \`one list\` |
 | actionId | yes | Auto-resolved by \`sync init\` |
-| resultsPath | yes | Auto-inferred or auto-discovered by \`sync test\` |
+| resultsPath | yes | Auto-inferred or auto-discovered by \`sync test\`. Use \`""\` / \`"$"\` / \`"."\` for root-array responses |
 | idField | yes | Auto-inferred or auto-discovered by \`sync test\` |
 | pagination | yes | Auto-inferred (cursor/token/offset/id/link/none) |
 | pathVars | no | Auto-extracted from URL template |

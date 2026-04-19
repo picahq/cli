@@ -4,6 +4,7 @@ import type { ActionDetails } from '../types.js';
 import { getByDotPath } from '../dot-path.js';
 import { getNextPageParams } from './pagination.js';
 import type { SyncProfile } from './types.js';
+import { extractRecords, isRootPath } from './extract.js';
 
 export interface SyncTestCheck {
   name: string;
@@ -105,27 +106,46 @@ export async function testSyncProfile(api: OneApi, profile: SyncProfile): Promis
   // If the profile still has FILL_IN (or the path fails), auto-discover by
   // scanning top-level response keys for the first array — the agent shouldn't
   // have to guess this when we have the real response sitting right here.
+  // Root-array responses (e.g. HN topstories) are also supported: if the
+  // response itself is an array, treat resultsPath as root.
   let resolvedResultsPath = profile.resultsPath;
-  let records = getByDotPath(responseData, resolvedResultsPath);
+  const rawCandidate: unknown = isRootPath(resolvedResultsPath)
+    ? responseData
+    : getByDotPath(responseData, resolvedResultsPath);
+  let records: unknown[] | null = Array.isArray(rawCandidate) ? rawCandidate : null;
 
-  if (!Array.isArray(records) && typeof responseData === 'object' && responseData !== null) {
-    // Auto-discover: find the first top-level key whose value is an array
-    const topObj = responseData as Record<string, unknown>;
-    const arrayKey = Object.keys(topObj).find(k => Array.isArray(topObj[k]));
-    if (arrayKey) {
-      resolvedResultsPath = arrayKey;
-      records = topObj[arrayKey];
+  if (records === null) {
+    if (Array.isArray(responseData)) {
+      // Auto-discover root array — profile had a stale path but response is
+      // a bare array.
+      resolvedResultsPath = '';
+      records = responseData;
       report.autoFixed = report.autoFixed ?? {};
-      report.autoFixed.resultsPath = arrayKey;
+      report.autoFixed.resultsPath = '';
       checks.push({
-        name: `resultsPath auto-discovered → "${arrayKey}"`,
+        name: `resultsPath auto-discovered → <root>`,
         ok: true,
-        detail: `Profile had "${profile.resultsPath}" which didn't resolve; found "${arrayKey}" in response`,
+        detail: `Response is a root-level array — profile had "${profile.resultsPath}"`,
       });
+    } else if (typeof responseData === 'object' && responseData !== null) {
+      // Auto-discover: find the first top-level key whose value is an array
+      const topObj = responseData as Record<string, unknown>;
+      const arrayKey = Object.keys(topObj).find(k => Array.isArray(topObj[k]));
+      if (arrayKey) {
+        resolvedResultsPath = arrayKey;
+        records = topObj[arrayKey] as unknown[];
+        report.autoFixed = report.autoFixed ?? {};
+        report.autoFixed.resultsPath = arrayKey;
+        checks.push({
+          name: `resultsPath auto-discovered → "${arrayKey}"`,
+          ok: true,
+          detail: `Profile had "${profile.resultsPath}" which didn't resolve; found "${arrayKey}" in response`,
+        });
+      }
     }
   }
 
-  if (!Array.isArray(records)) {
+  if (records === null) {
     const topKeys =
       typeof responseData === 'object' && responseData !== null ? Object.keys(responseData as object) : [];
     checks.push({
@@ -135,10 +155,28 @@ export async function testSyncProfile(api: OneApi, profile: SyncProfile): Promis
     });
     return report;
   }
+
+  // Wrap primitive arrays (e.g. HN's array of integers) so the sample/column
+  // preview matches what the runner will actually insert.
+  let wrappedPrimitives = false;
+  if (records.length > 0 && typeof records[0] !== 'object') {
+    const idField = profile.idField || 'id';
+    const wrapped: Record<string, unknown>[] = [];
+    for (const v of records) {
+      if (typeof v === 'object') continue;
+      wrapped.push({ [idField]: String(v) });
+    }
+    records = wrapped;
+    wrappedPrimitives = true;
+  }
+
+  const pathLabel = isRootPath(resolvedResultsPath) ? '<root>' : `"${resolvedResultsPath}"`;
   checks.push({
-    name: `resultsPath "${resolvedResultsPath}" → array`,
+    name: `resultsPath ${pathLabel} → array`,
     ok: true,
-    detail: `${records.length} records`,
+    detail: wrappedPrimitives
+      ? `${(records as unknown[]).length} primitive records (wrapped as { ${profile.idField || 'id'}: value })`
+      : `${(records as unknown[]).length} records`,
   });
 
   if (records.length === 0) {

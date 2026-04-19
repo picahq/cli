@@ -343,7 +343,7 @@ one sync run stripe --full-refresh
 | `schedule add/list/status/remove/repair` | Cron-backed scheduled syncs with drift detection |
 | `remove <platform>` | Delete local data (`--dry-run` to preview) |
 
-Change hooks (`onInsert`, `onUpdate`, `onChange`) fire per-page during sync — pipe to a shell command, a flow, or an event log. Run `one guide sync` for the full reference.
+Change hooks (`onInsert`, `onUpdate`, `onChange`) fire per-page during sync — pipe to a shell command, a flow, or an event log. Root-array responses (e.g. Hacker News `/v0/topstories.json` → `[9129911, 9129199, ...]`) are supported by setting `resultsPath` to `""`, `"$"`, or `"."`; primitive elements are auto-wrapped as `{ [idField]: value }`. Run `one guide sync` for the full reference.
 
 ### `one guide [topic]`
 

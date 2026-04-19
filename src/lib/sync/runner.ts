@@ -10,6 +10,7 @@ import { acquireSyncLock } from './lock.js';
 import { classifyRecords, fireHooks, type ChangeEvent } from './hooks.js';
 import { enrichPhase, type EnrichResult } from './enrich.js';
 import { transformRecords } from './transform.js';
+import { extractRecords } from './extract.js';
 import type Database from 'better-sqlite3';
 
 const MAX_RETRIES_PER_PAGE = 3;
@@ -341,18 +342,16 @@ export async function syncModel(
         }
       }
 
-      // Extract results
-      const records = getByDotPath(responseData, profile.resultsPath);
-      if (!Array.isArray(records)) {
-        // Try to help the user fix the profile
-        const topKeys = typeof responseData === 'object' && responseData !== null
-          ? Object.keys(responseData)
-          : [];
-        throw new Error(
-          `Could not find results at path '${profile.resultsPath}' in API response. ` +
-          `Check your sync profile. Response keys: [${topKeys.join(', ')}]`
-        );
-      }
+      // Extract results. extractRecords also handles root-array responses
+      // (e.g. the HN `topstories.json` endpoint returns a bare `[123, 456]`)
+      // and arrays of primitives (wraps each as `{ [idField]: String(value) }`).
+      const extraction = extractRecords(
+        responseData,
+        profile.resultsPath,
+        profile.idField,
+        `${platform}/${model}`,
+      );
+      const records = extraction.records;
 
       if (records.length === 0 && page === 0) {
         // Empty results on first page — not an error

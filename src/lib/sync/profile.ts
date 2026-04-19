@@ -20,11 +20,16 @@ export function readProfile(platform: string, model: string): SyncProfile | null
 }
 
 export function writeProfile(profile: SyncProfile): void {
-  const required: (keyof SyncProfile)[] = ['platform', 'model', 'connectionKey', 'actionId', 'resultsPath', 'idField', 'pagination'];
+  const required: (keyof SyncProfile)[] = ['platform', 'model', 'connectionKey', 'actionId', 'idField', 'pagination'];
   for (const field of required) {
     if (!profile[field]) {
       throw new Error(`Missing required field: ${field}`);
     }
+  }
+  // resultsPath is required but empty string / "$" / "." all mean "root array",
+  // so we only reject `undefined` (not explicitly set by the caller).
+  if (profile.resultsPath === undefined) {
+    throw new Error('Missing required field: resultsPath (use "" or "$" for root-array responses)');
   }
   if (!profile.pagination.type) {
     throw new Error('Missing required field: pagination.type');

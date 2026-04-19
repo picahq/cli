@@ -24,7 +24,13 @@ export interface SyncProfile {
   model: string;
   connectionKey: string;
   actionId: string;
-  /** Dot-path to the array of records in the API response */
+  /**
+   * Dot-path to the array of records in the API response. Use `""`, `"$"`,
+   * or `"."` when the response *is* the array (e.g. HN's `/v0/topstories.json`
+   * returns a bare `[123, 456, ...]`). Arrays of primitives are auto-wrapped
+   * as `{ [idField]: String(value) }` so they fit the same insert pipeline
+   * as object responses.
+   */
   resultsPath: string;
   /** Which field on each record is the unique ID */
   idField: string;
