@@ -129,16 +129,19 @@ export async function syncModel(
 
   // Acquire a cross-process lock so two concurrent syncs (e.g. cron tick +
   // manual run) don't race on the same table. Dry-run skips the lock since
-  // it performs no writes.
+  // it performs no writes. The lock handles stale-lock takeover (dead pid
+  // or age > 30min) so a successful return means no live process holds it.
   const lock = options.dryRun ? null : acquireSyncLock(platform, model);
 
-  // Check in-process state too (cheap and gives a clearer error message)
+  // If the lock was free but state still says 'syncing', a previous run
+  // crashed between "set syncing" and the cleanup paths. Lock is the source
+  // of truth on concurrency — auto-recover the stale state rather than
+  // forcing the user to pass --force or hand-edit sync_state.json.
   const existingState = getModelState(platform, model);
-  if (existingState?.status === 'syncing' && !options.force) {
-    if (lock) lock.release();
-    throw new Error(
-      `Sync state says ${platform}/${model} is already syncing. ` +
-      `Use --force to override (this may happen if a previous sync crashed before cleanup).`
+  if (existingState?.status === 'syncing' && !options.dryRun && !isAgentMode()) {
+    process.stderr.write(
+      `Recovered from crashed previous sync of ${platform}/${model} ` +
+      `(state was 'syncing', no live owner)\n`
     );
   }
 
@@ -152,15 +155,29 @@ export async function syncModel(
     );
   }
 
-  // Don't set status for dry-run — it's just a preview
-  if (!options.dryRun) {
-    updateModelState(platform, model, { status: 'syncing' });
-  }
-
   let db: Database.Database | null = null;
   let totalRecords = 0;
   let pagesProcessed = 0;
   let lastCursor: unknown = null;
+
+  // Reset sync_state and release the lock if the process is killed mid-run
+  // (SIGINT from Ctrl-C, SIGTERM from a process manager, cron job being
+  // killed on laptop sleep). Without these handlers the state stays 'syncing'
+  // forever and the filesystem lock lingers for STALE_MS.
+  const signalCleanup = (signal: NodeJS.Signals): void => {
+    try {
+      updateModelState(platform, model, { status: 'failed', pagesProcessed, lastCursor });
+    } catch { /* best-effort */ }
+    try { if (lock) lock.release(); } catch { /* best-effort */ }
+    process.exit(signal === 'SIGINT' ? 130 : 143);
+  };
+  const onSigint = (): void => signalCleanup('SIGINT');
+  const onSigterm = (): void => signalCleanup('SIGTERM');
+  if (!options.dryRun) {
+    process.on('SIGINT', onSigint);
+    process.on('SIGTERM', onSigterm);
+    updateModelState(platform, model, { status: 'syncing' });
+  }
   // Track every id we saw across pages, for --full-refresh deletion reconciliation.
   const seenIds = new Set<string | number>();
   // Hook counters
@@ -626,5 +643,8 @@ export async function syncModel(
     (wrapped as any)._recordsSynced = totalRecords;
     (wrapped as any)._pagesProcessed = pagesProcessed;
     throw wrapped;
+  } finally {
+    process.off('SIGINT', onSigint);
+    process.off('SIGTERM', onSigterm);
   }
 }
