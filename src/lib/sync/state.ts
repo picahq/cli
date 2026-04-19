@@ -3,35 +3,98 @@ import path from 'node:path';
 import type { SyncState, ModelSyncState } from './types.js';
 
 const SYNC_DIR = path.join('.one', 'sync');
-const STATE_FILE = path.join(SYNC_DIR, 'sync_state.json');
+const STATE_DIR = path.join(SYNC_DIR, 'state');
+const LEGACY_STATE_FILE = path.join(SYNC_DIR, 'sync_state.json');
 
-export function readSyncState(): SyncState {
+// Per-platform/per-model state files live at `.one/sync/state/<platform>/<model>.json`.
+// One writer per file means atomic rename can't collide with another writer, and
+// there's no shared read-modify-write snapshot that can drop a concurrent update.
+
+function modelFilePath(platform: string, model: string): string {
+  return path.join(STATE_DIR, platform, `${model}.json`);
+}
+
+/**
+ * One-time migration from the legacy single-file layout. Safe to call on every
+ * read — no-ops once the old file is gone. If both old and new exist (e.g. a
+ * partial migration in a prior run), the new layout wins and the legacy file
+ * is removed.
+ */
+function migrateLegacyIfNeeded(): void {
+  if (!fs.existsSync(LEGACY_STATE_FILE)) return;
   try {
-    if (!fs.existsSync(STATE_FILE)) return {};
-    const raw = fs.readFileSync(STATE_FILE, 'utf-8');
-    return JSON.parse(raw) as SyncState;
+    const raw = fs.readFileSync(LEGACY_STATE_FILE, 'utf-8');
+    const legacy = JSON.parse(raw) as SyncState;
+    for (const [platform, models] of Object.entries(legacy)) {
+      for (const [model, modelState] of Object.entries(models)) {
+        if (fs.existsSync(modelFilePath(platform, model))) continue;
+        writeModelFile(platform, model, modelState);
+      }
+    }
+    fs.unlinkSync(LEGACY_STATE_FILE);
   } catch {
-    return {};
+    // Best-effort. If parsing fails, drop the legacy file so it stops shadowing
+    // the new layout.
+    try { fs.unlinkSync(LEGACY_STATE_FILE); } catch { /* ignore */ }
   }
 }
 
-/** Atomic write: write to .tmp then rename to prevent corruption on crash */
-export function writeSyncState(state: SyncState): void {
-  fs.mkdirSync(SYNC_DIR, { recursive: true });
-  const tmp = STATE_FILE + '.tmp';
+function writeModelFile(platform: string, model: string, state: ModelSyncState): void {
+  const dir = path.join(STATE_DIR, platform);
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${model}.json`);
+  const tmp = `${file}.${process.pid}.${Math.random().toString(36).slice(2, 10)}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
-  fs.renameSync(tmp, STATE_FILE);
+  fs.renameSync(tmp, file);
+}
+
+function readModelFile(platform: string, model: string): ModelSyncState | null {
+  try {
+    const raw = fs.readFileSync(modelFilePath(platform, model), 'utf-8');
+    return JSON.parse(raw) as ModelSyncState;
+  } catch {
+    return null;
+  }
+}
+
+export function readSyncState(): SyncState {
+  migrateLegacyIfNeeded();
+  const result: SyncState = {};
+  let platforms: string[];
+  try {
+    platforms = fs.readdirSync(STATE_DIR);
+  } catch {
+    return result;
+  }
+  for (const platform of platforms) {
+    const platformDir = path.join(STATE_DIR, platform);
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(platformDir);
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.endsWith('.json')) continue;
+      const model = entry.slice(0, -'.json'.length);
+      const modelState = readModelFile(platform, model);
+      if (modelState) {
+        if (!result[platform]) result[platform] = {};
+        result[platform][model] = modelState;
+      }
+    }
+  }
+  return result;
 }
 
 export function getModelState(platform: string, model: string): ModelSyncState | null {
-  const state = readSyncState();
-  return state[platform]?.[model] ?? null;
+  migrateLegacyIfNeeded();
+  return readModelFile(platform, model);
 }
 
 export function updateModelState(platform: string, model: string, partial: Partial<ModelSyncState>): void {
-  const state = readSyncState();
-  if (!state[platform]) state[platform] = {};
-  const existing = state[platform][model] ?? {
+  migrateLegacyIfNeeded();
+  const existing = readModelFile(platform, model) ?? {
     lastSync: null,
     lastCursor: null,
     totalRecords: 0,
@@ -39,20 +102,18 @@ export function updateModelState(platform: string, model: string, partial: Parti
     since: null,
     status: 'idle' as const,
   };
-  state[platform][model] = { ...existing, ...partial };
-  writeSyncState(state);
+  writeModelFile(platform, model, { ...existing, ...partial });
 }
 
 export function removeModelState(platform: string, model?: string): void {
-  const state = readSyncState();
-  if (!state[platform]) return;
+  migrateLegacyIfNeeded();
+  const platformDir = path.join(STATE_DIR, platform);
   if (model) {
-    delete state[platform][model];
-    if (Object.keys(state[platform]).length === 0) {
-      delete state[platform];
-    }
+    try { fs.unlinkSync(modelFilePath(platform, model)); } catch { /* already gone */ }
+    try {
+      if (fs.readdirSync(platformDir).length === 0) fs.rmdirSync(platformDir);
+    } catch { /* dir already gone or not empty */ }
   } else {
-    delete state[platform];
+    try { fs.rmSync(platformDir, { recursive: true, force: true }); } catch { /* ignore */ }
   }
-  writeSyncState(state);
 }

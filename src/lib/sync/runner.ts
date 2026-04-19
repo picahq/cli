@@ -136,7 +136,7 @@ export async function syncModel(
   // If the lock was free but state still says 'syncing', a previous run
   // crashed between "set syncing" and the cleanup paths. Lock is the source
   // of truth on concurrency — auto-recover the stale state rather than
-  // forcing the user to pass --force or hand-edit sync_state.json.
+  // forcing the user to pass --force or hand-edit the state file.
   const existingState = getModelState(platform, model);
   if (existingState?.status === 'syncing' && !options.dryRun && !isAgentMode()) {
     process.stderr.write(

@@ -671,7 +671,7 @@ Fetches ALL records and deletes local rows whose IDs are no longer in the source
 .one/sync/
   profiles/{platform}_{model}.json    # sync profiles
   data/{platform}.db                  # SQLite databases (WAL mode)
-  sync_state.json                     # checkpoint tracking
+  state/{platform}/{model}.json       # per-model checkpoint tracking
   events/{platform}_{model}.jsonl     # change event logs (if onChange: "log")
   logs/{platform}.log                 # cron run logs
   locks/{platform}_{model}/           # cross-process sync locks
