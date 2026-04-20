@@ -430,23 +430,29 @@ one --agent sync profiles stripe       # filter by platform
 
 When a built-in exists, \`sync init\` uses it automatically — no inference needed, no manual config. The agent just needs to match the user's intent to a profile description.
 
-## Action Resolution
+## Action Resolution — custom actions are hard-blocked
 
-Sync profiles MUST prefer passthrough actions over custom actions.
-Custom actions add server-side fan-out and transformation that causes timeouts
-and payload size failures at scale. The sync engine handles pagination, retries,
-rate limiting, and enrichment locally — a server-side middleware layer on top
-of that creates problems, not value.
+Sync refuses to run against custom/composer actions (tag \`custom\`). Both
+the list action and any enrich detail action in a profile MUST be passthrough.
+\`sync run\` loads the action's knowledge, checks for the \`custom\` tag, and
+aborts with a clear error pointing at the passthrough alternative.
 
-When resolving actions for sync profiles:
-1. Search with knowledge mode (not execute mode) to include passthrough actions
+Why the block:
+- Custom actions run on a small shared fleet that collapses under sync-scale load
+- Custom list endpoints often expect filters in the body and silently return
+  unfiltered or empty results (sync sends params as query/path only by design)
+- The sync engine already handles pagination, retry, rate limiting, and per-record
+  enrichment locally — server-side fan-out on top of that creates 5xx, not value
+
+How to build a profile:
+1. \`one actions search <platform> "<model>"\` surfaces passthrough actions.
+   \`sync init\`'s auto-infer also drops customs before offering choices.
 2. Prefer GET passthrough endpoints (e.g. /gmail/v1/users/{userId}/threads)
-   over POST custom endpoints (e.g. /gmail/get-threads)
-3. Use enrich config for per-record detail fetching instead of relying on
-   custom actions that fan out server-side
-4. Only fall back to custom actions when no passthrough equivalent exists
-
-This applies to sync models discovery, sync init, and enrich action selection.
+   over POST custom endpoints (e.g. /gmail/get-threads).
+3. If no passthrough list action exists for a model, that model can't be
+   synced. Compose a flow that chains passthrough calls instead. Custom
+   actions are for one-off agent use only — never sync, never flow.
+4. The enrich \`actionId\` is held to the same rule: must be passthrough.
 
 ## Workflow: init → run → query
 

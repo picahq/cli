@@ -330,6 +330,8 @@ one sync init stripe balanceTransactions --config '{"onInsert":"one flow execute
 one sync run stripe --full-refresh
 ```
 
+> **Sync uses passthrough actions only.** Profiles referencing a custom/composer action are rejected at runtime. `sync models` already filters to passthrough-only; if a model has no passthrough list endpoint, compose a flow instead of syncing.
+
 | Subcommand | What it does |
 |------------|-------------|
 | `install` / `doctor` | Install + verify the SQLite engine |

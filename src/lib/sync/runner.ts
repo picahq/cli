@@ -252,6 +252,19 @@ export async function syncModel(
 
     // Get preloaded action details for efficiency
     const actionDetails = await api.getActionDetails(profile.actionId);
+
+    // Hard block: sync never uses custom/composer actions. They run on a
+    // small shared fleet that collapses under sync-scale load and often
+    // expect filters in the body (see gmail get-threads). Passthrough +
+    // local enrichment scales instead.
+    if (actionDetails.tags?.includes('custom')) {
+      throw new Error(
+        `Sync does not support custom actions. Action ${profile.actionId} is tagged "custom". ` +
+        `Use a passthrough action — run 'one actions search ${platform} "${model}"' to find one, ` +
+        `or compose a flow that chains passthrough calls if the logic is complex.`
+      );
+    }
+
     const maxPages = options.maxPages ?? Infinity;
     let tableCreated = tableExists(db, model);
 

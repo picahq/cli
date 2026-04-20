@@ -173,6 +173,8 @@ one --agent sync list stripe                     # progress + freshness
 one sync schedule add stripe --every 1h
 ```
 
+**Sync rejects custom actions** — profiles must use passthrough. `sync init` only surfaces passthrough models; `sync run` aborts if the list or enrich action is tagged `custom`. If no passthrough exists, compose a flow instead.
+
 **Advanced features** (enrich, transform, exclude, identityKey, hooks, --full-refresh, --where-sql delete, cursor resume): run `one guide sync` for the full reference.
 
 ## Beyond Single Actions

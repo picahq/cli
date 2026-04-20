@@ -223,6 +223,15 @@ export async function enrichPhase(
     );
   }
 
+  // Hard block: enrich actions also must be passthrough. Custom actions
+  // collapse under the per-row fan-out that enrichment performs.
+  if (detailAction.tags?.includes('custom')) {
+    throw new Error(
+      `Enrich does not support custom actions. Action ${config.actionId} is tagged "custom". ` +
+      `Use a passthrough detail endpoint — run 'one actions search ${platform} "<model> get"' to find one.`
+    );
+  }
+
   let concurrency = config.concurrency ?? DEFAULT_CONCURRENCY;
   let enriched = 0;
   let skipped = 0;
