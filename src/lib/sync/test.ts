@@ -78,6 +78,21 @@ export async function testSyncProfile(api: OneApi, profile: SyncProfile): Promis
     return report;
   }
 
+  // Hard block: sync never uses custom/composer actions (see runner.ts).
+  // Catch it here too so `sync test` and `sync init` auto-validation fail
+  // fast with the same guidance, instead of letting the user reach `sync run`
+  // before discovering the profile is unsupported.
+  if (actionDetails.tags?.includes('custom')) {
+    checks.push({
+      name: 'action is passthrough (not custom)',
+      ok: false,
+      detail:
+        `Action ${profile.actionId} is tagged "custom". Sync only supports passthrough actions. ` +
+        `Run 'one actions search ${profile.platform} "${profile.model}"' to find one.`,
+    });
+    return report;
+  }
+
   // Check 2: single-page fetch succeeds
   let responseData: unknown;
   try {
