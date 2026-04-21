@@ -539,14 +539,7 @@ const SCAFFOLD_TEMPLATES: Record<string, () => Record<string, unknown>> = {
     name: 'My Workflow',
     description: 'A basic workflow with a single action step',
     version: '1',
-    inputs: {
-      connectionKey: {
-        type: 'string',
-        required: true,
-        description: 'Connection key for the platform',
-        connection: { platform: 'PLATFORM_NAME' },
-      },
-    },
+    inputs: {},
     steps: [
       {
         id: 'step1',
@@ -555,7 +548,7 @@ const SCAFFOLD_TEMPLATES: Record<string, () => Record<string, unknown>> = {
         action: {
           platform: 'PLATFORM_NAME',
           actionId: 'ACTION_ID_FROM_SEARCH',
-          connectionKey: '$.input.connectionKey',
+          connection: { platform: 'PLATFORM_NAME' },
           data: {},
         },
       },
@@ -566,14 +559,7 @@ const SCAFFOLD_TEMPLATES: Record<string, () => Record<string, unknown>> = {
     name: 'Conditional Workflow',
     description: 'Fetch data, then branch based on results',
     version: '1',
-    inputs: {
-      connectionKey: {
-        type: 'string',
-        required: true,
-        description: 'Connection key',
-        connection: { platform: 'PLATFORM_NAME' },
-      },
-    },
+    inputs: {},
     steps: [
       {
         id: 'fetch',
@@ -582,7 +568,7 @@ const SCAFFOLD_TEMPLATES: Record<string, () => Record<string, unknown>> = {
         action: {
           platform: 'PLATFORM_NAME',
           actionId: 'ACTION_ID_FROM_SEARCH',
-          connectionKey: '$.input.connectionKey',
+          connection: { platform: 'PLATFORM_NAME' },
         },
       },
       {
@@ -616,14 +602,7 @@ const SCAFFOLD_TEMPLATES: Record<string, () => Record<string, unknown>> = {
     name: 'Loop Workflow',
     description: 'Fetch a list, then process each item',
     version: '1',
-    inputs: {
-      connectionKey: {
-        type: 'string',
-        required: true,
-        description: 'Connection key',
-        connection: { platform: 'PLATFORM_NAME' },
-      },
-    },
+    inputs: {},
     steps: [
       {
         id: 'fetchList',
@@ -632,7 +611,7 @@ const SCAFFOLD_TEMPLATES: Record<string, () => Record<string, unknown>> = {
         action: {
           platform: 'PLATFORM_NAME',
           actionId: 'ACTION_ID_FROM_SEARCH',
-          connectionKey: '$.input.connectionKey',
+          connection: { platform: 'PLATFORM_NAME' },
         },
       },
       {
@@ -665,14 +644,7 @@ const SCAFFOLD_TEMPLATES: Record<string, () => Record<string, unknown>> = {
     name: 'AI Analysis Workflow',
     description: 'Fetch data, analyze with Claude, and send results',
     version: '1',
-    inputs: {
-      connectionKey: {
-        type: 'string',
-        required: true,
-        description: 'Connection key for data source',
-        connection: { platform: 'PLATFORM_NAME' },
-      },
-    },
+    inputs: {},
     steps: [
       {
         id: 'fetchData',
@@ -681,7 +653,7 @@ const SCAFFOLD_TEMPLATES: Record<string, () => Record<string, unknown>> = {
         action: {
           platform: 'PLATFORM_NAME',
           actionId: 'ACTION_ID_FROM_SEARCH',
-          connectionKey: '$.input.connectionKey',
+          connection: { platform: 'PLATFORM_NAME' },
         },
       },
       {

@@ -15,7 +15,25 @@ export interface FlowInputDeclaration {
 export interface FlowActionConfig {
   platform: string;
   actionId: string;
-  connectionKey: string;
+  /**
+   * Literal connection key (or `$.input.x` selector resolving to one). Legacy
+   * form. Prefer `connection: { platform, tag? }` so re-auth doesn't break
+   * the flow — re-auth always mints a new key, and the literal form forces a
+   * manual edit (or external resolver script) every time.
+   *
+   * Exactly one of `connectionKey` or `connection` must be set per action.
+   */
+  connectionKey?: string;
+  /**
+   * Late-bound connection reference, resolved at flow-execute time. Survives
+   * re-auth: the next run picks up the fresh key automatically. Use `tag` to
+   * disambiguate when a platform has multiple connections (e.g. multiple
+   * Gmail accounts). Both fields support `$.input.x` selectors so flows can
+   * accept the tag (or the whole platform) as runtime input.
+   *
+   * Exactly one of `connectionKey` or `connection` must be set per action.
+   */
+  connection?: { platform: string; tag?: string };
   data?: Record<string, unknown>;
   pathVars?: Record<string, unknown>;
   queryParams?: Record<string, unknown>;
@@ -219,6 +237,14 @@ export interface FlowContext {
     i?: number;
     [key: string]: unknown;
   };
+  /**
+   * Lazy-loaded connection cache — populated the first time an action step
+   * resolves a `connection: { platform, tag? }` ref, then reused for the
+   * rest of the run. Keeps a many-step flow from doing a `listConnections`
+   * round-trip per step. Connections don't change mid-run, so caching for
+   * the run's lifetime is safe.
+   */
+  _connections?: import('./types.js').Connection[];
 }
 
 export interface FlowRunState {

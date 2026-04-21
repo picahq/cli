@@ -82,7 +82,8 @@ export const FLOW_SCHEMA: FlowSchemaDescriptor = {
       fields: {
         platform:      { type: 'string', required: true, description: 'Platform name (kebab-case)' },
         actionId:      { type: 'string', required: true, description: 'Action ID from `actions search`' },
-        connectionKey: { type: 'string', required: true, description: 'Connection key (use $.input selector)' },
+        connection:    { type: 'object', required: false, description: 'Late-bound connection ref { platform, tag? } — survives re-auth. Exactly one of `connection` or `connectionKey` must be set.' },
+        connectionKey: { type: 'string', required: false, description: 'Literal connection key (or $.input selector). Legacy form — prefer `connection: { platform, tag? }`. Exactly one of `connection` or `connectionKey` must be set.' },
         data:          { type: 'object', required: false, description: 'Request body (POST/PUT/PATCH)' },
         pathVars:      { type: 'object', required: false, description: 'URL path variables' },
         queryParams:   { type: 'object', required: false, description: 'Query parameters' },
@@ -93,7 +94,7 @@ export const FLOW_SCHEMA: FlowSchemaDescriptor = {
         action: {
           platform: 'stripe',
           actionId: 'conn_mod_def::xxx::yyy',
-          connectionKey: '$.input.stripeConnectionKey',
+          connection: { platform: 'stripe' },
           data: { query: "email:'{{$.input.customerEmail}}'" },
         },
       },
@@ -136,7 +137,7 @@ export const FLOW_SCHEMA: FlowSchemaDescriptor = {
         id: 'checkFound', name: 'Check if customer exists', type: 'condition',
         condition: {
           expression: '$.steps.search.response.data.length > 0',
-          then: [{ id: 'notify', name: 'Send notification', type: 'action', action: { platform: 'slack', actionId: '...', connectionKey: '$.input.slackKey', data: { text: 'Found!' } } }],
+          then: [{ id: 'notify', name: 'Send notification', type: 'action', action: { platform: 'slack', actionId: '...', connection: { platform: 'slack' }, data: { text: 'Found!' } } }],
           else: [{ id: 'logMiss', name: 'Log not found', type: 'transform', transform: { expression: "'Not found'" } }],
         },
       },
@@ -157,7 +158,7 @@ export const FLOW_SCHEMA: FlowSchemaDescriptor = {
         id: 'processOrders', name: 'Process each order', type: 'loop',
         loop: {
           over: '$.steps.listOrders.response.data', as: 'order',
-          steps: [{ id: 'createInvoice', name: 'Create invoice', type: 'action', action: { platform: 'stripe', actionId: '...', connectionKey: '$.input.stripeKey', data: { amount: '$.loop.order.total' } } }],
+          steps: [{ id: 'createInvoice', name: 'Create invoice', type: 'action', action: { platform: 'stripe', actionId: '...', connection: { platform: 'stripe' }, data: { amount: '$.loop.order.total' } } }],
         },
       },
     },
@@ -173,8 +174,8 @@ export const FLOW_SCHEMA: FlowSchemaDescriptor = {
         id: 'lookups', name: 'Parallel data lookups', type: 'parallel',
         parallel: {
           steps: [
-            { id: 'getStripe', name: 'Get Stripe data', type: 'action', action: { platform: 'stripe', actionId: '...', connectionKey: '$.input.stripeKey' } },
-            { id: 'getSlack', name: 'Get Slack data', type: 'action', action: { platform: 'slack', actionId: '...', connectionKey: '$.input.slackKey' } },
+            { id: 'getStripe', name: 'Get Stripe data', type: 'action', action: { platform: 'stripe', actionId: '...', connection: { platform: 'stripe' } } },
+            { id: 'getSlack', name: 'Get Slack data', type: 'action', action: { platform: 'slack', actionId: '...', connection: { platform: 'slack' } } },
           ],
         },
       },
@@ -220,7 +221,7 @@ export const FLOW_SCHEMA: FlowSchemaDescriptor = {
         while: {
           condition: '$.steps.paginate.output.lastResult.nextPageToken != null',
           maxIterations: 50,
-          steps: [{ id: 'fetchPage', name: 'Fetch next page', type: 'action', action: { platform: 'gmail', actionId: '...', connectionKey: '$.input.gmailKey' } }],
+          steps: [{ id: 'fetchPage', name: 'Fetch next page', type: 'action', action: { platform: 'gmail', actionId: '...', connection: { platform: 'gmail' } } }],
         },
       },
     },
@@ -242,7 +243,7 @@ export const FLOW_SCHEMA: FlowSchemaDescriptor = {
       configKey: 'paginate',
       description: 'Auto-paginate API results into a single array',
       fields: {
-        action:          { type: 'object', required: true, description: 'Action config (same shape as action step: platform, actionId, connectionKey)' },
+        action:          { type: 'object', required: true, description: 'Action config (same shape as action step: platform, actionId, plus exactly one of `connection` or `connectionKey`)' },
         pageTokenField:  { type: 'string', required: true, description: 'Dot-path in response to next page token' },
         resultsField:    { type: 'string', required: true, description: 'Dot-path in response to results array' },
         inputTokenParam: { type: 'string', required: true, description: 'Dot-path in action config where page token is injected' },
@@ -251,7 +252,7 @@ export const FLOW_SCHEMA: FlowSchemaDescriptor = {
       example: {
         id: 'allMessages', name: 'Fetch all Gmail messages', type: 'paginate',
         paginate: {
-          action: { platform: 'gmail', actionId: '...', connectionKey: '$.input.gmailKey', queryParams: { maxResults: 100 } },
+          action: { platform: 'gmail', actionId: '...', connection: { platform: 'gmail' }, queryParams: { maxResults: 100 } },
           pageTokenField: 'nextPageToken', resultsField: 'messages', inputTokenParam: 'queryParams.pageToken', maxPages: 10,
         },
       },
@@ -461,12 +462,6 @@ The only differences: (1) prepend the stdin-read line, (2) replace \`return X\` 
   "description": "What this flow does",
   "version": "1",
   "inputs": {
-    "connectionKey": {
-      "type": "string",
-      "required": true,
-      "description": "Platform connection key",
-      "connection": { "platform": "stripe" }
-    },
     "param": {
       "type": "string",
       "required": true,
@@ -481,7 +476,7 @@ The only differences: (1) prepend the stdin-read line, (2) replace \`return X\` 
       "action": {
         "platform": "stripe",
         "actionId": "conn_mod_def::xxx::yyy",
-        "connectionKey": "$.input.connectionKey",
+        "connection": { "platform": "stripe" },
         "data": { "query": "{{$.input.param}}" }
       }
     }
@@ -587,13 +582,13 @@ Pipes can be applied to any value (objects/arrays are JSON-stringified first for
 
 ### When to use bare selectors vs \`{{...}}\` interpolation
 
-- **Bare selectors** (\`$.input.x\`): Use for fields the engine resolves directly — \`connectionKey\`, \`over\`, \`path\`, \`expression\`, \`condition\`, and any field where the entire value is a single selector. The resolved value keeps its original type (object, array, number).
+- **Bare selectors** (\`$.input.x\`): Use for fields the engine resolves directly — \`connectionKey\`, the \`tag\` (or \`platform\`) inside \`connection\`, \`over\`, \`path\`, \`expression\`, \`condition\`, and any field where the entire value is a single selector. The resolved value keeps its original type (object, array, number).
 - **Interpolation** (\`{{$.input.x}}\`): Use inside string values where the selector is embedded in text — e.g., \`"Hello {{$.steps.getUser.response.name}}"\`. The resolved value is always stringified. Use this in \`data\`, \`pathVars\`, and \`queryParams\` when mixing selectors with literal text.
 - **Rule of thumb**: If the value is purely a selector, use bare. If it's a string containing a selector, use \`{{...}}\`.
 
 ### Selectors vs expressions
 
-Selectors in data fields (\`data\`, \`queryParams\`, \`pathVars\`, \`connectionKey\`) are **dot-path lookups only** — they do not support JavaScript operators like \`||\` or \`&&\`. For default values, use the \`default\` field on the input definition:
+Selectors in data fields (\`data\`, \`queryParams\`, \`pathVars\`, \`connectionKey\`, \`connection.tag\`) are **dot-path lookups only** — they do not support JavaScript operators like \`||\` or \`&&\`. For default values, use the \`default\` field on the input definition:
 
 \`\`\`json
 { "inputs": { "maxResults": { "type": "number", "default": 10 } } }
@@ -713,9 +708,30 @@ A \`flow\` step's \`flow.key\` accepts selectors and Handlebars interpolations, 
 
 Conditional execution: \`"if": "$.steps.prev.response.data.length > 0"\`
 
-## Input Connection Auto-Resolution
+## Connection Resolution — late-bound by default
 
-When an input has \`"connection": { "platform": "stripe" }\`, the flow engine can automatically resolve the connection key at execution time. If the user has exactly one connection for that platform, the engine fills in the key without requiring \`-i connectionKey=...\`. If multiple connections exist, the user must specify which one. This is metadata for tooling — it does not affect the flow JSON structure, but it makes execution more convenient.
+Action steps reference a platform connection in one of two forms:
+
+\`\`\`json
+// preferred — late-bound, survives re-auth
+"connection": { "platform": "gmail" }
+
+// multi-account: disambiguate with the connection's tag
+"connection": { "platform": "gmail", "tag": "work@example.com" }
+
+// legacy — works for backwards compat, breaks on re-auth
+"connectionKey": "live::gmail::default::abc123..."
+\`\`\`
+
+The engine resolves the \`connection\` ref once per flow run (cached for the run's lifetime) by calling \`listConnections\` and matching on platform + optional tag. Resolution errors fail the step with a clear message — \`No connection found for platform "X"\`, \`Multiple "X" connections found (tags: ...). Add a "tag" field\`, or \`No "X" connection has tag "Y"\`.
+
+Both \`platform\` and \`tag\` accept \`$.input.x\` selectors so a flow can be parameterised per-execution (e.g. multi-tenant orchestrators that pass the user's email as the tag).
+
+The validator rejects any action that sets both forms or neither, at \`flow validate\` and \`flow execute\` time.
+
+### Optional input metadata: connection-key auto-resolve (legacy)
+
+For flows that still use literal \`connectionKey\` strings via inputs, an input declaration can carry a \`"connection": { "platform": "..." }\` hint so \`flow execute\` auto-fills a single matching connection's key. New flows don't need this — switch the action's connection form to \`{ platform, tag? }\` and skip the input entirely.
 
 ## Complete Example: Fetch Data, Transform, Notify
 
@@ -726,18 +742,6 @@ When an input has \`"connection": { "platform": "stripe" }\`, the flow engine ca
   "description": "Fetch recent contacts from CRM, build a summary, post to Slack",
   "version": "1",
   "inputs": {
-    "crmConnectionKey": {
-      "type": "string",
-      "required": true,
-      "description": "CRM platform connection key",
-      "connection": { "platform": "attio" }
-    },
-    "slackConnectionKey": {
-      "type": "string",
-      "required": true,
-      "description": "Slack connection key",
-      "connection": { "platform": "slack" }
-    },
     "slackChannel": {
       "type": "string",
       "required": true,
@@ -752,7 +756,7 @@ When an input has \`"connection": { "platform": "stripe" }\`, the flow engine ca
       "action": {
         "platform": "attio",
         "actionId": "ATTIO_LIST_PEOPLE_ACTION_ID",
-        "connectionKey": "$.input.crmConnectionKey",
+        "connection": { "platform": "attio" },
         "queryParams": { "limit": "10" }
       }
     },
@@ -771,7 +775,7 @@ When an input has \`"connection": { "platform": "stripe" }\`, the flow engine ca
       "action": {
         "platform": "slack",
         "actionId": "SLACK_SEND_MESSAGE_ACTION_ID",
-        "connectionKey": "$.input.slackConnectionKey",
+        "connection": { "platform": "slack" },
         "data": {
           "channel": "$.input.slackChannel",
           "text": "{{$.steps.buildSummary.output.summary}}"

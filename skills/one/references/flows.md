@@ -282,11 +282,18 @@ The `if`, `unless`, `condition.expression`, `while.condition`, `transform.expres
   "action": {
     "platform": "stripe",
     "actionId": "conn_mod_def::xxx::yyy",
-    "connectionKey": "$.input.stripeConnectionKey",
+    "connection": { "platform": "stripe" },
     "data": { "query": "email:'{{$.input.customerEmail}}'" }
   }
 }
 ```
+
+**Connection forms.** Each action step sets exactly one of:
+
+- **`connection: { platform: "<name>", "tag"?: "<tag>" }`** (preferred) — late-bound, resolved at flow-execute time. Survives re-auth (which always mints a new key). Use `tag` to disambiguate when a platform has multiple connections (e.g. multi-account Gmail). Both `platform` and `tag` accept `$.input.x` selectors so flows can be parameterised per-execution.
+- **`connectionKey: "<literal-or-selector>"`** (legacy) — passes the key string straight through. Still supported for backwards compat, but breaks on re-auth and forces manual edits across every flow that references the stale key. Migrate to `connection` when convenient.
+
+The validator rejects an action that sets both forms (or neither) at `flow validate` and `flow execute` time.
 
 ### `transform` — JS expression (implicit return)
 

@@ -319,7 +319,40 @@ async function executeActionStep(
   const action = step.action!;
   const platform = resolveValue(action.platform, context) as string;
   const actionId = resolveValue(action.actionId, context) as string;
-  const connectionKey = resolveValue(action.connectionKey, context) as string;
+
+  // Resolve the connection key from either the legacy literal form or the
+  // late-bound { platform, tag? } ref. Mutual exclusion is enforced by the
+  // validator at flow-create/validate time, but re-checked here in case a
+  // hand-edited or programmatically-built step bypasses validation.
+  const hasKey = action.connectionKey !== undefined && action.connectionKey !== null && action.connectionKey !== '';
+  const hasRef = !!action.connection?.platform;
+  if (hasKey && hasRef) {
+    throw new Error(
+      `Action step "${step.id}" has both "connectionKey" and "connection" — set exactly one. ` +
+      `Prefer "connection: { platform, tag? }" so re-auth doesn't break the flow.`
+    );
+  }
+  if (!hasKey && !hasRef) {
+    throw new Error(
+      `Action step "${step.id}" must set "connection: { platform: <name> }" ` +
+      `(or legacy "connectionKey: <key>").`
+    );
+  }
+  let connectionKey: string;
+  if (hasKey) {
+    connectionKey = resolveValue(action.connectionKey, context) as string;
+  } else {
+    // Resolve selectors inside the ref first (e.g. tag: "$.input.userEmail"),
+    // then look up the matching connection. Cache the connection list on the
+    // context so a many-step flow does ONE listConnections per run.
+    const ref = resolveValue(action.connection, context) as { platform: string; tag?: string };
+    if (!context._connections) {
+      context._connections = await api.listConnections();
+    }
+    const conn = await api.resolveConnection(ref, context._connections);
+    connectionKey = conn.key;
+  }
+
   const data = action.data ? resolveValue(action.data, context) as Record<string, unknown> : undefined;
   const pathVars = action.pathVars ? resolveValue(action.pathVars, context) as Record<string, string | number | boolean> : undefined;
   const queryParams = action.queryParams ? resolveValue(action.queryParams, context) as Record<string, any> : undefined;

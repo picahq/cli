@@ -193,9 +193,17 @@ function validateStepsArray(steps: unknown[], pathPrefix: string, errors: Valida
           const a = value as Record<string, unknown>;
           if (!a.platform) errors.push({ path: `${fieldPath}.platform`, message: 'Action must have "platform"' });
           if (!a.actionId) errors.push({ path: `${fieldPath}.actionId`, message: 'Action must have "actionId"' });
-          if (!a.connectionKey) errors.push({ path: `${fieldPath}.connectionKey`, message: 'Action must have "connectionKey"' });
+          validateConnectionForm(a, fieldPath, errors);
         }
       }
+    }
+
+    // Special: action step — exactly one of `connection` or `connectionKey`.
+    // Done as custom logic because the descriptor's required:false leaves the
+    // field as conditionally required (one of two), which the descriptor loop
+    // can't express on its own.
+    if (descriptor.type === 'action') {
+      validateConnectionForm(config, `${path}.${configKey}`, errors);
     }
 
     // Special: code step — require exactly one of source/module and validate module path
@@ -224,6 +232,65 @@ function validateStepsArray(steps: unknown[], pathPrefix: string, errors: Valida
         if (syntaxError) {
           errors.push({ path: `${path}.${configKey}.source`, message: `Syntax error in code step: ${syntaxError}` });
         }
+      }
+    }
+  }
+}
+
+// ── Action connection-form validation ──
+
+/**
+ * Action steps (and the inner action of a paginate step) must set exactly
+ * one of `connectionKey` (legacy literal) or `connection: { platform, tag? }`
+ * (late-bound ref). Pushes errors into `errors` for missing-both, set-both,
+ * or a malformed `connection` ref.
+ */
+function validateConnectionForm(
+  config: Record<string, unknown>,
+  pathPrefix: string,
+  errors: ValidationError[],
+): void {
+  const hasKey = config.connectionKey !== undefined && config.connectionKey !== null && config.connectionKey !== '';
+  const conn = config.connection;
+  const hasRef =
+    !!conn &&
+    typeof conn === 'object' &&
+    !Array.isArray(conn) &&
+    typeof (conn as Record<string, unknown>).platform === 'string' &&
+    (conn as Record<string, string>).platform.length > 0;
+
+  if (hasKey && hasRef) {
+    errors.push({
+      path: pathPrefix,
+      message: 'Action has both "connectionKey" and "connection" — set exactly one. Prefer "connection: { platform, tag? }" so re-auth doesn\'t break the flow.',
+    });
+    return;
+  }
+  if (!hasKey && !hasRef) {
+    errors.push({
+      path: pathPrefix,
+      message: 'Action must set "connection: { platform: <name> }" (or legacy "connectionKey: <key>").',
+    });
+    return;
+  }
+
+  // Validate the shape of `connection` when it's the form in use.
+  if (hasRef) {
+    const c = conn as Record<string, unknown>;
+    if (c.tag !== undefined && typeof c.tag !== 'string') {
+      errors.push({
+        path: `${pathPrefix}.connection.tag`,
+        message: '"connection.tag" must be a string when set',
+      });
+    }
+    // Reject typos / unknown keys to catch e.g. `tags` (plural) silently being ignored.
+    const allowed = new Set(['platform', 'tag']);
+    for (const k of Object.keys(c)) {
+      if (!allowed.has(k)) {
+        errors.push({
+          path: `${pathPrefix}.connection.${k}`,
+          message: `Unknown field "${k}" in connection ref. Allowed: platform, tag.`,
+        });
       }
     }
   }
