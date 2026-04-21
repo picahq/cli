@@ -2,7 +2,7 @@
   "description": "Gmail email threads — primary inbox with full message bodies (no attachments)",
   "platform": "gmail",
   "model": "gmailThreads",
-  "connectionKey": "AUTO",
+  "connection": { "platform": "gmail" },
   "actionId": "conn_mod_def::GJ3ok-Q0D40::oLWNlcx4QDORaL_18z-MsQ",
   "resultsPath": "threads",
   "idField": "id",

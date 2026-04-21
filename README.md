@@ -312,9 +312,9 @@ one sync install && one sync doctor
 ```
 
 ```bash
-# Discover → init (one command: infer + auto-resolve key + auto-test) → run
+# Discover → init (one command: infer + late-bound connection + auto-test) → run
 one sync models stripe
-one sync init stripe balanceTransactions    # connectionKey auto-resolved, test auto-run
+one sync init stripe balanceTransactions    # connection: { platform } baked in, test auto-run
 one sync run stripe --since 90d
 
 # Query, search, SQL
@@ -331,6 +331,8 @@ one sync run stripe --full-refresh
 ```
 
 > **Sync uses passthrough actions only.** Profiles referencing a custom/composer action are rejected at runtime. `sync models` already filters to passthrough-only; if a model has no passthrough list endpoint, compose a flow instead of syncing.
+
+> **Connections are late-bound.** Profiles use `"connection": { "platform": "<name>", "tag"?: "..." }` instead of literal `connectionKey` strings. The key is resolved at sync time, so `one add <platform>` (re-auth) doesn't break the profile. `tag` only needed for multi-account platforms (e.g. two Gmail accounts).
 
 | Subcommand | What it does |
 |------------|-------------|

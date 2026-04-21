@@ -11,6 +11,7 @@ import { classifyRecords, fireHooks, type ChangeEvent } from './hooks.js';
 import { enrichPhase, type EnrichResult } from './enrich.js';
 import { transformRecords } from './transform.js';
 import { extractRecords } from './extract.js';
+import { resolveProfileConnectionKey } from './profile.js';
 import type Database from 'better-sqlite3';
 
 const MAX_RETRIES_PER_PAGE = 3;
@@ -127,6 +128,12 @@ export async function syncModel(
       '--full-refresh and --since cannot be used together. --full-refresh always fetches the whole collection.'
     );
   }
+
+  // Resolve the connection key once up front. Profiles using the new
+  // `connection: { platform, tag? }` form get a fresh lookup; profiles using
+  // legacy `connectionKey` pass through unchanged. Done before the lock so a
+  // missing/ambiguous connection fails fast without leaving stale state.
+  const connectionKey = await resolveProfileConnectionKey(api, profile);
 
   // Acquire a cross-process lock so two concurrent syncs (e.g. cron tick +
   // manual run) don't race on the same table. Dry-run skips the lock since
@@ -311,7 +318,7 @@ export async function syncModel(
           const result = await api.executePassthroughRequest({
             platform,
             actionId: profile.actionId,
-            connectionKey: profile.connectionKey,
+            connectionKey,
             pathVariables: profile.pathVars,
             queryParams: currentPageQueryParams,
             headers: currentPageHeaders,
@@ -575,7 +582,7 @@ export async function syncModel(
     if (profile.enrich && tableCreated && !options.dryRun) {
       enrichResult = await enrichPhase(
         api, db, profile.enrich, model, profile.idField,
-        profile.connectionKey, platform,
+        connectionKey, platform,
         {
           transform: profile.transform,
           exclude: profile.exclude,

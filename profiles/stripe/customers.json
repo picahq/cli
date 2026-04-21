@@ -2,7 +2,7 @@
   "description": "Stripe customers — customer records with email, name, payment methods, and subscription status",
   "platform": "stripe",
   "model": "customers",
-  "connectionKey": "AUTO",
+  "connection": { "platform": "stripe" },
   "actionId": "conn_mod_def::GGx6clhYjSQ::customers-list",
   "resultsPath": "data",
   "idField": "id",

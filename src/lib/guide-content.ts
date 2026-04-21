@@ -463,12 +463,12 @@ one --agent sync models stripe
 # 2. Init — one command does everything:
 #    - resolves action ID
 #    - infers pagination, resultsPath, idField, pathVars from knowledge
-#    - auto-resolves connectionKey (when only one connection exists)
+#    - sets connection: { platform } so the profile survives re-auth
 #    - auto-runs sync test if profile is complete
 one --agent sync init stripe balanceTransactions
 # Response includes _complete:true and _test results when fully resolved.
-# If connectionKey wasn't auto-resolved (multiple connections), patch it:
-one --agent sync init stripe balanceTransactions --config '{"connectionKey":"<from one list>"}'
+# Multi-account platforms (e.g. two Gmail connections) need a tag:
+one --agent sync init gmail gmailThreads --config '{"connection":{"platform":"gmail","tag":"work@example.com"}}'
 
 # 3. Sync
 one --agent sync run stripe
@@ -479,10 +479,29 @@ one --agent sync search "refund" --platform stripe
 one --agent sync sql stripe "SELECT count(*) FROM balanceTransactions"
 \`\`\`
 
+## Connection Resolution — late-bound by default
+
+Sync profiles use a late-bound connection ref instead of a hardcoded key, so re-auth (which always mints a new key) doesn't break the profile:
+
+\`\`\`json
+// recommended — survives re-auth
+"connection": { "platform": "gmail" }
+
+// multi-account: disambiguate with the connection's tag
+"connection": { "platform": "gmail", "tag": "work@example.com" }
+
+// legacy — still works for backwards compat, but breaks on re-auth
+"connectionKey": "live::gmail::default::abc123..."
+\`\`\`
+
+The resolver runs at \`sync test\` and \`sync run\` time. Resolution errors (no connection, ambiguous tag, missing tag with multiple connections) surface as the first check in the test report, before any HTTP call.
+
+To migrate an existing profile: replace the \`connectionKey\` field with \`connection: { platform: "<platform>" }\`. Tags only needed when more than one connection exists for the platform.
+
 ## Auto-Inference
 
 \`sync init\` without \`--config\` does all of this automatically:
-- **connectionKey** — auto-resolved when there's exactly one connection for the platform
+- **connection** — defaults to \`{ platform: "<platform>" }\` (late-bound). When multiple connections exist, init surfaces the available tags so the agent can add one to the ref.
 - **Pagination** — Stripe id-pagination, Notion body-cursor, HubSpot/Google token, offset, link. Inapplicable fields stripped (no nextPath for offset, no passAs for none)
 - **resultsPath** — generic keys (data, results, items) + platform-specific (model name stripped of platform prefix: attioCompanies → companies). Use \`""\`, \`"$"\`, or \`"."\` for responses that return a bare array at the root (e.g. Hacker News \`/v0/topstories.json\`); primitive array elements are auto-wrapped as \`{ [idField]: value }\`.
 - **idField** — id, _id, uuid

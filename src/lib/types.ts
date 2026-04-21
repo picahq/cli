@@ -18,6 +18,21 @@ export interface Connection {
   createdAt?: string;
 }
 
+/**
+ * Late-bound connection reference. Resolved at execution time so re-auth
+ * (which mints a new connection key) doesn't break stored configs. Used in
+ * sync profiles and flow steps as the recommended alternative to literal
+ * `connectionKey` strings.
+ *
+ * `tag` disambiguates when a platform has multiple connections (e.g. two
+ * Gmail accounts tagged with their email addresses). Omit `tag` when there's
+ * only one connection for the platform — resolution will error if ambiguous.
+ */
+export interface ConnectionRef {
+  platform: string;
+  tag?: string;
+}
+
 export interface Platform {
   id: number;
   name: string;

@@ -2,7 +2,7 @@
   "description": "Google Calendar events — meetings, appointments, and all-day events with attendees and location",
   "platform": "google-calendar",
   "model": "events",
-  "connectionKey": "AUTO",
+  "connection": { "platform": "google-calendar" },
   "actionId": "conn_mod_def::GJ5x5pOh2TU::gcal-events-list",
   "resultsPath": "items",
   "idField": "id",

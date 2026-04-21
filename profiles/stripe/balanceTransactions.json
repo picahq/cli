@@ -2,7 +2,7 @@
   "description": "Stripe balance transactions — payments, refunds, payouts, and fees with amount, currency, and status",
   "platform": "stripe",
   "model": "balanceTransactions",
-  "connectionKey": "AUTO",
+  "connection": { "platform": "stripe" },
   "actionId": "conn_mod_def::GGx6clhYjSQ::3kEaM3HQTA2JRfW3DzXC4g",
   "resultsPath": "data",
   "idField": "id",

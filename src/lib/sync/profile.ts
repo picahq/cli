@@ -1,5 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import type { Connection } from '../types.js';
+import type { OneApi } from '../api.js';
 import type { SyncProfile } from './types.js';
 
 const PROFILES_DIR = path.join('.one', 'sync', 'profiles');
@@ -20,11 +22,29 @@ export function readProfile(platform: string, model: string): SyncProfile | null
 }
 
 export function writeProfile(profile: SyncProfile): void {
-  const required: (keyof SyncProfile)[] = ['platform', 'model', 'connectionKey', 'actionId', 'idField', 'pagination'];
+  const required: (keyof SyncProfile)[] = ['platform', 'model', 'actionId', 'idField', 'pagination'];
   for (const field of required) {
     if (!profile[field]) {
       throw new Error(`Missing required field: ${field}`);
     }
+  }
+  // Either `connectionKey` (legacy literal) or `connection` (late-bound ref)
+  // must be set — never both, never neither. The two forms are mutually
+  // exclusive at write time so a profile has one source of truth for which
+  // connection it targets.
+  const hasKey = !!profile.connectionKey;
+  const hasRef = !!profile.connection?.platform;
+  if (hasKey && hasRef) {
+    throw new Error(
+      'Profile has both `connectionKey` and `connection` — set exactly one. ' +
+      'Prefer `connection: { platform, tag? }` so re-auth doesn\'t break the profile.'
+    );
+  }
+  if (!hasKey && !hasRef) {
+    throw new Error(
+      'Missing connection: set `connection: { platform: "<name>" }` ' +
+      '(or legacy `connectionKey: "<key>"`).'
+    );
   }
   // resultsPath is required but empty string / "$" / "." all mean "root array",
   // so we only reject `undefined` (not explicitly set by the caller).
@@ -38,6 +58,30 @@ export function writeProfile(profile: SyncProfile): void {
   fs.mkdirSync(PROFILES_DIR, { recursive: true });
   const filePath = profilePath(profile.platform, profile.model);
   fs.writeFileSync(filePath, JSON.stringify(profile, null, 2));
+}
+
+/**
+ * Resolve a profile's connection to a literal key. Returns the existing
+ * `connectionKey` if set, otherwise resolves the `connection` ref via the
+ * API. Pass `cache` (a pre-fetched connection list) when resolving many
+ * profiles in a row to avoid duplicate listConnections calls.
+ *
+ * Throws with a descriptive message if neither field is set or the ref
+ * doesn't resolve to a single connection.
+ */
+export async function resolveProfileConnectionKey(
+  api: OneApi,
+  profile: SyncProfile,
+  cache?: Connection[]
+): Promise<string> {
+  if (profile.connectionKey) return profile.connectionKey;
+  if (!profile.connection?.platform) {
+    throw new Error(
+      `Profile ${profile.platform}/${profile.model} has no connectionKey or connection ref.`
+    );
+  }
+  const conn = await api.resolveConnection(profile.connection, cache);
+  return conn.key;
 }
 
 /**
@@ -82,7 +126,9 @@ export function generateTemplate(platform: string, model: string, actionId?: str
   return {
     platform,
     model,
-    connectionKey: 'FILL_IN',
+    // Late-bound ref — survives re-auth. Use { platform, tag } when the
+    // platform has multiple connections (e.g. multiple Gmail accounts).
+    connection: { platform },
     actionId: actionId ?? 'FILL_IN',
     resultsPath: 'FILL_IN',
     idField: 'FILL_IN',

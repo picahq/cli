@@ -2,7 +2,7 @@
   "description": "Attio people — CRM contact records with emails, phone numbers, and custom attributes",
   "platform": "attio",
   "model": "attioPeople",
-  "connectionKey": "AUTO",
+  "connection": { "platform": "attio" },
   "identityKey": "primary_email_address",
   "actionId": "conn_mod_def::GJt0lFZ6kpk::attio-people-list",
   "resultsPath": "people",

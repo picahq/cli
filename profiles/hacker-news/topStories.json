@@ -2,7 +2,7 @@
   "description": "Hacker News top story IDs — up to 500 item IDs at /v0/topstories.json (root-array response, primitives wrapped as { id })",
   "platform": "hacker-news",
   "model": "topStories",
-  "connectionKey": "AUTO",
+  "connection": { "platform": "hacker-news" },
   "actionId": "conn_mod_def::GJ3108Dwmm4::avAMAq7HQtW6PT8JhPg5vA",
   "resultsPath": "",
   "idField": "id",

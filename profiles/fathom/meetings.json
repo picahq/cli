@@ -2,7 +2,7 @@
   "description": "Fathom meetings — recorded meetings with transcripts, summaries, action items, and attendees",
   "platform": "fathom",
   "model": "meetings",
-  "connectionKey": "AUTO",
+  "connection": { "platform": "fathom" },
   "actionId": "conn_mod_def::fathom::meetings-list",
   "resultsPath": "items",
   "idField": "recording_id",

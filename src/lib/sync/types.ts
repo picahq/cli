@@ -19,10 +19,28 @@ export interface DateFilterConfig {
   format: 'iso8601' | 'unix' | 'date';
 }
 
+import type { ConnectionRef } from '../types.js';
+
 export interface SyncProfile {
   platform: string;
   model: string;
-  connectionKey: string;
+  /**
+   * Literal connection key (e.g. "live::gmail::default::abc..."). Legacy form.
+   * Prefer `connection: { platform, tag? }` so re-auth doesn't break the
+   * profile — re-auth always mints a new key, and the literal form requires
+   * a manual edit every time.
+   *
+   * Exactly one of `connectionKey` or `connection` must be set.
+   */
+  connectionKey?: string;
+  /**
+   * Late-bound connection reference, resolved at sync run/test/init time.
+   * Survives re-auth: `one add gmail` mints a new key, and the next sync
+   * picks it up automatically.
+   *
+   * Exactly one of `connectionKey` or `connection` must be set.
+   */
+  connection?: ConnectionRef;
   actionId: string;
   /**
    * Dot-path to the array of records in the API response. Use `""`, `"$"`,

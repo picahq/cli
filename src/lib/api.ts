@@ -4,6 +4,7 @@ import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 import type {
   Connection,
+  ConnectionRef,
   ConnectionsResponse,
   Platform,
   PlatformsResponse,
@@ -120,6 +121,55 @@ export class OneApi {
 
   async deleteConnection(id: string): Promise<void> {
     await this.requestFull({ path: `/vault/connections/${id}`, method: 'DELETE' });
+  }
+
+  /**
+   * Resolve a late-bound `ConnectionRef` to a current `Connection`. Pass
+   * `cache` (a pre-fetched connection list) when resolving many refs in a
+   * loop, so each resolve doesn't repeat the listConnections round-trip.
+   *
+   * Errors are deliberately verbose: a sync profile or flow that fails to
+   * resolve a connection should surface *why* (no match / wrong tag /
+   * ambiguous) so the agent can fix the ref without trial and error.
+   */
+  async resolveConnection(
+    ref: ConnectionRef,
+    cache?: Connection[]
+  ): Promise<Connection> {
+    const all = cache ?? await this.listConnections();
+    const platformLower = ref.platform.toLowerCase();
+    const candidates = all.filter(c => c.platform.toLowerCase() === platformLower);
+
+    if (candidates.length === 0) {
+      throw new Error(
+        `No connection found for platform "${ref.platform}". ` +
+        `Run 'one add ${ref.platform}' to connect.`
+      );
+    }
+
+    let matches = candidates;
+    if (ref.tag) {
+      matches = candidates.filter(c => c.tags?.includes(ref.tag!));
+      if (matches.length === 0) {
+        const availableTags = candidates.flatMap(c => c.tags ?? []);
+        throw new Error(
+          `No "${ref.platform}" connection has tag "${ref.tag}". ` +
+          `Available tags: ${availableTags.length > 0 ? availableTags.join(', ') : '(none)'}.`
+        );
+      }
+    }
+
+    if (matches.length > 1) {
+      const tagList = matches
+        .map(c => (c.tags?.length ? c.tags.join(',') : '(no tag)'))
+        .join('; ');
+      throw new Error(
+        `Multiple "${ref.platform}" connections found (tags: ${tagList}). ` +
+        `Add a "tag" field to the connection ref to disambiguate.`
+      );
+    }
+
+    return matches[0];
   }
 
   async listPlatforms(): Promise<Platform[]> {

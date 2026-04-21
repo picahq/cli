@@ -5,6 +5,7 @@ import { getByDotPath } from '../dot-path.js';
 import { getNextPageParams } from './pagination.js';
 import type { SyncProfile } from './types.js';
 import { extractRecords, isRootPath } from './extract.js';
+import { resolveProfileConnectionKey } from './profile.js';
 
 export interface SyncTestCheck {
   name: string;
@@ -64,6 +65,22 @@ export async function testSyncProfile(api: OneApi, profile: SyncProfile): Promis
     else queryParams[limitParam] = pageSize;
   }
 
+  // Check 0: the connection ref resolves to a current connection key.
+  // Done before the action check so a missing/ambiguous connection surfaces
+  // as a clear ref problem rather than a downstream HTTP error.
+  let connectionKey: string;
+  try {
+    connectionKey = await resolveProfileConnectionKey(api, profile);
+    checks.push({ name: 'connection resolves', ok: true });
+  } catch (err) {
+    checks.push({
+      name: 'connection resolves',
+      ok: false,
+      detail: err instanceof Error ? err.message : String(err),
+    });
+    return report;
+  }
+
   // Check 1: the action resolves
   let actionDetails: ActionDetails | undefined;
   try {
@@ -99,7 +116,7 @@ export async function testSyncProfile(api: OneApi, profile: SyncProfile): Promis
     const result = await api.executePassthroughRequest({
       platform: profile.platform,
       actionId: profile.actionId,
-      connectionKey: profile.connectionKey,
+      connectionKey,
       pathVariables: profile.pathVars,
       queryParams,
       data: Object.keys(bodyParams).length > 0 ? bodyParams : undefined,

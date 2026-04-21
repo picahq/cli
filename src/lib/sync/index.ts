@@ -267,22 +267,29 @@ async function syncInitCommand(platform: string, model: string, options: { confi
         }
       }
 
-      // Auto-resolve connectionKey when there's exactly one connection for this platform
+      // Set up the connection ref. The template already defaults to
+      // `connection: { platform }` (late-bound, survives re-auth). When
+      // multiple connections exist, surface the tags so the agent knows
+      // to add a `tag` field — but don't pick one for them, since the
+      // tags express user intent (e.g. multi-account Gmail).
       try {
         const connections = await api.listConnections();
         const platformConns = connections.filter(
-          (c: { platform: string; key: string }) => c.platform === platform
+          (c: { platform: string; tags?: string[] }) => c.platform === platform
         );
         if (platformConns.length === 1) {
-          template.connectionKey = platformConns[0].key;
-          inferred?.reasoning.push(`connectionKey: auto-resolved (only one ${platform} connection)`);
+          inferred?.reasoning.push(`connection: { platform: "${platform}" } resolves to the single available connection`);
         } else if (platformConns.length > 1) {
+          const tags = platformConns
+            .map(c => c.tags?.join(',') ?? '(no tag)')
+            .join('; ');
           inferred?.reasoning.push(
-            `connectionKey: ${platformConns.length} connections found — pick one from \`one list\``
+            `connection: ${platformConns.length} ${platform} connections found (tags: ${tags}). ` +
+            `Add a \`tag\` field to the connection ref to disambiguate.`
           );
         }
       } catch {
-        // Best-effort — leave as FILL_IN
+        // Best-effort — leave the default `connection: { platform }`
       }
 
       // Persist as a draft
@@ -376,6 +383,16 @@ async function syncInitCommand(platform: string, model: string, options: { confi
       ...(patch.pagination ?? {}),
     },
   };
+
+  // Connection form is mutually exclusive: if the patch supplies one form,
+  // clear the other from the merged result. Otherwise a `connection` patch
+  // applied to a profile with a literal `connectionKey` would leave both set
+  // and writeProfile would reject the merged profile.
+  if (patch.connection && !patch.connectionKey) {
+    delete profile.connectionKey;
+  } else if (patch.connectionKey && !patch.connection) {
+    delete profile.connection;
+  }
 
   try {
     writeProfile(profile);

@@ -2,7 +2,7 @@
   "description": "Attio companies — CRM company records with domains, industry, and custom attributes",
   "platform": "attio",
   "model": "attioCompanies",
-  "connectionKey": "AUTO",
+  "connection": { "platform": "attio" },
   "actionId": "conn_mod_def::GJt0lFZ6kpk::attio-companies-list",
   "resultsPath": "companies",
   "idField": "id",
