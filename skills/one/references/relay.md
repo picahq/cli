@@ -16,6 +16,14 @@ one --agent connection list
 
 Identify source (sends webhooks) and destination (receives forwarded data). Note both connection keys.
 
+If you're unsure whether the source platform supports relay at all, list relay-capable platforms first:
+
+```bash
+one --agent relay platforms
+```
+
+This returns `[{ "platform": "<name>", "eventTypeCount": <n> }, ...]` for every platform that One can receive webhooks from. If your source isn't in the list, relay won't work for it.
+
 ### Step 2: Get event types
 
 ```bash
@@ -171,6 +179,13 @@ one --agent relay activate <relay-id> --actions '[{
   },
   "eventFilters": ["customer.created"]
 }]'
+```
+
+## Discovery Commands
+
+```bash
+one --agent relay platforms                        # All relay-capable platforms + event type counts
+one --agent relay event-types <platform>           # Event types for a specific platform
 ```
 
 ## Management Commands

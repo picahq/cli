@@ -1,7 +1,7 @@
 import type { Command } from 'commander';
 import * as output from '../output.js';
 import { OneApi } from '../api.js';
-import { getApiKey, getAccessControlFromAllSources } from '../config.js';
+import { getApiKey, getApiBase, getAccessControlFromAllSources } from '../config.js';
 import { discoverModels } from './models.js';
 import { readProfile, writeProfile, writeDraftProfile, listProfiles, generateTemplate } from './profile.js';
 import { syncModel } from './runner.js';
@@ -122,7 +122,7 @@ function getApi(): OneApi {
   if (!apiKey) {
     output.error('No API key configured. Run "one init" first.');
   }
-  return new OneApi(apiKey);
+  return new OneApi(apiKey!, getApiBase());
 }
 
 // ── sync profiles (built-in) ──

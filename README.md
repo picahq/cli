@@ -349,6 +349,22 @@ one sync run stripe --full-refresh
 
 Change hooks (`onInsert`, `onUpdate`, `onChange`) fire per-page during sync — pipe to a shell command, a flow, or an event log. Root-array responses (e.g. Hacker News `/v0/topstories.json` → `[9129911, 9129199, ...]`) are supported by setting `resultsPath` to `""`, `"$"`, or `"."`; primitive elements are auto-wrapped as `{ [idField]: value }`. Run `one guide sync` for the full reference.
 
+### `one relay`
+
+Receive webhooks from platforms and forward them to any connected platform via passthrough actions.
+
+```bash
+one relay platforms                        # List relay-capable platforms + event type counts
+one relay event-types <platform>           # List supported event types for a platform
+one relay create --connection-key <key> --create-webhook --event-filters '["event.type"]'
+one relay activate <id> --actions '<json>' # Attach passthrough forwarding actions
+one relay list                             # List existing relay endpoints
+one relay events --platform <p>            # Inspect received events
+one relay deliveries --endpoint-id <id>    # Check delivery status
+```
+
+Start with `one relay platforms` to discover which platforms support relay at all, then drill into `event-types <platform>` for the specific events. Run `one guide relay` for the full reference including `--metadata` requirements per platform.
+
 ### `one guide [topic]`
 
 Get the full CLI usage guide, designed for AI agents that only have the binary (no MCP, no IDE skills).

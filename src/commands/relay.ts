@@ -422,6 +422,47 @@ export async function relayDeliveriesCommand(options: {
   }
 }
 
+export async function relayPlatformsCommand(): Promise<void> {
+  const { apiKey } = getConfig();
+  const api = new OneApi(apiKey, getApiBase());
+  const spinner = output.createSpinner();
+  spinner.start('Loading relay-capable platforms...');
+
+  try {
+    const platforms = await api.listRelayPlatforms();
+
+    if (output.isAgentMode()) {
+      output.json({ platforms });
+      return;
+    }
+
+    spinner.stop(`${platforms.length} relay-capable platform${platforms.length === 1 ? '' : 's'} found`);
+
+    if (platforms.length === 0) {
+      console.log('\n  No relay-capable platforms available.\n');
+      return;
+    }
+
+    console.log();
+    printTable(
+      [
+        { key: 'platform', label: 'Platform' },
+        { key: 'eventTypeCount', label: 'Event types', color: pc.dim },
+      ],
+      platforms.map(p => ({ platform: p.platform, eventTypeCount: String(p.eventTypeCount) }))
+    );
+    console.log();
+    console.log(
+      pc.dim(
+        `  Run ${pc.cyan('one relay event-types <platform>')} to see the full event list for a platform.\n`
+      )
+    );
+  } catch (error) {
+    spinner.stop('Failed to load relay platforms');
+    output.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+}
+
 export async function relayEventTypesCommand(platform: string): Promise<void> {
   const { apiKey } = getConfig();
   const api = new OneApi(apiKey, getApiBase());

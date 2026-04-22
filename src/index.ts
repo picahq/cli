@@ -42,6 +42,7 @@ import {
   relayEventGetCommand,
   relayDeliveriesCommand,
   relayEventTypesCommand,
+  relayPlatformsCommand,
 } from './commands/relay.js';
 
 import { registerSyncCommands } from './lib/sync/index.js';
@@ -103,6 +104,7 @@ program
     one cache update-all                  Re-fetch fresh data for all cached entries
 
   Webhook Relay:
+    one relay platforms                   List platforms that support relay + event type counts
     one relay create                      Create a relay endpoint for a connection
     one relay list                        List relay endpoints
     one relay activate <id>               Activate with passthrough actions
@@ -640,6 +642,13 @@ relay
   .description('List supported webhook event types for a platform')
   .action(async (platform: string) => {
     await relayEventTypesCommand(platform);
+  });
+
+relay
+  .command('platforms')
+  .description('List all platforms that support webhook relay, with their event type counts')
+  .action(async () => {
+    await relayPlatformsCommand();
   });
 
 

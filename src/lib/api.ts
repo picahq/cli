@@ -579,6 +579,10 @@ export class OneApi {
     return this.requestFull({ path: '/webhooks/relay/event-types', queryParams: { platform } });
   }
 
+  async listRelayPlatforms(): Promise<Array<{ platform: string; eventTypeCount: number }>> {
+    return this.requestFull({ path: '/webhooks/relay/platforms' });
+  }
+
 
   async waitForConnection(
     platform: string,

@@ -78,6 +78,7 @@ Receive webhooks from platforms (Stripe, GitHub, Airtable, Attio, Google Calenda
 
 **Quick start:**
 \`\`\`bash
+one --agent relay platforms                                     # See relay-capable platforms
 one --agent relay event-types <platform>                        # See available events
 one --agent relay create --connection-key <key> --create-webhook --event-filters '["event.type"]'
 one --agent relay activate <id> --actions '[{"type":"passthrough","actionId":"...","connectionKey":"...","body":{...}}]'
@@ -228,6 +229,7 @@ Webhook relay receives events from platforms (Stripe, GitHub, Airtable, Attio, G
 ## Commands
 
 \`\`\`bash
+one --agent relay platforms                        # List relay-capable platforms + event type counts
 one --agent relay event-types <platform>          # List available events
 one --agent relay create --connection-key <key> --create-webhook --event-filters '["event.type"]'
 one --agent relay activate <id> --actions '<json>' # Add forwarding actions
@@ -242,7 +244,7 @@ one --agent relay deliveries --endpoint-id <id>    # Check delivery status
 
 ## Building a Relay
 
-1. **Discover connections** — identify source and destination platforms
+1. **Discover connections** — identify source and destination platforms. Use \`one --agent relay platforms\` to see which platforms support relay at all before digging into a specific one.
 2. **Get event types** — \`one --agent relay event-types <platform>\`
 3. **Get source knowledge** — understand the incoming webhook payload shape (\`{{payload.*}}\` paths)
 4. **Get destination knowledge** — understand the outgoing API body shape
