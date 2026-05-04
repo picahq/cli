@@ -53,6 +53,7 @@ import { onboardCommand } from './commands/onboard.js';
 import { loginCommand } from './commands/login.js';
 import { logoutCommand } from './commands/logout.js';
 import { updateCommand, checkLatestVersionCached, getCurrentVersion, isNewerVersion, autoUpdate } from './commands/update.js';
+import { closeBackendIfCached } from './lib/memory/runtime.js';
 import { setAgentMode, isAgentMode, json as outputJson, error as outputError } from './lib/output.js';
 import { syncSkillsIfStale, forceSyncSkills, getSkillStatus } from './lib/skill-sync.js';
 
@@ -161,6 +162,12 @@ program.hook('preAction', (thisCommand) => {
 });
 
 program.hook('postAction', async () => {
+  // Close the memory backend (if one was instantiated) so the process
+  // doesn't sit on node-pg's default 10s idleTimeoutMillis after the
+  // command's work is done. Without this, `mem search` prints its JSON
+  // immediately but the process hangs for ~10s before exiting.
+  await closeBackendIfCached();
+
   if (!updateCheckPromise) return;
   const info = await updateCheckPromise;
   if (!info) return;

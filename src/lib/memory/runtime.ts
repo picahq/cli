@@ -74,6 +74,30 @@ export function resetBackendSingleton(): void {
   cached = null;
 }
 
+/**
+ * Best-effort backend shutdown. Called from the program's postAction
+ * hook so a one-shot CLI command exits cleanly after the work is done.
+ *
+ * Why: node-pg's Pool defaults to `idleTimeoutMillis: 10000`. After
+ * every CLI command, the still-idle pooled connection keeps the event
+ * loop alive for that full 10s before the process can exit. End users
+ * see `mem search` block for ~10s after the JSON has already printed.
+ *
+ * No-op when no backend was ever instantiated (no `mem`/`sync` command
+ * ran, or the lookup failed before getBackend resolved). Errors are
+ * swallowed — we're shutting down anyway, complaining isn't useful.
+ */
+export async function closeBackendIfCached(): Promise<void> {
+  if (!cached) return;
+  try {
+    const backend = await cached;
+    await backend.close();
+  } catch {
+    /* shutdown is best-effort */
+  }
+  cached = null;
+}
+
 // ─── Embedding-aware helpers ───────────────────────────────────────────────
 
 export interface AddOptions {
