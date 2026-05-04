@@ -45,7 +45,8 @@ import {
   relayPlatformsCommand,
 } from './commands/relay.js';
 
-import { registerSyncCommands } from './lib/sync/index.js';
+import { registerSyncCommands } from './lib/memory/sync/index.js';
+import { registerMemoryCommands } from './commands/mem.js';
 import { cacheClearCommand, cacheListCommand, cacheUpdateAllCommand } from './commands/cache.js';
 import { guideCommand } from './commands/guide.js';
 import { onboardCommand } from './commands/onboard.js';
@@ -81,7 +82,7 @@ program
     4. one actions execute <p> <id> <key> Execute the action
 
   Guide:
-    one guide [topic]                     Full CLI guide (topics: overview, actions, workflows, all)
+    one guide [topic]                     Full CLI guide (topics: overview, actions, workflows, memory, sync, all)
 
   Workflows (multi-step):
     one flow list                         List saved workflows
@@ -89,14 +90,23 @@ program
     one flow execute <key>                Execute a workflow (key can be group/key)
     one flow validate <key>               Validate a flow
 
-  Data Sync (run "one sync install" first, then "one guide sync" for full reference):
+  Memory (unified store; auto-inits on first use — "one guide memory" for full reference):
+    one mem add <type> <json>             Add a record (--tags, --keys, --weight, --embed)
+    one mem search "<q>"                  Hybrid FTS + semantic (--deep forces embedding)
+    one mem list <type>                   List records of a type
+    one mem link <a> <b> <relation>       Create a typed graph edge (--bi for bidirectional)
+    one mem status / doctor               Config + health
+    one mem config set embedding.apiKey   Enable semantic search (or set OPENAI_API_KEY)
+
+  Data Sync (writes into memory; "one guide sync" for the full reference):
     one sync models <platform>            Discover available data models
-    one sync init <plat> <model>          Create profile (auto-infers from knowledge)
-    one sync test <plat>/<model>          Validate + auto-fix profile fields
-    one sync run <platform>               Sync data (--full-refresh for deletions)
-    one sync query <plat>/<model>         Query local data (--where, --refresh)
-    one sync search "<query>"             Full-text search across all synced data
+    one sync init <plat> <model>          Create/patch profile (seeds from built-in)
+    one sync test <plat>/<model>          Validate profile. --show-searchable previews embedded text
+    one sync run <platform>               Sync data (--full-refresh, --since, --no-memory)
+    one sync query <plat>/<model>         Query memory (--where supports dotted paths)
+    one sync search "<query>"             Hybrid FTS + semantic across all synced data
     one sync schedule add <plat> --every  Cron schedule (e.g. 1h) with change hooks
+    one mem sync <subcmd>                 Alias of "one sync" — identical handlers
 
   Cache:
     one cache list                        List cached entries with age and status
@@ -654,7 +664,11 @@ relay
 
 // ── Sync Commands ──
 
-registerSyncCommands(program);
+registerSyncCommands(program, { alias: 's' });
+
+// ── Memory Commands ──
+
+registerMemoryCommands(program);
 
 // ── Cache Commands ──
 

@@ -1,4 +1,4 @@
-import { getByDotPath } from '../dot-path.js';
+import { getByDotPath } from '../../dot-path.js';
 
 /**
  * A profile's `resultsPath` value that targets the root of the response

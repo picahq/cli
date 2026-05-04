@@ -1,8 +1,9 @@
-import type { OneApi } from '../api.js';
-import { ApiError } from '../api.js';
-import { isAgentMode } from '../output.js';
-import type { EnrichConfig } from './types.js';
-import type { ActionDetails } from '../types.js';
+import type { OneApi } from '../../api.js';
+import { ApiError } from '../../api.js';
+import { isAgentMode } from '../../output.js';
+import type { EnrichConfig, SyncProfile } from './types.js';
+import type { ActionDetails } from '../../types.js';
+import { writePageToMemory } from './mem-writer.js';
 import type Database from 'better-sqlite3';
 import { transformRecords } from './transform.js';
 import { fireHooks, type ChangeEvent } from './hooks.js';
@@ -165,6 +166,14 @@ export interface EnrichContext {
   onUpdate?: string;
   /** profile.onChange — fallback hook fired when onUpdate isn't set. */
   onChange?: string;
+  /**
+   * Full profile, passed so enrich can mirror merged rows into the unified
+   * memory store (mem-writer handles identity-key, sources, tags, embed,
+   * searchable paths). Without this, memory holds the pre-enrich list
+   * payload while SQLite gets the enriched detail — which defeats the
+   * memory-primary story for profiles with an enrich block (Gmail, Fathom).
+   */
+  profile?: SyncProfile;
 }
 
 /**
@@ -311,6 +320,7 @@ export async function enrichPhase(
 
     // Step 3: per-row profile-level exclude + identity, schema evolution, UPDATE.
     const hookEvents: ChangeEvent[] = [];
+    const memoryBatch: Record<string, unknown>[] = [];
     for (const { merged, id } of writes) {
       if (ctx.exclude && ctx.exclude.length > 0) {
         stripExcludedFields(merged, ctx.exclude);
@@ -346,11 +356,28 @@ export async function enrichPhase(
       }
 
       enriched++;
+      memoryBatch.push(merged);
 
       // Enrichment writes are always "update" events — the row existed in SQL
       // before this phase ran (Phase 1 inserted it with _enriched_at NULL).
       if (ctx.onUpdate || ctx.onChange) {
         hookEvents.push({ type: 'update', platform, model, record: merged, timestamp: now });
+      }
+    }
+
+    // Mirror the enriched batch into the unified memory store. Without this,
+    // mem_records.data holds the pre-enrich list shape (ids + snippets) while
+    // SQLite has the full thread bodies / meeting transcripts / etc. — which
+    // defeats the point of enrich for memory-primary reads. Best-effort: if
+    // the profile wasn't plumbed through, skip quietly.
+    if (ctx.profile && memoryBatch.length > 0) {
+      try {
+        await writePageToMemory(ctx.profile, memoryBatch);
+      } catch (err) {
+        if (!isAgentMode()) {
+          const msg = err instanceof Error ? err.message : String(err);
+          process.stderr.write(`  Enrich mem-write failed for ${memoryBatch.length} row(s): ${msg}\n`);
+        }
       }
     }
 

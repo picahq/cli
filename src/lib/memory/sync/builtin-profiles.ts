@@ -17,8 +17,15 @@ export interface BuiltinProfile {
   [key: string]: unknown;
 }
 
-/** Resolve the package's profiles directory. */
-function getProfilesDir(): string {
+/**
+ * Resolve the package's profiles directory.
+ *
+ * Exported so other call sites (e.g. `mem migrate`'s mtime-based heal
+ * transparency check) can stat the profile file without re-implementing
+ * the directory walk and falling out of sync with this loader. Returns
+ * an empty string when the dir can't be located.
+ */
+export function getProfilesDir(): string {
   const thisFile = fileURLToPath(import.meta.url);
   const thisDir = path.dirname(thisFile);
 

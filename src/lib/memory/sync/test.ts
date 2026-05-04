@@ -1,7 +1,7 @@
-import type { OneApi } from '../api.js';
-import { ApiError } from '../api.js';
-import type { ActionDetails } from '../types.js';
-import { getByDotPath } from '../dot-path.js';
+import type { OneApi } from '../../api.js';
+import { ApiError } from '../../api.js';
+import type { ActionDetails } from '../../types.js';
+import { getByDotPath } from '../../dot-path.js';
 import { getNextPageParams } from './pagination.js';
 import type { SyncProfile } from './types.js';
 import { extractRecords, isRootPath } from './extract.js';
@@ -19,11 +19,21 @@ export interface SyncTestReport {
   ok: boolean;
   checks: SyncTestCheck[];
   sample?: Record<string, unknown>;
+  /**
+   * First N records from the fetched page. `sample` is still the first
+   * one (kept for back-compat); `samples` lets callers check how
+   * consistently a `memory.searchable` path resolves across real data
+   * instead of guessing from a single row.
+   */
+  samples?: Array<Record<string, unknown>>;
   detectedColumns?: Array<{ name: string; type: string }>;
   paginationPreview?: Record<string, unknown>;
   /** Fields that sync test auto-fixed from the real response (e.g. resultsPath). */
   autoFixed?: Record<string, string>;
 }
+
+/** How many records --show-searchable averages over when reporting hit rates. */
+export const SEARCHABLE_SAMPLE_SIZE = 5;
 
 function detectColumnType(value: unknown): string {
   if (value === null || value === undefined) return 'TEXT';
@@ -219,22 +229,30 @@ export async function testSyncProfile(api: OneApi, profile: SyncProfile): Promis
 
   const first = records[0] as Record<string, unknown>;
 
-  // Check 4: idField exists on sample. Auto-discover if FILL_IN or missing.
+  // Check 4: idField resolves to a scalar on the sample. Auto-discover a
+  // sensible default when missing, AND fail loud when it resolves to an
+  // object — otherwise the stringified "[object Object]" becomes the key
+  // and every record collapses to the same memory row. Silent data loss.
   let resolvedIdField = profile.idField;
-  let idValue = first[resolvedIdField];
+  let idValue: unknown = getByDotPath(first, resolvedIdField);
   if ((idValue === undefined || idValue === null) && typeof first === 'object') {
-    // Auto-discover: try common id field names
-    const idCandidates = ['id', '_id', 'uuid', 'ID', 'Id'];
-    const found = idCandidates.find(c => first[c] !== undefined && first[c] !== null);
+    // Auto-discover: try common id field names (scalar first, then
+    // dot-paths into a nested `id` object for APIs like Attio v2 that
+    // wrap ids as `{workspace_id, object_id, record_id}`).
+    const idCandidates = ['id', '_id', 'uuid', 'ID', 'Id', 'id.record_id', 'id.id'];
+    const found = idCandidates.find(c => {
+      const v = getByDotPath(first, c);
+      return v !== undefined && v !== null && typeof v !== 'object';
+    });
     if (found) {
       resolvedIdField = found;
-      idValue = first[found];
+      idValue = getByDotPath(first, found);
       report.autoFixed = report.autoFixed ?? {};
       report.autoFixed.idField = found;
       checks.push({
         name: `idField auto-discovered → "${found}"`,
         ok: true,
-        detail: `Profile had "${profile.idField}" which wasn't on the record; found "${found}"`,
+        detail: `Profile had "${profile.idField}" which didn't resolve to a scalar; found "${found}"`,
       });
     }
   }
@@ -244,6 +262,27 @@ export async function testSyncProfile(api: OneApi, profile: SyncProfile): Promis
       name: `idField "${resolvedIdField}" present`,
       ok: false,
       detail: `Not found. Available fields: [${Object.keys(first).slice(0, 20).join(', ')}]`,
+    });
+  } else if (typeof idValue === 'object') {
+    // CRITICAL: object values silently collapse on stringification. Reject
+    // here so `sync run` can't drop 99% of the data into a single memory
+    // row keyed "[object Object]". Suggest dotted leaves the caller can
+    // choose from so the fix is obvious.
+    const suggestions = typeof idValue === 'object' && idValue !== null
+      ? Object.keys(idValue)
+          .filter(k => typeof (idValue as Record<string, unknown>)[k] !== 'object')
+          .map(k => `${resolvedIdField}.${k}`)
+          .slice(0, 5)
+      : [];
+    checks.push({
+      name: `idField "${resolvedIdField}" present`,
+      ok: false,
+      detail:
+        `Resolved to a nested object (${Object.keys(idValue as object).slice(0, 5).join(', ')}…). ` +
+        `Memory keys by string-stringified ids, so every row would collapse to "[object Object]" — silent data loss. ` +
+        (suggestions.length
+          ? `Try a dotted path: ${suggestions.join(' | ')}.`
+          : 'Use a dotted path that resolves to a scalar (e.g. "id.record_id").'),
     });
   } else {
     checks.push({
@@ -273,12 +312,13 @@ export async function testSyncProfile(api: OneApi, profile: SyncProfile): Promis
     });
   }
 
-  // Fill detected columns and sample
+  // Fill detected columns and sample(s)
   report.detectedColumns = Object.entries(first).map(([name, value]) => ({
     name,
     type: detectColumnType(value),
   }));
   report.sample = first;
+  report.samples = (records as Record<string, unknown>[]).slice(0, SEARCHABLE_SAMPLE_SIZE);
   report.ok = checks.every(c => c.ok);
 
   return report;

@@ -3,9 +3,11 @@
   "platform": "attio",
   "model": "attioCompanies",
   "connection": { "platform": "attio" },
-  "actionId": "conn_mod_def::GJt0lFZ6kpk::attio-companies-list",
-  "resultsPath": "companies",
-  "idField": "id",
+  "identityKey": "values.domains[0].domain",
+  "actionId": "conn_mod_def::GJ0CbN-LPiU::A6h6M9QkS0Cs2Lt9CdPH7Q",
+  "pathVars": { "object": "companies" },
+  "resultsPath": "data",
+  "idField": "id.record_id",
   "pagination": {
     "type": "offset",
     "passAs": "body:offset"

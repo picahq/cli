@@ -71,12 +71,24 @@ export interface WhoAmIResponse {
 
 export interface Config {
   apiKey: string;
+  /**
+   * OpenAI API key. Top-level credential alongside `apiKey` so every
+   * subsystem that needs OpenAI (memory embeddings today, more later)
+   * reads from one canonical place. Env `OPENAI_API_KEY` overrides.
+   */
+  openaiApiKey?: string;
   installedAgents: string[];
   createdAt: string;
   accessControl?: AccessControlSettings;
   cacheTtl?: number;
   apiBase?: string;
   whoami?: WhoAmIResponse;
+  /**
+   * Unified-memory subsystem config. Shape defined in lib/memory/config.ts
+   * (kept loose here to avoid import cycles between the core config layer
+   * and the memory module).
+   */
+  memory?: unknown;
 }
 
 export interface ConnectionsResponse {

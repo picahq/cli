@@ -93,8 +93,8 @@ one --agent relay deliveries --endpoint-id <id>                 # Check delivery
 - \`--create-webhook\` auto-registers the webhook URL with the source platform
 - Use \`actions knowledge\` to learn both the incoming payload shape AND the destination API shape before building templates
 
-### 4. Sync — Local data sync for instant offline queries
-Sync platform data into local SQLite for instant queries, full-text search, and change-driven automation. Requires a one-time \`one sync install\`. Run \`one guide sync\` for the full reference.
+### 4. Memory + Sync — Unified store with hybrid FTS + semantic search
+One ships a local memory store (a real Postgres process bootstrapped on demand via the bundled \`embedded-postgres\` plugin, with a \`postgres\` plugin for remote/self-hosted) that backs both user-authored notes (\`one mem add\`) and synced platform data (\`one sync run\`). Auto-initializes on first use — no separate install step. Run \`one guide memory\` and \`one guide sync\` for the full references.
 
 ## Topics
 
@@ -410,15 +410,153 @@ All cache commands respect \`--agent\` for JSON output.
 | Default | — | 3600 (1 hour) |
 `;
 
+export const GUIDE_MEMORY = `# One Memory — Reference
+
+The unified memory store is a local, pluggable database (\`embedded-postgres\` by default — a real Postgres process bootstrapped on demand) that backs both user-authored memories AND synced platform data. Every \`one mem\` and \`one sync\` call lands in the same store, keyed by a stable source id and searchable via FTS + optional semantic embedding.
+
+## Zero-config
+
+The first \`one mem\` call on a fresh install auto-initializes:
+- Backend: \`embedded-postgres\` (Postgres 18 via pgserve; downloads ~52MB of binaries on first use, ~2s on later boots)
+- Cluster path: \`~/.one/pg/cluster/\`, daemon PID/port at \`~/.one/pg/.pgserve.json\`
+- Embedding provider: \`openai\` if a key is already resolvable AND pgvector is loadable; else \`none\`
+
+If pgvector isn't installed in the bundled Postgres (the default binary distribution doesn't ship it yet), the schema applies cleanly without an \`embedding\` column, all FTS paths work, and \`mem doctor\` emits an \`_upgrade\` block pointing at \`brew install pgvector\` when an OpenAI key is present.
+
+No \`mem init\` step needed. \`mem init\` still exists for power-user tuning (switch to Postgres, change paths, toggle defaults).
+
+## OpenAI key (optional, enables semantic search)
+
+Stored top-level in \`~/.one/config.json\` as \`openaiApiKey\`, same precedence chain as \`ONE_SECRET\`:
+
+1. \`process.env.OPENAI_API_KEY\`
+2. \`.onerc\` with \`OPENAI_API_KEY=sk-...\`
+3. Project-scoped \`config.openaiApiKey\`
+4. Global \`config.openaiApiKey\`
+
+Three equivalent ways to set:
+\`\`\`bash
+one init                                       # interactive prompt (skip with Enter)
+one --agent mem config set embedding.apiKey sk-...   # writes to top-level
+export OPENAI_API_KEY=sk-...                   # no persistence
+\`\`\`
+
+When the key is present but provider is still \`none\`, \`mem config set embedding.apiKey\` auto-flips the provider to \`openai\` in the same write.
+
+When no key is available, every response from \`mem status\`, \`mem search\`, and \`mem doctor\` includes a structured \`_upgrade\` block with \`how\` and \`benefit\` fields. Agents should surface that to the user verbatim — it tells them semantic search is available as an upgrade.
+
+## Records
+
+\`\`\`bash
+# Add
+one --agent mem add note '{"content":"..."}' --tags work,urgent --weight 8 --keys 'doc:design-v2'
+
+# Get (optionally with links)
+one --agent mem get <id> --links
+
+# Update (shallow merge into data)
+one --agent mem update <id> '{"status":"done"}'
+
+# Archive / unarchive
+one --agent mem archive <id> --reason superseded
+
+# List by type — type is positional. Synced rows are namespaced as <platform>/<model>.
+# There is NO --platform flag on \`mem list\`, and NO platform column in the schema.
+one --agent mem list note --limit 20
+one --agent mem list "gmail/threads" --limit 5
+one --agent mem list "attio/attioPeople"
+one --agent mem list "google-calendar/events"
+
+# Search (hybrid FTS + semantic when embeddings enabled)
+one --agent mem search "deadline next week"
+one --agent mem search "..." --deep          # force embedding on query
+one --agent mem search "..." --type note     # restrict to one type
+\`\`\`
+
+Every search response includes \`searchMode: "hybrid" | "fts_only"\`. Use it to detect when semantic ranking isn't actually running.
+
+If you need raw SQL via \`mem sql\`, filter by \`type\` (not \`platform\` — there is no such column):
+
+\`\`\`bash
+one --agent mem sql "SELECT type, COUNT(*) FROM mem_records WHERE type LIKE 'gmail/%' GROUP BY type"
+\`\`\`
+
+## Graph
+
+\`\`\`bash
+one --agent mem link <a-id> <b-id> relates_to --bi
+one --agent mem linked <id> --relation relates_to --direction both
+one --agent mem unlink <a-id> <b-id> relates_to
+\`\`\`
+
+## Sources (who wrote this record)
+
+Synced rows carry \`sources\` entries keyed by \`<platform>/<model>:<external_id>\`:
+
+\`\`\`bash
+one --agent mem sources <id>                          # list source entries
+one --agent mem find-by-source attio/attioPeople:abc-123
+\`\`\`
+
+## Sync into memory
+
+\`one mem sync\` is a full alias of \`one sync\` — same handlers, same options. Use either.
+
+\`\`\`bash
+# Memory is ALWAYS written on sync (default behaviour since v1.41).
+# Pass --no-memory to skip (rare; breaks mem search / mem query over synced data).
+one --agent sync run stripe
+one --agent mem sync run stripe                       # identical
+
+# Read synced data out of memory
+one --agent sync query stripe/customers --where "plan=pro" --limit 20
+one --agent sync query stripe/customers --where 'address.city=SF'   # dotted path
+one --agent sync search "refund" --platform stripe                  # hybrid per-type
+\`\`\`
+
+See \`one guide sync\` for the profile-declaration workflow, \`memory.searchable\` paths, and \`--show-searchable\` preview.
+
+## Diagnostics
+
+\`\`\`bash
+one --agent mem status          # backend, provider, _upgrade hint
+one --agent mem doctor          # 7-check health report
+one --agent mem vacuum          # backend maintenance (VACUUM ANALYZE)
+one --agent mem reindex         # re-embed records under current model
+\`\`\`
+
+## Admin
+
+\`\`\`bash
+one --agent mem export records.jsonl
+one --agent mem import records.jsonl                  # idempotent via keys[]
+one --agent mem migrate --dry-run                     # preview legacy .db → memory
+one --agent mem migrate --cleanup -y                  # migrate + delete .db files
+\`\`\`
+
+## Backends
+
+First-party plugins: \`embedded-postgres\` (default — Postgres 18 via pgserve, daemon at \`~/.one/pg/\`), \`postgres\` (Supabase, Neon, self-hosted). Third-party plugins declared in \`memory.plugins\` as npm package specs.
+
+\`\`\`bash
+one --agent mem init --backend postgres --connection-string 'postgres://...'
+# or: export MEM_DATABASE_URL and re-run mem init
+\`\`\`
+
+Switching backends does not migrate data. Run \`mem export | mem import\` to copy between stores.
+`;
+
 export const GUIDE_SYNC = `# One Sync — Reference
 
-Sync platform data into local SQLite for instant queries, full-text search, scheduled refresh, and change-driven automation.
+Sync platform data into the unified memory store for instant queries, hybrid FTS + semantic search, scheduled refresh, and change-driven automation. Sync is the write path; reads go through \`one mem\` or the \`sync query\` / \`sync search\` commands.
 
 ## Getting Started
 
+The local SQLite fallback installed by the old \`sync install\` flow is still present for backwards compatibility, but memory auto-initializes on first use with the bundled \`embedded-postgres\` backend (Postgres 18 via pgserve) — no install step needed.
+
 \`\`\`bash
-one sync install                    # One-time: install the SQLite engine
-one sync doctor                     # Verify it's working
+one --agent mem status              # confirms the backend + provider
+one --agent mem doctor              # 7-check health report
 \`\`\`
 
 ## Built-in Profiles
@@ -472,14 +610,79 @@ one --agent sync init stripe balanceTransactions
 # Multi-account platforms (e.g. two Gmail connections) need a tag:
 one --agent sync init gmail gmailThreads --config '{"connection":{"platform":"gmail","tag":"work@example.com"}}'
 
-# 3. Sync
-one --agent sync run stripe
+# 3. (Optional but recommended for profiles with embed:true) Declare the
+#    fields that should be embedded + FTS-indexed, then preview the text.
+one --agent sync init stripe balanceTransactions --config '{
+  "memory": {
+    "embed": true,
+    "searchable": ["description", "type", "amount", "currency"]
+  }
+}'
+one --agent sync test stripe/balanceTransactions --show-searchable
+# → Returns searchable: { mode: "declared", length, text, paths: [{path, found, sample}] }
+# Iterate on paths until the preview is clean signal (no UUIDs, timestamps, URLs).
 
-# 4. Query
+# 4. Sync — memory is written automatically; pass --no-memory to skip
+one --agent sync run stripe
+one --agent mem sync run stripe                    # identical (alias)
+
+# 5. Query + search (read from memory)
 one --agent sync query stripe/balanceTransactions --where "status=available" --limit 20
-one --agent sync search "refund" --platform stripe
-one --agent sync sql stripe "SELECT count(*) FROM balanceTransactions"
+one --agent sync query stripe/customers --where 'address.city=SF'   # dotted --where paths
+one --agent sync search "refund" --platform stripe                  # hybrid FTS + semantic
 \`\`\`
+
+## memory.searchable — agent-declared clean text
+
+Profile field that drives what gets embedded + full-text-indexed. Without it, the default walker concatenates every string in the record — correct but often 90% noise (UUIDs, timestamps, URLs) for hierarchical APIs. Always declare paths when \`memory.embed: true\`.
+
+\`\`\`jsonc
+{
+  "memory": {
+    "embed": true,
+    "searchable": [
+      "values.name[0].full_name",              // numeric index
+      "values.job_title[0].value",
+      "messages[].snippet",                    // wildcard — every array element
+      "messages[].payload.parts[].body.data"   // nested wildcards
+    ]
+  }
+}
+\`\`\`
+
+Get a ranked starter list from a real sample:
+
+\`\`\`bash
+one --agent sync suggest-searchable <platform>/<model>
+\`\`\`
+
+Walks the first page of records, ranks every leaf path by signal density (non-empty rate × log-length × noise penalty). UUIDs / ISO timestamps / URLs / numeric strings / boolean and number leaves are penalized or filtered; prose and enum-title fields rank high. The response includes a paste-ready \`configPatch\` the agent can drop into \`sync init --config\`.
+
+Preview what will actually be embedded across 5 sample records:
+
+\`\`\`bash
+one --agent sync test <platform>/<model> --show-searchable
+\`\`\`
+
+The response \`searchable.paths\` array carries \`{path, hits, total, sample}\` per declared path. \`5/5\` means the path resolves on every record; \`1/5\` means it's real but sparse; \`0/5\` is a typo or a field that never appears on this page. Iterate until the numbers and samples match your intent, then \`sync run\` to ship.
+
+## sync run — memory-primary
+
+\`\`\`
+--force         Ignore existing state, start fresh
+--max-pages <n> Cap page count (good for probing)
+--since <dur>   Only fetch records since (e.g. 30d, 90d)
+--dry-run       Fetch first page only, show results, no writes
+--full-refresh  Fetch ALL and archive rows whose source didn't reappear
+--no-memory     Skip the memory write (rare; breaks mem/sync queries over this data)
+--to-memory     (deprecated — memory is now always written; kept for back-compat)
+\`\`\`
+
+**\`--full-refresh\` + \`--max-pages\` = reconcile is skipped.** Reconcile can only tell "not returned by the API" from "we didn't ask" if pagination actually exhausted. Truncated runs would mass-archive unseen rows as \`deleted_upstream\`, so the reconcile pass skips with \`reconcileSkipped: true\` and \`deletedStale: 0\`. Re-run without \`--max-pages\` to prune.
+
+**Upsert-by-keys is self-healing.** If a previous buggy run archived a row, the next \`--full-refresh\` that re-pulls its source key flips it back to \`active\` and clears \`archived_reason\`. No manual un-archive required.
+
+**Every sync output surfaces \`statusCounts: { active, archived }\`** — if archived is high after a run, the store needs a full \`--full-refresh\` (no \`--max-pages\`) to heal.
 
 ## Connection Resolution — late-bound by default
 
@@ -590,11 +793,15 @@ Add \`identityKey\` to a sync profile to extract a stable cross-platform identif
 {"platform": "attio",   "model": "attioPeople", "identityKey": "email_addresses[0].email_address"}
 \`\`\`
 
-The value is lowercased and trimmed. Query across platforms:
+The value is lowercased and trimmed, stored as a prefixed key on the mem record (e.g. \`email:jane@acme.com\`). Look up across platforms:
+
 \`\`\`bash
-one --agent sync sql hubspot "SELECT * FROM contacts WHERE _identity = 'jane@acme.com'"
-one --agent sync sql stripe "SELECT * FROM customers WHERE _identity = 'jane@acme.com'"
+one --agent mem find-by-source hubspot/contacts:<id>
+# Or via the dotted --where path on the identity key:
+one --agent sync query hubspot/contacts --where 'email=jane@acme.com'
 \`\`\`
+
+\`sync sql\` was retired in the unified memory cutover — a raw-SQL surface can't safely span the embedded Postgres, remote Postgres, and third-party backends without leaking specifics. Use \`mem search\` / \`sync search\` / \`sync query\` with dotted \`--where\` paths instead.
 
 ## Exclude Fields
 
@@ -648,21 +855,22 @@ Fetches ALL records and deletes local rows whose IDs are no longer in the source
 
 ## Commands Reference
 
+Every \`sync X\` command is also exposed as \`mem sync X\` — same handlers, same options. Pick whichever reads better in context.
+
 | Command | What it does |
 |---------|-------------|
 | \`sync profiles [platform]\` | List built-in pre-validated profiles |
-| \`sync install\` | Install SQLite engine (first time) |
-| \`sync doctor\` | Verify engine health |
+| \`sync doctor\` | Verify sync engine health |
 | \`sync models <platform>\` | Discover available models |
-| \`sync init <plat> <model>\` | Create profile (auto-infers from knowledge) |
-| \`sync test <plat>/<model>\` | Validate profile + auto-fix fields |
-| \`sync run <platform>\` | Sync data (\`--full-refresh\`, \`--since\`, \`--dry-run\`) |
-| \`sync query <plat>/<model>\` | Query with \`--where\`, \`--after/before\`, \`--refresh\` |
-| \`sync search "<query>"\` | FTS5 across all synced data |
-| \`sync sql <plat> "<sql>"\` | Raw SELECT queries |
+| \`sync init <plat> <model>\` | Create/patch profile (seeds from built-in, auto-tests) |
+| \`sync test <plat>/<model>\` | Validate profile. \`--show-searchable\` previews embedded text across 5 samples with per-path hit rates |
+| \`sync suggest-searchable <plat>/<model>\` | Rank candidate \`memory.searchable\` paths by signal density; emits paste-ready config |
+| \`sync run <platform>\` | Sync data (\`--full-refresh\`, \`--since\`, \`--dry-run\`, \`--no-memory\`) |
+| \`sync query <plat>/<model>\` | Query memory with \`--where\` (dotted paths), \`--after/before\` |
+| \`sync search "<query>"\` | Hybrid FTS + semantic across all synced data |
 | \`sync list [platform]\` | Show profiles, record counts, freshness |
 | \`sync schedule add/list/status/remove/repair\` | Manage cron schedules |
-| \`sync remove <platform>\` | Delete local data (\`--dry-run\` to preview) |
+| \`sync remove <platform>\` | Delete synced data (\`--dry-run\` to preview) |
 
 ## Sync Profile Fields
 
@@ -696,18 +904,21 @@ Fetches ALL records and deletes local rows whose IDs are no longer in the source
 
 \`\`\`
 .one/sync/
-  profiles/{platform}_{model}.json    # sync profiles
-  data/{platform}.db                  # SQLite databases (WAL mode)
-  state/{platform}/{model}.json       # per-model checkpoint tracking
+  profiles/{platform}_{model}.json    # sync profiles (source of truth for each run)
+  data/{platform}.db                  # legacy SQLite DBs (kept for enrich-phase rollback)
   events/{platform}_{model}.jsonl     # change event logs (if onChange: "log")
   logs/{platform}.log                 # cron run logs
   locks/{platform}_{model}/           # cross-process sync locks
+~/.one/pg/cluster/                    # unified memory store — embedded Postgres data dir
+~/.one/pg/.pgserve.json               # daemon PID/port file (cleared on stop)
+~/.one/pg/pgserve.log                 # daemon stdout/stderr
+~/.one/config.json                    # apiKey + openaiApiKey + memory config block
 ~/.one/sync/
   schedules.json                      # global schedule registry
 \`\`\`
 `;
 
-type GuideTopic = 'overview' | 'actions' | 'flows' | 'relay' | 'cache' | 'sync' | 'all';
+type GuideTopic = 'overview' | 'actions' | 'flows' | 'relay' | 'cache' | 'sync' | 'memory' | 'all';
 
 const TOPICS: { topic: GuideTopic; description: string }[] = [
   { topic: 'overview', description: 'Setup, features, and quick start for each' },
@@ -715,7 +926,8 @@ const TOPICS: { topic: GuideTopic; description: string }[] = [
   { topic: 'flows', description: 'Build and execute multi-step workflows' },
   { topic: 'relay', description: 'Receive webhooks and forward to other platforms' },
   { topic: 'cache', description: 'Local caching for knowledge and search responses' },
-  { topic: 'sync', description: 'Sync platform data locally for instant offline queries' },
+  { topic: 'memory', description: 'Unified memory store: notes, decisions, synced rows, semantic search' },
+  { topic: 'sync', description: 'Sync platform data into memory for instant offline queries' },
   { topic: 'all', description: 'Complete guide (all topics combined)' },
 ];
 
@@ -731,12 +943,14 @@ export function getGuideContent(topic: GuideTopic): { title: string; content: st
       return { title: 'One CLI — Agent Guide: Relay', content: GUIDE_RELAY };
     case 'cache':
       return { title: 'One CLI — Agent Guide: Cache', content: GUIDE_CACHE };
+    case 'memory':
+      return { title: 'One CLI — Agent Guide: Memory', content: GUIDE_MEMORY };
     case 'sync':
       return { title: 'One CLI — Agent Guide: Sync', content: GUIDE_SYNC };
     case 'all':
       return {
         title: 'One CLI — Agent Guide: Complete',
-        content: [GUIDE_OVERVIEW, GUIDE_ACTIONS, GUIDE_FLOWS, GUIDE_RELAY, GUIDE_CACHE, GUIDE_SYNC].join('\n---\n\n'),
+        content: [GUIDE_OVERVIEW, GUIDE_ACTIONS, GUIDE_FLOWS, GUIDE_RELAY, GUIDE_CACHE, GUIDE_MEMORY, GUIDE_SYNC].join('\n---\n\n'),
       };
   }
 }

@@ -148,36 +148,109 @@ Knowledge and search responses are cached locally (`~/.one/cache/`). Subsequent 
 - Manage cache: `one cache list`, `one cache clear`, `one cache update-all`
 - `actions execute` is NEVER cached — always fresh
 
-## Local Data Sync
+## Unified Memory
 
-Sync platform data into local SQLite for instant queries, full-text search, scheduled refresh, and change-driven automation.
+One ships a local memory store (a real Postgres process bootstrapped on demand via the bundled `embedded-postgres` plugin, with a `postgres` plugin available for remote/self-hosted Postgres) that backs both user-authored notes and synced platform data. `one mem <cmd>` is the primary surface; `one sync` is a namespaced alias (`one mem sync ...`) that writes synced rows into the same store.
+
+**Zero-config.** The first `one mem` call on a new machine auto-initializes — no separate `mem init` step required. The `embedded-postgres` plugin downloads its Postgres binaries on first run (~52MB) and writes a daemon PID/port file at `~/.one/pg/.pgserve.json` so subsequent CLI invocations reuse the running cluster. If an OpenAI key is already resolvable (env, `.onerc`, or `config.openaiApiKey`), embeddings enable automatically and search becomes hybrid FTS + semantic. Otherwise you get FTS-only with a structured `_upgrade` hint on every response telling the user how to upgrade.
+
+**Listing synced rows.** `mem list <type>` takes a positional namespaced type — there is no `--platform` flag. Synced rows live under `<platform>/<model>` types:
 
 ```bash
-# First time only
-one sync install
+one --agent mem list "gmail/threads"
+one --agent mem list "attio/attioPeople" --limit 5
+one --agent mem list "google-calendar/events"
+```
 
+Underneath, the store has no `platform` column — `type` is the only platform-scoping mechanism. If you need raw SQL via `mem sql`, filter with `WHERE type LIKE 'platform/%'` (not `WHERE platform = ...`).
+
+```bash
+# User memories
+one --agent mem add note '{"content":"..."}' --tags work --weight 7
+one --agent mem search "deadline"                       # hybrid if key set, else FTS
+one --agent mem list note --limit 20
+one --agent mem link <from-id> <to-id> relates_to --bi
+
+# Status + diagnostics
+one --agent mem status                                  # backend, provider, _upgrade hint
+one --agent mem doctor                                  # full health report
+```
+
+### Adding OpenAI for semantic search
+
+Stored at the top level of `~/.one/config.json` as `openaiApiKey`, same precedence as `ONE_SECRET` (env > `.onerc OPENAI_API_KEY=...` > project > global). Three equivalent ways to set:
+
+```bash
+# Via re-run of one init (interactive prompt)
+one init
+
+# Via config set (writes to top-level, not the memory block)
+one --agent mem config set embedding.apiKey sk-...
+
+# Via env var (no persistence)
+export OPENAI_API_KEY=sk-...
+```
+
+### Syncing platforms into memory
+
+```bash
 # Check built-in profiles (pre-validated configs for common platforms)
 one --agent sync profiles
 
-# Setup (uses built-in if available, otherwise auto-infers + auto-tests)
+# Setup — seeds from the built-in, merges your --config overrides
 one --agent sync init stripe balanceTransactions
-# If _complete: true and _test.ok: true → go straight to sync run
+# If _complete: true and _test.ok: true → ready to run
 
-# Sync + query
+# Preview what gets embedded BEFORE paying embedding cost (agent declares paths)
+one --agent sync init attio attioPeople --config '{
+  "memory": {
+    "embed": true,
+    "searchable": [
+      "values.name[0].full_name",
+      "values.job_title[0].value",
+      "values.description[0].value",
+      "values.email_addresses[0].email_address"
+    ]
+  }
+}'
+# Skip the "pick paths by reading knowledge" step — let the CLI rank them from a live sample
+one --agent sync suggest-searchable attio/attioPeople
+# → { suggestions: [{path, score, hitRate, avgLength, noiseFraction, sampleValue}], configPatch: {...paste-ready...} }
+
+one --agent sync test attio/attioPeople --show-searchable
+# → Previews across 5 samples. Each path has { hits, total, sample }:
+#     5/5 = path resolves on every record (clean)
+#     1/5 = field is real but sparse on this page
+#     0/5 = typo, or field never populated in sampled records
+# Iterate until the numbers match intent.
+
+# Run — memory is always written; pass --no-memory to skip (rare)
 one --agent sync run stripe
 one --agent sync query stripe/balanceTransactions --where "status=available" --limit 20
-one --agent sync search "refund"                 # FTS across all synced platforms
+one --agent sync search "refund"                 # hybrid across all synced platforms
 one --agent sync list stripe                     # progress + freshness
 
 # Schedule unattended syncs
 one sync schedule add stripe --every 1h
 ```
 
+### memory.searchable paths
+
+Declared on the profile, drives what gets embedded + FTS-indexed. Supports numeric indexes AND `[]` wildcards for array fan-out:
+
+```
+values.name[0].full_name              # numeric index (first element)
+messages[].snippet                    # wildcard — every element's .snippet
+messages[].payload.parts[].body.data  # nested wildcards
+```
+
+Without declared paths, the default walker concatenates every string in the record — correct but often noisy for hierarchical APIs (Attio, HubSpot). **Always declare paths for any profile with `embed: true`.**
+
 **Sync rejects custom actions** — profiles must use passthrough. `sync init` only surfaces passthrough models; `sync run` aborts if the list or enrich action is tagged `custom`. If no passthrough exists, compose a flow instead.
 
 **Connections are late-bound** — profiles use `"connection": { "platform": "<name>" }`, not literal `connectionKey` strings. The key is resolved at sync time, so `one add <platform>` (re-auth) doesn't break the profile. For multi-account platforms, add `"tag": "<connection-tag>"` to disambiguate. Don't hardcode connection keys in profiles.
 
-**Advanced features** (enrich, transform, exclude, identityKey, hooks, --full-refresh, --where-sql delete, cursor resume): run `one guide sync` for the full reference.
+**Advanced features** (enrich, transform, exclude, identityKey, hooks, --full-refresh, alternative backends, embedding tuning): run `one guide memory` or `one guide sync` for the full reference.
 
 ## Beyond Single Actions
 

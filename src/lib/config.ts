@@ -4,9 +4,16 @@ import os from 'node:os';
 import type { Config, AccessControlSettings, PermissionLevel, WhoAmIResponse } from './types.js';
 import type { OneApi } from './api.js';
 
-const CONFIG_DIR = path.join(os.homedir(), '.one');
-const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
-const PROJECTS_DIR = path.join(CONFIG_DIR, 'projects');
+// Home-rooted paths are resolved LAZILY on every access. Binding them at
+// module-load time would cache `os.homedir()` from the initial process env,
+// which breaks tests (and any caller) that sets `process.env.HOME` after
+// import. Test-isolation bug history: on 2026-04-21, running the unified-
+// memory suite clobbered the user's real `~/.one/config.json` because
+// these constants had already resolved to the real home before the test's
+// `before()` hook ran. Keep these as getters.
+function configDir(): string { return path.join(os.homedir(), '.one'); }
+function configFile(): string { return path.join(configDir(), 'config.json'); }
+function projectsDir(): string { return path.join(configDir(), 'projects'); }
 
 export type ConfigScope = 'project' | 'global';
 
@@ -49,7 +56,7 @@ export function getProjectSlug(projectRoot: string = getProjectRoot()): string {
 }
 
 export function getProjectConfigDir(projectRoot: string = getProjectRoot()): string {
-  return path.join(PROJECTS_DIR, getProjectSlug(projectRoot));
+  return path.join(projectsDir(), getProjectSlug(projectRoot));
 }
 
 export function getProjectConfigPath(projectRoot: string = getProjectRoot()): string {
@@ -57,7 +64,7 @@ export function getProjectConfigPath(projectRoot: string = getProjectRoot()): st
 }
 
 export function getGlobalConfigPath(): string {
-  return CONFIG_FILE;
+  return configFile();
 }
 
 // ── Resolver ─────────────────────────────────────────────────────────
@@ -86,7 +93,7 @@ export function resolveConfig(): ResolvedConfig {
   while (dir !== root) {
     dir = path.dirname(dir);
     const slug = getProjectSlug(dir);
-    const configPath = path.join(PROJECTS_DIR, slug, 'config.json');
+    const configPath = path.join(projectsDir(), slug, 'config.json');
     if (fs.existsSync(configPath)) {
       const config = readConfigFile(configPath);
       if (config) {
@@ -95,14 +102,14 @@ export function resolveConfig(): ResolvedConfig {
     }
   }
 
-  if (fs.existsSync(CONFIG_FILE)) {
-    const config = readConfigFile(CONFIG_FILE);
+  if (fs.existsSync(configFile())) {
+    const config = readConfigFile(configFile());
     if (config) {
-      return { config, scope: 'global', path: CONFIG_FILE, projectRoot, projectSlug };
+      return { config, scope: 'global', path: configFile(), projectRoot, projectSlug };
     }
   }
 
-  return { config: null, scope: null, path: CONFIG_FILE, projectRoot, projectSlug };
+  return { config: null, scope: null, path: configFile(), projectRoot, projectSlug };
 }
 
 function readConfigFile(filePath: string): Config | null {
@@ -125,7 +132,7 @@ export function configExists(): boolean {
 }
 
 export function globalConfigExists(): boolean {
-  return fs.existsSync(CONFIG_FILE);
+  return fs.existsSync(configFile());
 }
 
 export function projectConfigExists(projectRoot: string = getProjectRoot()): boolean {
@@ -145,8 +152,8 @@ export function readConfig(): Config | null {
  * when presenting scope choices or switching between them.
  */
 export function readGlobalConfig(): Config | null {
-  if (!fs.existsSync(CONFIG_FILE)) return null;
-  return readConfigFile(CONFIG_FILE);
+  if (!fs.existsSync(configFile())) return null;
+  return readConfigFile(configFile());
 }
 
 /**
@@ -176,10 +183,10 @@ export function writeConfig(config: Config, scope?: ConfigScope): void {
     return;
   }
 
-  if (!fs.existsSync(CONFIG_DIR)) {
-    fs.mkdirSync(CONFIG_DIR, { mode: 0o700 });
+  if (!fs.existsSync(configDir())) {
+    fs.mkdirSync(configDir(), { mode: 0o700 });
   }
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), { mode: 0o600 });
+  fs.writeFileSync(configFile(), JSON.stringify(config, null, 2), { mode: 0o600 });
 }
 
 // ── .onerc override (unchanged behavior) ─────────────────────────────
@@ -214,6 +221,42 @@ export function getApiKey(): string | null {
   if (rc.ONE_SECRET) return rc.ONE_SECRET;
 
   return readConfig()?.apiKey ?? null;
+}
+
+/**
+ * Resolve the OpenAI API key using the same precedence as ONE_SECRET:
+ *   env > .onerc > project config > global config.
+ *
+ * `openaiApiKey` is a top-level Config field (peer of `apiKey`) so every
+ * subsystem that needs OpenAI reads from one canonical place and respects
+ * project/global scope + file mode 0600.
+ */
+export function getOpenAiApiKey(): string | null {
+  if (process.env.OPENAI_API_KEY) return process.env.OPENAI_API_KEY;
+
+  const rc = readOneRc();
+  if (rc.OPENAI_API_KEY) return rc.OPENAI_API_KEY;
+
+  return readConfig()?.openaiApiKey ?? null;
+}
+
+/**
+ * Persist the OpenAI API key to the active config scope (project if a
+ * project config exists for cwd, else global). File mode 0600 is enforced
+ * by writeConfig. Pass an empty string to clear the key instead of
+ * persisting an empty value.
+ */
+export function setOpenAiApiKey(key: string): void {
+  const resolved = resolveConfig();
+  if (!resolved.config) {
+    throw new Error('No One config found. Run `one init` first.');
+  }
+  if (key === '') {
+    delete resolved.config.openaiApiKey;
+  } else {
+    resolved.config.openaiApiKey = key;
+  }
+  writeConfig(resolved.config, resolved.scope ?? 'global');
 }
 
 export function getAccessControlFromAllSources(): AccessControlSettings {

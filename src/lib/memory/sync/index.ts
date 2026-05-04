@@ -1,7 +1,7 @@
 import type { Command } from 'commander';
-import * as output from '../output.js';
-import { OneApi } from '../api.js';
-import { getApiKey, getApiBase, getAccessControlFromAllSources } from '../config.js';
+import * as output from '../../output.js';
+import { OneApi } from '../../api.js';
+import { getApiKey, getApiBase, getAccessControlFromAllSources } from '../../config.js';
 import { discoverModels } from './models.js';
 import { readProfile, writeProfile, writeDraftProfile, listProfiles, generateTemplate } from './profile.js';
 import { syncModel } from './runner.js';
@@ -11,8 +11,11 @@ import { loadBuiltinProfile, listBuiltinProfiles } from './builtin-profiles.js';
 import { addSchedule, listSchedules, removeSchedule, scheduleStatus, repairSchedule } from './schedule.js';
 import { parseCondition, splitConditions } from './where-parser.js';
 import { readSyncState, removeModelState, getModelState } from './state.js';
-import { executeQuery, executeRawSql } from './query.js';
+import { executeQuery } from './query.js';
 import { searchSyncedData } from './search.js';
+import { extractSearchableFromPaths, getSearchablePaths } from './mem-writer.js';
+import { defaultSearchableText } from '../embedding.js';
+import { suggestSearchablePaths } from './suggest-searchable.js';
 import { openDatabase, getDatabaseSize, dropTable, deleteDatabase, countRecords, listTables, deleteRecords, rebuildFtsIndex, tableExists, sanitizeTableName } from './db.js';
 import type { SyncProfile, SyncRunOptions, SyncQueryOptions } from './types.js';
 import { isSqliteAvailable, loadSqlite } from './sqlite-loader.js';
@@ -370,16 +373,23 @@ async function syncInitCommand(platform: string, model: string, options: { confi
     return;
   }
 
+  // Seed base: prefer an on-disk profile (user has been editing), else the
+  // built-in (agents tweaking a known platform shouldn't have to re-supply
+  // actionId, pagination, etc.), else an empty shell. This was missing
+  // when --config was passed first-time for a built-in platform, leaving
+  // users with `Missing required field: actionId`.
   const existing = readProfile(platform, model);
+  const base = existing ?? (loadBuiltinProfile(platform, model) as SyncProfile | null) ?? ({} as SyncProfile);
+
   const profile: SyncProfile = {
-    ...(existing ?? ({} as SyncProfile)),
+    ...base,
     ...patch,
     // Ensure platform/model from args always win
     platform,
     model,
     // Deep-merge pagination so you can patch just nextPath without losing type
     pagination: {
-      ...(existing?.pagination ?? ({} as SyncProfile['pagination'])),
+      ...(base.pagination ?? ({} as SyncProfile['pagination'])),
       ...(patch.pagination ?? {}),
     },
   };
@@ -408,7 +418,10 @@ async function syncInitCommand(platform: string, model: string, options: { confi
 
 // ── sync test ──
 
-async function syncTestCommand(platformModel: string): Promise<void> {
+async function syncTestCommand(
+  platformModel: string,
+  options: { showSearchable?: boolean } = {},
+): Promise<void> {
   const [platform, model] = platformModel.split('/');
   if (!platform || !model) {
     output.error('Usage: one sync test <platform>/<model>. Example: one sync test shopify/orders');
@@ -440,8 +453,12 @@ async function syncTestCommand(platformModel: string): Promise<void> {
     }
   }
 
+  const searchablePreview = options.showSearchable
+    ? buildSearchablePreview(profile!, report.samples)
+    : null;
+
   if (output.isAgentMode()) {
-    output.json(report);
+    output.json({ ...report, ...(searchablePreview ? { searchable: searchablePreview } : {}) });
     return;
   }
 
@@ -460,12 +477,96 @@ async function syncTestCommand(platformModel: string): Promise<void> {
     }
   }
 
+  if (searchablePreview) {
+    console.log(`\n  ${pc.bold('Searchable preview')} ${pc.dim(`(${searchablePreview.mode}, ${searchablePreview.sampledRecords} sample${searchablePreview.sampledRecords === 1 ? '' : 's'})`)}`);
+    console.log(`    ${pc.dim('length:')}  ${searchablePreview.length} chars (first sample)`);
+    console.log(`    ${pc.dim('text:')}    ${searchablePreview.text.slice(0, 300)}${searchablePreview.length > 300 ? pc.dim(' …') : ''}`);
+    if (searchablePreview.paths) {
+      console.log(`    ${pc.dim('paths:')}  ${pc.dim('(hit rate across all samples — differentiates "wrong path" from "field sometimes missing")')}`);
+      for (const p of searchablePreview.paths) {
+        const rate = `${p.hits}/${p.total}`;
+        const mark = p.hits === p.total
+          ? pc.green('✓')
+          : p.hits === 0
+            ? pc.red('✗')
+            : pc.yellow('~');
+        const trailer = p.sample
+          ? pc.dim(` → "${p.sample}"`)
+          : p.hits === 0
+            ? pc.dim(' (no sample matched — typo, or field never populated in this page)')
+            : '';
+        console.log(`      ${mark} ${rate.padStart(5)} ${p.path}${trailer}`);
+      }
+    } else {
+      console.log(`    ${pc.yellow('note:')} no memory.searchable declared — using the default walker (walks every field, often noisy).`);
+      console.log(`    ${pc.dim('tip:')}  run \`one sync suggest-searchable ${platform}/${model}\` for an auto-ranked starter list, or pick paths by hand and add them to profile.memory.searchable.`);
+    }
+  }
+
   console.log(
     `\n${report.ok ? pc.green('Profile looks good.') : pc.red('Profile has issues.')} ` +
     (report.ok
       ? `Run: ${pc.bold(`one sync run ${platform} --models ${model}`)}`
       : 'Fix the issues above and test again.')
   );
+}
+
+/**
+ * Run the same searchable-text extraction `sync run --to-memory` would, so
+ * the agent can iterate on `memory.searchable` before committing embeddings.
+ * Returns null when no sample record is available.
+ */
+function buildSearchablePreview(
+  profile: SyncProfile,
+  samples: Array<Record<string, unknown>> | undefined,
+):
+  | {
+      mode: 'declared' | 'default';
+      text: string;
+      length: number;
+      sampledRecords: number;
+      /**
+       * Per-path resolution across the sampled records, with a hit rate.
+       * `hits / total` disambiguates the old single-sample `found` flag:
+       *   5/5 = path looks right
+       *   3/5 = path works, some records lack this field
+       *   0/5 = path doesn't exist (likely typo OR field always absent)
+       */
+      paths?: Array<{
+        path: string;
+        hits: number;
+        total: number;
+        sample: string;
+      }>;
+    }
+  | null {
+  if (!samples || samples.length === 0) return null;
+  const first = samples[0];
+  const paths = getSearchablePaths(profile);
+
+  if (paths) {
+    // Aggregate per-path hits across all samples; keep the first non-
+    // empty sample value for display so the agent sees real data.
+    const perPathAgg = paths.map(path => ({ path, hits: 0, total: samples.length, sample: '' }));
+    for (const record of samples) {
+      const { paths: perPath } = extractSearchableFromPaths(record, paths);
+      perPath.forEach((p, i) => {
+        if (p.found) {
+          perPathAgg[i].hits++;
+          if (!perPathAgg[i].sample) perPathAgg[i].sample = p.sample;
+        }
+      });
+    }
+    // Text preview is built from the first sample so the "what would get
+    // embedded" snapshot is concrete, not synthetic across records.
+    const { text } = extractSearchableFromPaths(first, paths);
+    return { mode: 'declared', text, length: text.length, sampledRecords: samples.length, paths: perPathAgg };
+  }
+
+  // Mirror the runtime fallback so the preview reflects what WOULD be
+  // embedded today (noisy).
+  const text = defaultSearchableText(first);
+  return { mode: 'default', text, length: text.length, sampledRecords: samples.length };
 }
 
 // ── sync run ──
@@ -485,6 +586,20 @@ async function syncRunCommand(platform: string, options: SyncRunOptions): Promis
       (targetModels ? ` with models: ${targetModels.join(', ')}` : '') +
       `. Run 'one sync init ${platform} <model> --config ...' first.`
     );
+  }
+
+  // Auto-migrate on first encounter with legacy data. Fires when:
+  //   (a) ~/.one/sync/data/<platform>.db exists on disk, AND
+  //   (b) memory has zero records for any of this platform's types.
+  // Otherwise we'd leave users with two sources of truth (the old .db
+  // keeps rowcount, the new memory starts empty, neither agrees with
+  // the other) and no nudge to reconcile.
+  //
+  // --agent mode: silent auto-migrate + log the numbers to stderr.
+  // TTY mode: prompt interactively (default: yes) so nothing surprising
+  // happens without a human beat.
+  if (!options.dryRun) {
+    await maybeAutoMigrateLegacy(platform, toSync.map(p => p.model));
   }
 
   const results = [];
@@ -519,6 +634,15 @@ async function syncRunCommand(platform: string, options: SyncRunOptions): Promis
         ? pc.yellow('dry-run')
         : pc.red('failed');
     console.log(`  ${pc.bold(r.model)} — ${r.recordsSynced} records, ${r.pagesProcessed} pages, ${r.duration} [${status}]`);
+    if ((r as { reconcileSkipped?: boolean }).reconcileSkipped) {
+      console.log(`    ${pc.yellow('--full-refresh reconcile skipped — pagination truncated (e.g. --max-pages). Re-run without the cap to prune stale rows.')}`);
+    }
+    const sc = (r as { statusCounts?: { active: number; archived: number } }).statusCounts;
+    if (sc && (sc.archived > 0 || sc.active > 0)) {
+      // Highlight imbalance — archived > active suggests prior reconcile damage.
+      const archivedColor = sc.archived > sc.active ? pc.red : pc.dim;
+      console.log(`    memory: ${pc.green(String(sc.active))} active, ${archivedColor(String(sc.archived))} archived`);
+    }
     if ('error' in r && r.error) {
       console.log(`    ${pc.red(r.error as string)}`);
     }
@@ -590,20 +714,14 @@ async function syncSearchCommand(query: string, options: { platform?: string; mo
 }
 
 // ── sync sql ──
+//
+// Delegates to the shared mem SQL surface via the platform/model-aware
+// helper in src/commands/mem/sql.ts. Read-only SELECT / WITH / EXPLAIN;
+// DDL / DML / session-control rejected by the backend's guard.
 
-async function syncSqlCommand(platform: string, sql: string): Promise<void> {
-  try {
-    const result = await executeRawSql(platform, sql);
-    if (output.isAgentMode()) {
-      output.json({ platform, ...result, total: result.results.length });
-      return;
-    }
-
-    console.log(JSON.stringify(result.results, null, 2));
-    console.log(`\n${result.results.length} rows`);
-  } catch (err) {
-    output.error(`SQL error: ${err instanceof Error ? err.message : String(err)}`);
-  }
+async function syncSqlCommand(platformModel: string, sql: string): Promise<void> {
+  const { syncSqlCommand: runSyncSql } = await import('../../../commands/mem/sql.js');
+  await runSyncSql(platformModel, sql);
 }
 
 // ── sync delete ──
@@ -701,24 +819,152 @@ async function syncDeleteCommand(platformModel: string, options: { where?: strin
   }
 }
 
+/**
+ * Detect legacy `.one/sync/data/<platform>.db` that memory hasn't
+ * absorbed yet, and migrate it automatically. Silent-pass when nothing
+ * matches. Logs counts to stderr (agent mode) or prompts (TTY).
+ */
+async function maybeAutoMigrateLegacy(platform: string, models: string[]): Promise<void> {
+  const dbSize = getDatabaseSize(platform);
+  if (!dbSize || dbSize === '0 B') return;
+
+  // Check memory: any records of this platform's types? If yes, the user
+  // has already run at least one memory-primary sync — don't re-migrate,
+  // they can explicitly invoke `mem migrate --cleanup` when ready.
+  const { getBackend } = await import('../runtime.js');
+  const backend = await getBackend();
+  let memoryHasData = false;
+  for (const model of models) {
+    const n = await backend.count(`${platform}/${model}`, { status: 'active' }).catch(() => 0);
+    if (n > 0) { memoryHasData = true; break; }
+  }
+  if (memoryHasData) return;
+
+  if (output.isAgentMode()) {
+    process.stderr.write(
+      `  detected legacy .one/sync/data/${platform}.db (${dbSize}) — auto-migrating into memory before sync.\n`,
+    );
+    const { memMigrateCommand } = await import('../../../commands/mem/migrate.js');
+    await memMigrateCommand({ platform, yes: true });
+    return;
+  }
+
+  // TTY: tell the user, default yes.
+  const shouldMigrate = await p.confirm({
+    message:
+      `Found legacy .one/sync/data/${platform}.db (${dbSize}) with no corresponding memory records. ` +
+      `Migrate into the unified memory store before syncing?`,
+    initialValue: true,
+  });
+  if (p.isCancel(shouldMigrate) || !shouldMigrate) return;
+
+  const { memMigrateCommand } = await import('../../../commands/mem/migrate.js');
+  await memMigrateCommand({ platform, yes: true });
+}
+
+// ── sync suggest-searchable ──
+
+async function syncSuggestSearchableCommand(
+  platformModel: string,
+  options: { limit?: string } = {},
+): Promise<void> {
+  const [platform, model] = platformModel.split('/');
+  if (!platform || !model) {
+    output.error('Usage: one sync suggest-searchable <platform>/<model>. Example: one sync suggest-searchable attio/attioPeople');
+  }
+
+  const profile = readProfile(platform, model);
+  if (!profile) {
+    output.error(
+      `No sync profile found for ${platform}/${model}. ` +
+      `Create one with: one sync init ${platform} ${model}`,
+    );
+  }
+
+  const api = getApi();
+  const report = await testSyncProfile(api, profile!);
+  const samples = report.samples ?? [];
+  if (samples.length === 0) {
+    output.error(
+      'No sample records available to rank against. Fix the failures in `sync test` first, then re-run suggest-searchable.',
+    );
+  }
+
+  const limit = options.limit ? parseInt(options.limit, 10) : 15;
+  const suggestions = suggestSearchablePaths(samples, limit);
+
+  // Build a paste-ready config JSON that the agent can drop straight
+  // into `sync init --config`. Defaults to embed:true since opting for
+  // semantic search is the whole reason you ran this command.
+  const topPaths = suggestions.map(s => s.path);
+  const configPatch = { memory: { embed: true, searchable: topPaths } };
+
+  if (output.isAgentMode()) {
+    output.json({
+      platform,
+      model,
+      sampledRecords: samples.length,
+      suggestions,
+      configPatch,
+      hint: `To apply: one --agent sync init ${platform} ${model} --config '${JSON.stringify(configPatch)}'`,
+    });
+    return;
+  }
+
+  console.log(`\n  ${pc.bold('memory.searchable — ranked suggestions')} ${pc.dim(`(${samples.length} samples)`)}`);
+  if (suggestions.length === 0) {
+    console.log(`    ${pc.yellow('no high-signal leaves found')} — page may be all UUIDs / timestamps / enum markers. Inspect the sample with \`sync test\` and pick paths manually.`);
+    return;
+  }
+
+  for (const s of suggestions) {
+    const hitPct = Math.round(s.hitRate * 100);
+    const noisePct = Math.round(s.noiseFraction * 100);
+    const noiseBadge = noisePct > 0 ? pc.dim(` noise=${noisePct}%`) : '';
+    console.log(
+      `    ${pc.green(String(s.score).padStart(5))}  ${pc.cyan(s.path.padEnd(52))}` +
+      pc.dim(` ${hitPct}% hit`) + pc.dim(` avg=${s.avgLength}ch`) + noiseBadge +
+      (s.sampleValue ? pc.dim(`\n          → "${s.sampleValue.slice(0, 140)}"`) : '')
+    );
+  }
+
+  console.log(`\n  ${pc.bold('Paste-ready:')}`);
+  console.log('    ' + pc.cyan(`one sync init ${platform} ${model} --config '${JSON.stringify(configPatch)}'`));
+  console.log(`\n  ${pc.dim('then preview: ')}${pc.cyan(`one sync test ${platform}/${model} --show-searchable`)}`);
+}
+
 // ── sync list ──
 
 async function syncListCommand(platform?: string): Promise<void> {
   const profiles = listProfiles(platform);
-  const state = readSyncState();
+  const state = await readSyncState();
+  const { getBackend } = await import('../runtime.js');
+  const backend = await getBackend();
 
-  const syncs = profiles.map(p => {
+  // Count records from the memory backend — the post-unified-memory
+  // source of truth. The sync-state `totalRecords` counter lags when
+  // multiple runs race against each other and can't be trusted for
+  // display; `dbSize` on the legacy .db file is worse — it can be
+  // non-zero even when memory holds the real data. Use COUNT(*) + the
+  // on-disk .db size as a "legacy footprint" tell.
+  const syncs = await Promise.all(profiles.map(async p => {
     const modelState = state[p.platform]?.[p.model];
+    const type = `${p.platform}/${p.model}`;
+    const totalRecords = await backend.count(type, { status: 'active' }).catch(() => 0);
+    const legacyDbSize = getDatabaseSize(p.platform);
     return {
       platform: p.platform,
       model: p.model,
       lastSync: modelState?.lastSync ?? null,
-      totalRecords: modelState?.totalRecords ?? 0,
+      totalRecords,
       pagesProcessed: modelState?.pagesProcessed ?? 0,
-      dbSize: getDatabaseSize(p.platform),
+      // Legacy .db footprint — non-zero means there's a stale file worth
+      // running `one mem migrate --cleanup` to remove. Kept distinct
+      // from totalRecords so the dashboard doesn't conflate the two.
+      legacyDbSize,
       status: modelState?.status ?? 'idle',
     };
-  });
+  }));
 
   if (output.isAgentMode()) {
     output.json({ syncs });
@@ -736,12 +982,15 @@ async function syncListCommand(platform?: string): Promise<void> {
       : s.status === 'syncing'
         ? pc.yellow(`syncing — page ${s.pagesProcessed}`)
         : pc.red('failed');
+    const legacy = s.legacyDbSize && s.legacyDbSize !== '0 B'
+      ? pc.yellow(`  legacy .db ${s.legacyDbSize}`)
+      : '';
     console.log(
       `  ${pc.bold(`${s.platform}/${s.model}`.padEnd(35))} ` +
       `${String(s.totalRecords).padStart(8)} records  ` +
-      `${s.dbSize.padStart(10)}  ` +
       `${status}  ` +
-      `${pc.dim(s.lastSync ? `last: ${s.lastSync}` : 'never synced')}`
+      `${pc.dim(s.lastSync ? `last: ${s.lastSync}` : 'never synced')}` +
+      legacy
     );
   }
 }
@@ -805,13 +1054,13 @@ async function syncRemoveCommand(platform: string, options: { models?: string; y
       const db = await openDatabase(platform);
       for (const model of modelList) {
         dropTable(db, model);
-        removeModelState(platform, model);
+        await removeModelState(platform, model);
       }
       db.close();
     } else {
       // Remove data for this platform (profiles are preserved)
       deleteDatabase(platform);
-      removeModelState(platform);
+      await removeModelState(platform);
     }
 
     if (output.isAgentMode()) {
@@ -954,11 +1203,30 @@ async function syncScheduleRepairCommand(id: string): Promise<void> {
 
 // ── Register all sync commands ──
 
-export function registerSyncCommands(program: Command): void {
+/**
+ * Register the full `sync` subtree against a parent command.
+ *
+ * Called twice:
+ *  1. `program` → exposes the commands as `one sync ...` with the `s` alias.
+ *  2. `one mem` → exposes the same commands as `one mem sync ...`. Single
+ *     source of truth, no drift between the two surfaces.
+ *
+ * `opts.parentLabel` controls the alias + description wording so each
+ * registration can present itself in its own context without forking
+ * the entire tree.
+ */
+export function registerSyncCommands(
+  program: Command,
+  opts: { alias?: string; description?: string } = {},
+): void {
   const sync = program
     .command('sync')
-    .alias('s')
-    .description('Sync platform data locally for instant offline queries');
+    .description(opts.description ?? 'Sync platform data locally for instant offline queries');
+  if (opts.alias) sync.alias(opts.alias);
+  registerSyncSubcommands(sync);
+}
+
+function registerSyncSubcommands(sync: Command): void {
 
   sync
     .command('install')
@@ -999,8 +1267,17 @@ export function registerSyncCommands(program: Command): void {
   sync
     .command('test <platform/model>')
     .description('Validate a sync profile with a single-page fetch (no DB writes)')
-    .action(async (platformModel: string) => {
-      await syncTestCommand(platformModel);
+    .option('--show-searchable', 'Also preview the text that would be embedded / FTS-indexed, per memory.searchable', false)
+    .action(async (platformModel: string, options: { showSearchable?: boolean }) => {
+      await syncTestCommand(platformModel, { showSearchable: options.showSearchable });
+    });
+
+  sync
+    .command('suggest-searchable <platform/model>')
+    .description('Rank candidate memory.searchable paths by signal density (for profiles with memory.embed: true)')
+    .option('--limit <n>', 'Top N paths to return (default 15)')
+    .action(async (platformModel: string, options: { limit?: string }) => {
+      await syncSuggestSearchableCommand(platformModel, options);
     });
 
   sync
@@ -1012,7 +1289,14 @@ export function registerSyncCommands(program: Command): void {
     .option('--max-pages <n>', 'Maximum number of pages to fetch')
     .option('--dry-run', 'Fetch first page only, show results without persisting')
     .option('--full-refresh', 'Fetch ALL records and delete local rows no longer in the source (handles deletions)')
-    .action(async (platform: string, options: { models?: string; since?: string; force?: boolean; maxPages?: string; dryRun?: boolean; fullRefresh?: boolean }) => {
+    .option('--no-memory', 'Skip the unified memory dual-write (default: memory is always written)')
+    .option('--embed', 'Embed synced rows under the configured model, regardless of profile.memory.embed', false)
+    .option('--no-embed', 'Skip embedding even if the profile opts in')
+    // Back-compat alias: `--to-memory` was opt-in during the dual-write
+    // derisking window. Memory is now the primary target, so the flag is
+    // a silent no-op retained so existing scripts keep running.
+    .option('--to-memory', '(deprecated — memory is now always written; flag kept for back-compat)')
+    .action(async (platform: string, options: { models?: string; since?: string; force?: boolean; maxPages?: string; dryRun?: boolean; fullRefresh?: boolean; memory?: boolean; embed?: boolean; toMemory?: boolean }) => {
       await syncRunCommand(platform, {
         models: options.models?.split(',').map(m => m.trim()),
         since: options.since,
@@ -1020,6 +1304,12 @@ export function registerSyncCommands(program: Command): void {
         maxPages: options.maxPages ? parseInt(options.maxPages, 10) : undefined,
         dryRun: options.dryRun,
         fullRefresh: options.fullRefresh,
+        // Commander inverts `--no-memory` / `--no-embed` into options.X === false.
+        toMemory: options.memory !== false,
+        // Only override when the flag was actually passed — leaving
+        // options.embed as undefined means "defer to profile + config".
+        // Commander sets `false` for the `--no-embed` case.
+        embed: options.embed === undefined ? undefined : options.embed,
       });
     });
 
@@ -1060,10 +1350,10 @@ export function registerSyncCommands(program: Command): void {
     });
 
   sync
-    .command('sql <platform> <sql>')
-    .description('Execute raw SQL against local sync database (SELECT only)')
-    .action(async (platform: string, sql: string) => {
-      await syncSqlCommand(platform, sql);
+    .command('sql <platform/model> <sql>')
+    .description('Run a read-only SELECT / WITH / EXPLAIN against the memory store (type-scoped helper)')
+    .action(async (platformModel: string, sql: string) => {
+      await syncSqlCommand(platformModel, sql);
     });
 
   sync

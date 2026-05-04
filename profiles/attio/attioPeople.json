@@ -3,10 +3,11 @@
   "platform": "attio",
   "model": "attioPeople",
   "connection": { "platform": "attio" },
-  "identityKey": "primary_email_address",
-  "actionId": "conn_mod_def::GJt0lFZ6kpk::attio-people-list",
-  "resultsPath": "people",
-  "idField": "id",
+  "identityKey": "values.email_addresses[0].email_address",
+  "actionId": "conn_mod_def::GJ0CbN-LPiU::A6h6M9QkS0Cs2Lt9CdPH7Q",
+  "pathVars": { "object": "people" },
+  "resultsPath": "data",
+  "idField": "id.record_id",
   "pagination": {
     "type": "offset",
     "passAs": "body:offset"

@@ -15,10 +15,22 @@ export function listSyncedPlatforms(): string[] {
     .map(f => f.replace(/\.db$/, ''));
 }
 
-export async function openDatabase(platform: string): Promise<Database.Database> {
+export async function openDatabase(
+  platform: string,
+  opts: { readonly?: boolean } = {},
+): Promise<Database.Database> {
   const Database = await loadSqlite();
   fs.mkdirSync(DATA_DIR, { recursive: true });
   const dbPath = path.join(DATA_DIR, `${platform}.db`);
+
+  // readonly=true is the migrate path: open the user's legacy file with
+  // zero side effects — no header rewrites, no -wal/-shm siblings, no
+  // corruption-recovery rename. `fileMustExist` keeps better-sqlite3
+  // from creating an empty file at the path if the user pointed us at
+  // a missing platform.
+  if (opts.readonly) {
+    return new Database(dbPath, { readonly: true, fileMustExist: true });
+  }
 
   let db: Database.Database;
   try {

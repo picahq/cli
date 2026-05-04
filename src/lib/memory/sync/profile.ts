@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { Connection } from '../types.js';
-import type { OneApi } from '../api.js';
+import type { Connection } from '../../types.js';
+import type { OneApi } from '../../api.js';
 import type { SyncProfile } from './types.js';
 
 const PROFILES_DIR = path.join('.one', 'sync', 'profiles');

@@ -21,8 +21,14 @@ import {
   projectConfigExists,
   getEnvFromApiKey,
   getWhoAmI,
+  getOpenAiApiKey,
   type ConfigScope,
 } from '../lib/config.js';
+// Use the memory-aware wrapper — persists the key AND enables semantic
+// search if the memory block already exists with provider=none. Going
+// through the core helper would leave the hint telling agents to enable
+// the provider even after the key was just set.
+import { setOpenAiApiKey } from '../lib/memory/index.js';
 import {
   getAllAgents,
   installMcpConfig,
@@ -200,7 +206,7 @@ async function handleExistingConfig(
   console.log();
 
   // Build action menu
-  type Action = 'install-skills' | 'show-prompt' | 'add-connection' | 'update-key' | 'access-control' | 'start-fresh';
+  type Action = 'install-skills' | 'show-prompt' | 'add-connection' | 'update-key' | 'openai-key' | 'access-control' | 'start-fresh';
   const actionOptions: { value: Action; label: string; hint?: string }[] = [];
 
   actionOptions.push({
@@ -224,6 +230,13 @@ async function handleExistingConfig(
   actionOptions.push({
     value: 'update-key',
     label: 'Update API key',
+  });
+
+  const hasOpenAi = !!getOpenAiApiKey();
+  actionOptions.push({
+    value: 'openai-key',
+    label: hasOpenAi ? 'Update OpenAI key' : 'Add OpenAI key',
+    hint: hasOpenAi ? 'replace the current key' : 'enable semantic search in `one mem`',
   });
 
   actionOptions.push({
@@ -275,6 +288,9 @@ async function handleExistingConfig(
     }
     case 'update-key':
       await handleUpdateKey(statuses, scope);
+      break;
+    case 'openai-key':
+      await handleOpenAiKey(scope);
       break;
     case 'access-control':
       await configCommand();
@@ -632,6 +648,82 @@ function installSkillForAgents(agentIds: string[]): { installed: string[]; faile
   return { installed, failed };
 }
 
+/**
+ * Ask for an optional OpenAI API key. Skippable with a single Enter. The
+ * key is used by `one mem` for semantic search; memory still works without
+ * it (FTS only). Stored at the top level of config.json in the active
+ * scope (mode 0600), same place as `apiKey`.
+ *
+ * Skipped when: (a) already set (env, .onerc, config), (b) user presses
+ * Enter on an empty input, or (c) user cancels.
+ */
+async function promptOpenAiKey(scope: ConfigScope): Promise<void> {
+  // Already have one from any source — don't ask again.
+  if (getOpenAiApiKey()) return;
+
+  const entered = await p.password({
+    message: scopedMessage(
+      scope,
+      `OpenAI API key ${pc.dim('(optional — enables semantic search in `one mem`)')}`,
+    ),
+    mask: '•',
+    // Validator accepts empty → treated as "skip".
+    validate: () => undefined,
+  });
+
+  if (p.isCancel(entered)) return;
+  const key = (entered as string | undefined)?.trim();
+  if (!key) return;
+
+  try {
+    setOpenAiApiKey(key);
+    p.log.success('OpenAI key saved. Semantic search will work in `one mem`.');
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    p.log.warn(`Could not save OpenAI key: ${msg}`);
+  }
+}
+
+/**
+ * Standalone handler invoked from the existing-config menu. Same prompt
+ * shape as the fresh-setup step; passes through to setOpenAiApiKey when
+ * the user enters a value, otherwise exits cleanly.
+ */
+async function handleOpenAiKey(scope: ConfigScope): Promise<void> {
+  const existing = getOpenAiApiKey();
+  if (existing) {
+    p.note(
+      `Current key: ${existing.slice(0, 6)}…${existing.slice(-4)}\n` +
+      `Paste a new one to replace, or press Enter to keep.`,
+      'OpenAI key',
+    );
+  }
+
+  const entered = await p.password({
+    message: scopedMessage(scope, 'OpenAI API key'),
+    mask: '•',
+    validate: () => undefined,
+  });
+
+  if (p.isCancel(entered)) {
+    p.outro('No changes made.');
+    return;
+  }
+  const key = (entered as string | undefined)?.trim();
+  if (!key) {
+    p.outro(existing ? 'Kept existing key.' : 'Skipped.');
+    return;
+  }
+
+  try {
+    setOpenAiApiKey(key);
+    p.outro('OpenAI key saved.');
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    p.cancel(`Could not save: ${msg}`);
+  }
+}
+
 async function promptSkillInstall(): Promise<boolean> {
   const primaryAgents = SKILL_AGENTS.filter(a => a.primary);
   const otherAgents = SKILL_AGENTS.filter(a => !a.primary);
@@ -972,6 +1064,10 @@ async function freshSetup(
       scope,
     );
   }
+  // Step 1b: Optional OpenAI key for `one mem` semantic search. Skip-able;
+  // stored at the top level of the active config scope (mode 0600).
+  await promptOpenAiKey(scope);
+
   // Step 2: Install skill
   await promptSkillInstall();
 

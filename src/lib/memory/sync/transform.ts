@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { isAgentMode } from '../output.js';
+import { isAgentMode } from '../../output.js';
 
 const TRANSFORM_TIMEOUT_MS = 60_000;
 

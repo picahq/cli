@@ -1,4 +1,4 @@
-import type { OneApi } from '../api.js';
+import type { OneApi } from '../../api.js';
 import type { DiscoveredModel } from './types.js';
 
 interface RawAvailableAction {

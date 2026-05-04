@@ -1,13 +1,14 @@
-import type { OneApi } from '../api.js';
-import { ApiError } from '../api.js';
-import { getByDotPath } from '../dot-path.js';
-import { isAgentMode } from '../output.js';
+import type { OneApi } from '../../api.js';
+import { ApiError } from '../../api.js';
+import { getByDotPath } from '../../dot-path.js';
+import { isAgentMode } from '../../output.js';
 import type { SyncProfile, SyncRunResult, SyncRunOptions, ModelSyncState } from './types.js';
 import { getNextPageParams, parsePassAs } from './pagination.js';
 import { getModelState, updateModelState } from './state.js';
 import { openDatabase, ensureTable, rebuildFtsIndex, evolveSchema, upsertRecords, tableExists, countRecords, deleteRecords, sanitizeTableName } from './db.js';
 import { acquireSyncLock } from './lock.js';
 import { classifyRecords, fireHooks, type ChangeEvent } from './hooks.js';
+import { writePageToMemory } from './mem-writer.js';
 import { enrichPhase, type EnrichResult } from './enrich.js';
 import { transformRecords } from './transform.js';
 import { extractRecords } from './extract.js';
@@ -145,7 +146,7 @@ export async function syncModel(
   // crashed between "set syncing" and the cleanup paths. Lock is the source
   // of truth on concurrency — auto-recover the stale state rather than
   // forcing the user to pass --force or hand-edit the state file.
-  const existingState = getModelState(platform, model);
+  const existingState = await getModelState(platform, model);
   if (existingState?.status === 'syncing' && !options.dryRun && !isAgentMode()) {
     process.stderr.write(
       `Recovered from crashed previous sync of ${platform}/${model} ` +
@@ -163,28 +164,75 @@ export async function syncModel(
     );
   }
 
+  // Memory is always the primary write target. SQLite is ONLY opened when
+  // the profile declares an enrich phase — enrich still reads unenriched
+  // rows via SQL. Non-enrich profiles (the common case: Attio, Stripe,
+  // Notion, HN, …) run purely against memory and never touch SQLite.
+  const needsSqlite = !!profile.enrich;
   let db: Database.Database | null = null;
   let totalRecords = 0;
+  // Records the writer refused (idField didn't resolve, validation
+  // failed, etc). Counted across all pages so a profile with a broken
+  // idField doesn't return a clean `0 records` while quietly dropping
+  // every page — the diagnostic surfaces in both the per-model report
+  // and as a stderr warning when the skip rate is suspiciously high.
+  let totalSkipped = 0;
   let pagesProcessed = 0;
   let lastCursor: unknown = null;
+  // Source keys accumulated across pages for --full-refresh reconciliation
+  // in the memory-only path. Old SQLite path uses `seenIds` below.
+  const seenSourceKeys = new Set<string>();
+  // Only true when pagination exhausted naturally (empty page, or the
+  // profile's paginator signalled no more pages). False if we hit
+  // --max-pages or bailed on an error. Reconcile-by-absence must NEVER
+  // run unless this is true — otherwise records we simply didn't fetch
+  // this run get archived as `deleted_upstream`, which is catastrophic
+  // at scale (see --full-refresh --max-pages data-loss repro).
+  let paginationComplete = false;
 
-  // Reset sync_state and release the lock if the process is killed mid-run
-  // (SIGINT from Ctrl-C, SIGTERM from a process manager, cron job being
-  // killed on laptop sleep). Without these handlers the state stays 'syncing'
-  // forever and the filesystem lock lingers for STALE_MS.
+  // Reset sync_state, release the lock, and gracefully close the memory
+  // backend if the process is killed mid-run (SIGINT from Ctrl-C, SIGTERM
+  // from a process manager, cron job being killed on laptop sleep).
+  // Without this:
+  //   - sync_state stays 'syncing' forever
+  //   - the filesystem lock lingers for STALE_MS
+  //   - PGlite skips its WAL checkpoint on teardown and the next open
+  //     fails with `Aborted()` on ensureSchema (issue #127). PGlite's
+  //     `postmaster.pid` normally contains a placeholder PID (-42)
+  //     even on healthy shutdowns, so the lockfile isn't the signal —
+  //     it's the unflushed WAL that matters. Calling close() gives
+  //     PGlite a chance to checkpoint.
+  //
+  // Backend close is async but runs on a 2s wall-clock timeout so a
+  // stuck close can't block the exit. SIGKILL / kernel panic still
+  // bypass this; `mem doctor` surfaces the recovery path when hit.
   const signalCleanup = (signal: NodeJS.Signals): void => {
-    try {
-      updateModelState(platform, model, { status: 'failed', pagesProcessed, lastCursor });
-    } catch { /* best-effort */ }
-    try { if (lock) lock.release(); } catch { /* best-effort */ }
-    process.exit(signal === 'SIGINT' ? 130 : 143);
+    void (async () => {
+      await Promise.allSettled([
+        updateModelState(platform, model, { status: 'failed', pagesProcessed, lastCursor }),
+        (async () => {
+          try {
+            const { getBackend } = await import('../runtime.js');
+            const backend = await getBackend();
+            await Promise.race([
+              backend.close(),
+              new Promise(resolve => setTimeout(resolve, 2_000)),
+            ]);
+          } catch {
+            // best-effort — we're exiting anyway
+          }
+        })(),
+      ]);
+      try { if (lock) lock.release(); } catch { /* best-effort */ }
+      process.exit(signal === 'SIGINT' ? 130 : 143);
+    })();
   };
   const onSigint = (): void => signalCleanup('SIGINT');
   const onSigterm = (): void => signalCleanup('SIGTERM');
   if (!options.dryRun) {
     process.on('SIGINT', onSigint);
     process.on('SIGTERM', onSigterm);
-    updateModelState(platform, model, { status: 'syncing' });
+    await updateModelState(platform, model, { status: 'syncing' });
   }
   // Track every id we saw across pages, for --full-refresh deletion reconciliation.
   const seenIds = new Set<string | number>();
@@ -198,7 +246,7 @@ export async function syncModel(
   let enrichRateLimited = 0;
 
   try {
-    db = await openDatabase(platform);
+    if (needsSqlite) db = await openDatabase(platform);
 
     // Determine the since date.
     // --full-refresh forces a complete pull: no dateFilter, no lastSync fallback.
@@ -273,7 +321,7 @@ export async function syncModel(
     }
 
     const maxPages = options.maxPages ?? Infinity;
-    let tableCreated = tableExists(db, model);
+    let tableCreated = db ? tableExists(db, model) : false;
 
     // Pagination loop
     let currentPageQueryParams = { ...queryParams };
@@ -374,20 +422,24 @@ export async function syncModel(
       const records = extraction.records;
 
       if (records.length === 0 && page === 0) {
-        // Empty results on first page — not an error
+        // Empty results on first page — not an error. Treat as exhausted
+        // so a --full-refresh with no results doesn't trigger reconcile
+        // on a 0-result fetch (reconcile logic already guards on
+        // seenSourceKeys.size > 0, but defence in depth).
         if (!isAgentMode()) {
           process.stderr.write(`No records found for ${model} with the given filters.\n`);
         }
+        paginationComplete = true;
         break;
       }
 
-      if (records.length === 0) break;
+      if (records.length === 0) { paginationComplete = true; break; }
 
       // Dry-run: show first page results and exit
       if (options.dryRun) {
         pagesProcessed = 1;
         totalRecords = records.length;
-        db.close();
+        if (db) db.close();
         return {
           model,
           recordsSynced: totalRecords,
@@ -424,37 +476,29 @@ export async function syncModel(
         }
       }
 
-      // Create table on first page with actual data — AFTER enrich/transform/exclude
-      // so the table schema reflects the final record shape.
-      if (!tableCreated) {
-        const firstRecord = records[0] as Record<string, unknown>;
-        ensureTable(db, model, firstRecord, profile.idField);
-        tableCreated = true;
-      }
-
-      // Evolve schema if needed (check for new fields — after the full
-      // pipeline: enrich, transform, exclude, and table creation)
-      for (const record of records) {
-        if (typeof record === 'object' && record !== null) {
-          evolveSchema(db, model, record as Record<string, unknown>);
-          break; // Only need to check one record per page for new columns
+      // Create / evolve SQLite table ONLY when enrich needs it. Memory is
+      // schemaless — JSONB handles any shape that comes through.
+      if (db) {
+        if (!tableCreated) {
+          const firstRecord = records[0] as Record<string, unknown>;
+          ensureTable(db, model, firstRecord, profile.idField);
+          tableCreated = true;
         }
-      }
-
-      // Track ids for --full-refresh reconciliation
-      if (options.fullRefresh) {
-        for (const rec of records as Record<string, unknown>[]) {
-          const id = rec[profile.idField];
-          if (typeof id === 'string' || typeof id === 'number') {
-            seenIds.add(id);
+        for (const record of records) {
+          if (typeof record === 'object' && record !== null) {
+            evolveSchema(db, model, record as Record<string, unknown>);
+            break; // one record tells us everything we need about the shape
           }
         }
       }
 
-      // Classify records as insert vs update BEFORE upserting (for hooks)
+      // Classify records as insert vs update BEFORE upserting (for hooks).
+      // Two paths: SQLite-backed classify pre-dated memory-primary sync;
+      // the memory path uses per-record `action` flags returned by
+      // writePageToMemory with capturePerAction: true.
       let inserts: Record<string, unknown>[] = [];
       let updates: Record<string, unknown>[] = [];
-      if (hasHooks) {
+      if (hasHooks && db) {
         const classified = classifyRecords(
           db, model, records as Record<string, unknown>[], profile.idField, tableCreated,
         );
@@ -462,14 +506,56 @@ export async function syncModel(
         updates = classified.updates;
       }
 
-      // Upsert records
-      const inserted = upsertRecords(
-        db,
-        model,
-        records as Record<string, unknown>[],
-        profile.idField,
-      );
-      totalRecords += inserted;
+      // Primary write: unified memory store. Every sync lands here.
+      // Behavior controlled by options.toMemory (--no-memory flips it off).
+      let pageReport: { inserted: number; updated: number; skipped: number } | null = null;
+      if (options.toMemory !== false) {
+        try {
+          const report = await writePageToMemory(
+            profile,
+            records as Record<string, unknown>[],
+            {
+              capturePerAction: hasHooks && !db,
+              // --embed / --no-embed on `sync run` threads through as a
+              // per-run override so you can backfill embeddings on a
+              // first-synced-without-embed platform in one shot.
+              embedOverride: options.embed,
+            },
+          );
+          pageReport = report;
+          for (const key of report.sourceKeysSeen) seenSourceKeys.add(key);
+          if (hasHooks && !db) {
+            inserts = report.inserts;
+            updates = report.updates;
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          process.stderr.write(`\n  memory write failed: ${msg}\n`);
+        }
+      }
+
+      // Secondary write: SQLite, only when enrich will read from it later.
+      if (db) {
+        if (options.fullRefresh) {
+          for (const rec of records as Record<string, unknown>[]) {
+            const id = getByDotPath(rec, profile.idField);
+            if (typeof id === 'string' || typeof id === 'number') {
+              seenIds.add(id);
+            }
+          }
+        }
+        const inserted = upsertRecords(
+          db,
+          model,
+          records as Record<string, unknown>[],
+          profile.idField,
+        );
+        totalRecords += inserted;
+      } else {
+        // Memory-only path: counter comes from the per-page mem report.
+        totalRecords += (pageReport?.inserted ?? 0) + (pageReport?.updated ?? 0);
+      }
+      totalSkipped += pageReport?.skipped ?? 0;
       pagesProcessed++;
 
       // Fire hooks after each page (not at the end) so long syncs get real-time events
@@ -513,14 +599,14 @@ export async function syncModel(
         nextParams?.queryParams ?? nextParams?.bodyParams ?? nextParams?.headers;
       const cursorKeys = cursorBag ? Object.keys(cursorBag) : [];
       lastCursor = cursorKeys.length > 0 ? (cursorBag as Record<string, unknown>)[cursorKeys[0]] : null;
-      updateModelState(platform, model, {
-        totalRecords: countRecords(db, model),
+      await updateModelState(platform, model, {
+        totalRecords: db ? countRecords(db, model) : totalRecords,
         pagesProcessed,
         lastCursor,
         status: 'syncing',
       });
 
-      if (!nextParams) break;
+      if (!nextParams) { paginationComplete = true; break; }
 
       // Apply next page params
       currentPageQueryParams = { ...queryParams, ...nextParams.queryParams };
@@ -530,43 +616,108 @@ export async function syncModel(
       }
     }
 
-    // --full-refresh: delete local rows whose ids weren't seen this run.
-    // Only runs if we actually fetched pages (paranoia against wiping data
-    // when the API returned an empty first page due to some transient issue).
+    // --full-refresh: archive records whose source didn't reappear this run.
+    // Two preconditions — both must hold, or we silently destroy data:
+    //   1. We fetched at least one page (`pagesProcessed > 0`). Guards
+    //      against a transient empty first page wiping the store.
+    //   2. Pagination actually exhausted (`paginationComplete`). If we
+    //      bailed because --max-pages capped the run, or any other early
+    //      exit, the unseen pages haven't been fetched — everything that
+    //      would have lived there looks "deleted upstream" from our POV
+    //      and gets catastrophically archived. Observed: `sync run
+    //      fathom --max-pages 3 --full-refresh` archived 57 valid rows.
     let deletedStale = 0;
-    if (options.fullRefresh && pagesProcessed > 0 && tableCreated && seenIds.size > 0) {
-      const safeTable = sanitizeTableName(model);
-      const safeIdField = profile.idField.replace(/"/g, '""');
-      // Chunk the NOT IN clause to stay under SQLite's variable limit (~999)
-      const ids = Array.from(seenIds);
-      const CHUNK = 500;
-      const seenChunks: unknown[][] = [];
-      for (let i = 0; i < ids.length; i += CHUNK) {
-        seenChunks.push(ids.slice(i, i + CHUNK));
+    const shouldReconcile =
+      options.fullRefresh && pagesProcessed > 0 && paginationComplete;
+    if (options.fullRefresh && pagesProcessed > 0 && !paginationComplete && !isAgentMode()) {
+      process.stderr.write(
+        `Skipping --full-refresh reconcile: pagination did not complete ` +
+        `(likely --max-pages cap or early exit). Re-run without --max-pages to prune stale rows.\n`
+      );
+    }
+    if (shouldReconcile) {
+      // SQLite path — active only when enrich is configured.
+      if (db && tableCreated && seenIds.size > 0) {
+        const safeTable = sanitizeTableName(model);
+        const safeIdField = profile.idField.replace(/"/g, '""');
+        const ids = Array.from(seenIds);
+        const CHUNK = 500;
+        const seenChunks: unknown[][] = [];
+        for (let i = 0; i < ids.length; i += CHUNK) {
+          seenChunks.push(ids.slice(i, i + CHUNK));
+        }
+        db.exec(`CREATE TEMP TABLE IF NOT EXISTS _seen_ids (id)`);
+        db.exec(`DELETE FROM _seen_ids`);
+        const insertStmt = db.prepare(`INSERT INTO _seen_ids (id) VALUES (?)`);
+        const tx = db.transaction((batch: unknown[]) => {
+          for (const id of batch) insertStmt.run(id as string | number);
+        });
+        for (const chunk of seenChunks) tx(chunk);
+        const delResult = db.prepare(
+          `DELETE FROM "${safeTable}" WHERE "${safeIdField}" NOT IN (SELECT id FROM _seen_ids)`
+        ).run();
+        deletedStale = delResult.changes;
+        db.exec(`DROP TABLE IF EXISTS _seen_ids`);
       }
 
-      // Build a temp table of seen ids and delete anything not in it
-      db.exec(`CREATE TEMP TABLE IF NOT EXISTS _seen_ids (id)`);
-      db.exec(`DELETE FROM _seen_ids`);
-      const insertStmt = db.prepare(`INSERT INTO _seen_ids (id) VALUES (?)`);
-      const tx = db.transaction((batch: unknown[]) => {
-        for (const id of batch) insertStmt.run(id as string | number);
-      });
-      for (const chunk of seenChunks) tx(chunk);
-
-      const delResult = db.prepare(
-        `DELETE FROM "${safeTable}" WHERE "${safeIdField}" NOT IN (SELECT id FROM _seen_ids)`
-      ).run();
-      deletedStale = delResult.changes;
-      db.exec(`DROP TABLE IF EXISTS _seen_ids`);
+      // Memory path — archive records whose source key didn't reappear.
+      // Runs in addition to the SQL path for enrich profiles so both stores
+      // stay in sync; it's the only path for non-enrich profiles.
+      //
+      // Uses the lean `listKeysByType` scan which pulls ONLY `id, keys[]`
+      // (no JSONB `data`, no searchable_text, no embedding). At Attio-
+      // companies scale (~2k rows × ~8KB data) the old full-row scan
+      // triggered "memory access out of bounds" in PGlite WASM when the
+      // per-row `data` buffer got concatenated through the driver —
+      // reconciliation never needs `data`, so skip it.
+      //
+      // Two archive criteria:
+      //   1. The row's source key doesn't appear in this run's
+      //      seenSourceKeys — the canonical "not returned by the API"
+      //      case.
+      //   2. The row has NO key starting with the `<type>:` prefix at
+      //      all — catches orphans written by earlier buggy versions
+      //      (e.g. the pre-fix Attio record whose key was
+      //      `attio/attioCompanies:[object Object]` — which actually
+      //      DOES start with the prefix, so it's covered by #1 too —
+      //      but also catches rows where the sources JSON was populated
+      //      but keys[] wasn't for whatever reason).
+      if (options.toMemory !== false) {
+        const backend = await (await import('../runtime.js')).getBackend();
+        const type = `${platform}/${model}`;
+        const existing = await backend.listKeysByType(type);
+        const sourcePrefix = `${type}:`;
+        let archived = 0;
+        for (const rec of existing) {
+          const typeKeys = (rec.keys ?? []).filter(k => k.startsWith(sourcePrefix));
+          // Row has no source key for this type → orphan; archive.
+          if (typeKeys.length === 0) {
+            await backend.archive(rec.id, 'deleted_upstream');
+            archived++;
+            continue;
+          }
+          // Row's source key wasn't seen this run → stale upstream.
+          // Only triggers when we actually saw some keys (guard against
+          // mass-archiving on a 0-result fetch that shouldn't have
+          // happened in the first place).
+          if (seenSourceKeys.size === 0) continue;
+          if (typeKeys.every(k => !seenSourceKeys.has(k))) {
+            await backend.archive(rec.id, 'deleted_upstream');
+            archived++;
+          }
+        }
+        // Without SQLite, the archive count is the deletedStale figure.
+        if (!db) deletedStale = archived;
+      }
 
       if (!isAgentMode() && deletedStale > 0) {
         process.stderr.write(`Removed ${deletedStale} stale record(s) no longer in source.\n`);
       }
     }
 
-    // Rebuild FTS index after all list data is written
-    if (pagesProcessed > 0 && tableCreated) {
+    // Rebuild FTS index after all list data is written (SQLite only —
+    // memory's tsvector trigger maintains the index automatically).
+    if (db && pagesProcessed > 0 && tableCreated) {
       rebuildFtsIndex(db, model);
     }
 
@@ -578,8 +729,9 @@ export async function syncModel(
     // Phase 2: Enrich unenriched rows (runs after list sync completes).
     // Queries _enriched_at IS NULL so it's inherently resumable — if the
     // process dies mid-enrichment, re-running picks up where it left off.
+    // Requires the SQLite path (enrich still reads via SQL).
     let enrichResult: EnrichResult | null = null;
-    if (profile.enrich && tableCreated && !options.dryRun) {
+    if (profile.enrich && db && tableCreated && !options.dryRun) {
       enrichResult = await enrichPhase(
         api, db, profile.enrich, model, profile.idField,
         connectionKey, platform,
@@ -590,6 +742,10 @@ export async function syncModel(
           onInsert: profile.onInsert,
           onUpdate: profile.onUpdate,
           onChange: profile.onChange,
+          // Pass the full profile so enrich can mirror merged rows into the
+          // memory store. Without this, memory holds only the pre-enrich
+          // list payload — see enrich.ts:memoryBatch writeback.
+          profile,
         },
       );
       enrichedTotal = enrichResult.enriched;
@@ -603,14 +759,14 @@ export async function syncModel(
       }
 
       // Rebuild FTS after enrichment added new text content
-      if (enrichResult.enriched > 0) {
+      if (enrichResult.enriched > 0 && db) {
         rebuildFtsIndex(db, model);
       }
     }
 
     const duration = formatDuration(Date.now() - startTime);
-    const actualCount = countRecords(db, model);
-    updateModelState(platform, model, {
+    const actualCount = db ? countRecords(db, model) : totalRecords;
+    await updateModelState(platform, model, {
       lastSync: new Date().toISOString(),
       totalRecords: actualCount,
       pagesProcessed,
@@ -619,10 +775,55 @@ export async function syncModel(
       status: 'idle',
     });
 
-    db.close();
+    if (db) db.close();
     if (lock) lock.release();
+
+    // Post-sync status snapshot. Surfaces silent damage: if most of the
+    // type is archived, reconcile went wrong somewhere and the user
+    // needs to know without running SQL. Memory-only — the SQLite path
+    // doesn't track archive status.
+    let statusCounts: { active: number; archived: number } | undefined;
+    if (options.toMemory !== false) {
+      try {
+        const backend = await (await import('../runtime.js')).getBackend();
+        const typeName = `${platform}/${model}`;
+        const [active, archived] = await Promise.all([
+          backend.count(typeName, { status: 'active' }),
+          backend.count(typeName, { status: 'archived' }),
+        ]);
+        statusCounts = { active, archived };
+      } catch {
+        // non-fatal — status counts are advisory
+      }
+    }
+
+    const reconcileSkipped =
+      options.fullRefresh === true && pagesProcessed > 0 && !paginationComplete
+        ? true
+        : undefined;
+
+    // Surface a hard warning when the writer skipped more rows than it
+    // stored — typical sign of a broken idField or stale profile against
+    // a paginated source. Without this, runs that drop every page
+    // returned a clean `recordsSynced: 0` and silently exited.
+    const recordsSeen = totalRecords + totalSkipped;
+    const skipRatio = recordsSeen > 0 ? totalSkipped / recordsSeen : 0;
+    const skippedWarning =
+      totalSkipped > 0 && skipRatio >= 0.5
+        ? `${totalSkipped} of ${recordsSeen} records skipped (${Math.round(skipRatio * 100)}%) — ` +
+          `most rows were rejected by the writer (likely a broken idField in the profile). ` +
+          `Inspect with \`one mem migrate --platform ${platform} --dry-run\` or refresh the profile via \`one sync init ${platform} ${model} --force\`.`
+        : undefined;
+    if (skippedWarning && !isAgentMode()) {
+      process.stderr.write(`\n  ⚠  ${skippedWarning}\n`);
+    }
+
     return {
       model, recordsSynced: totalRecords, pagesProcessed, duration, status: 'complete', deletedStale,
+      ...(totalSkipped > 0 ? { recordsSkipped: totalSkipped, recordsSeen } : {}),
+      ...(skippedWarning ? { _warning: skippedWarning } : {}),
+      ...(reconcileSkipped ? { reconcileSkipped } : {}),
+      ...(statusCounts ? { statusCounts } : {}),
       ...(hasHooks ? { hooksInserted, hooksUpdated } : {}),
       ...(profile.enrich ? { enriched: enrichedTotal, enrichSkipped, enrichRateLimited } : {}),
     };
@@ -630,7 +831,7 @@ export async function syncModel(
   } catch (err) {
     // Save failed state
     const failedCount = db ? countRecords(db, model) : (existingState?.totalRecords ?? 0);
-    updateModelState(platform, model, {
+    await updateModelState(platform, model, {
       status: 'failed',
       totalRecords: failedCount,
       pagesProcessed,

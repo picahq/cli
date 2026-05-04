@@ -1,4 +1,4 @@
-import { getByDotPath } from '../dot-path.js';
+import { getByDotPath } from '../../dot-path.js';
 import type { PaginationConfig, ParsedPassAs } from './types.js';
 
 /** Parse "query:paramName", "header:paramName", or "body:paramName" format */
