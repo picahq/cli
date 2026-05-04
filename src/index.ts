@@ -799,8 +799,10 @@ program
   .command('list')
   .alias('ls')
   .description('Shortcut for: connection list')
-  .action(async () => {
-    await connectionListCommand();
+  .option('-s, --search <query>', 'Filter connections by platform name')
+  .option('-l, --limit <n>', 'Max connections to return (agent mode default: 20)')
+  .action(async (options) => {
+    await connectionListCommand(options);
   });
 
 program.parse();

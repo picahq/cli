@@ -169,8 +169,10 @@ export async function connectionListCommand(options?: { search?: string; limit?:
       ? accessFiltered.filter(conn => conn.platform.toLowerCase().includes(searchQuery))
       : accessFiltered;
 
+    const limitArg = options?.limit ? parseInt(options.limit, 10) : undefined;
+
     if (output.isAgentMode()) {
-      const limit = options?.limit ? parseInt(options.limit, 10) : 20;
+      const limit = limitArg ?? 20;
       const limited = filtered.slice(0, limit);
 
       output.json({
@@ -190,6 +192,8 @@ export async function connectionListCommand(options?: { search?: string; limit?:
       });
       return;
     }
+
+    const displayed = limitArg !== undefined ? filtered.slice(0, limitArg) : filtered;
 
     spinner.stop(`${filtered.length} connection${filtered.length === 1 ? '' : 's'} found`);
 
@@ -212,7 +216,7 @@ export async function connectionListCommand(options?: { search?: string; limit?:
 
     console.log();
 
-    const rows = filtered.map(conn => ({
+    const rows = displayed.map(conn => ({
       status: getStatusIndicator(conn.state),
       platform: conn.platform,
       state: conn.state,
@@ -234,7 +238,14 @@ export async function connectionListCommand(options?: { search?: string; limit?:
     );
 
     console.log();
-    p.note(`Add more with: ${pc.cyan('one connection add <platform>')}`, 'Tip');
+    if (displayed.length < filtered.length) {
+      p.note(
+        `Showing ${displayed.length} of ${filtered.length}. Increase --limit or run without it to see all.`,
+        'Limited'
+      );
+    } else {
+      p.note(`Add more with: ${pc.cyan('one connection add <platform>')}`, 'Tip');
+    }
   } catch (error) {
     spinner.stop('Failed to load connections');
     output.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
