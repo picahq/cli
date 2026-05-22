@@ -380,7 +380,7 @@ export function walkSteps(steps: FlowStep[], visit: (step: FlowStep) => boolean 
   for (const step of steps) {
     if (visit(step)) return true;
     for (const { configKey, fieldName } of nested) {
-      const config = (step as Record<string, unknown>)[configKey] as Record<string, unknown> | undefined;
+      const config = (step as unknown as Record<string, unknown>)[configKey] as Record<string, unknown> | undefined;
       if (config && Array.isArray(config[fieldName])) {
         if (walkSteps(config[fieldName] as FlowStep[], visit)) return true;
       }

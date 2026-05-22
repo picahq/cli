@@ -188,7 +188,7 @@ export async function configCommand(): Promise<void> {
     let isValid = false;
     try {
       const api = new OneApi(apiKey, `${normalized}/v1`);
-      isValid = await api.validateApiKey();
+      isValid = Boolean(await api.validateApiKey());
     } catch (err) {
       spinner.stop('Connection failed');
       const msg = err instanceof Error ? err.message : String(err);
@@ -230,7 +230,7 @@ export async function configCommand(): Promise<void> {
     let isValid = false;
     try {
       const api = new OneApi(apiKey, 'https://api.withone.ai/v1');
-      isValid = await api.validateApiKey();
+      isValid = Boolean(await api.validateApiKey());
     } catch (err) {
       spinner.stop('Connection failed');
       const msg = err instanceof Error ? err.message : String(err);

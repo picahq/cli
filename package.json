@@ -1,6 +1,6 @@
 {
   "name": "@withone/cli",
-  "version": "1.43.4",
+  "version": "1.43.5",
   "description": "CLI for managing One",
   "type": "module",
   "files": [
@@ -12,12 +12,19 @@
   "bin": {
     "one": "./bin/cli.js"
   },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
     "start": "node bin/cli.js",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test \"src/**/*.test.ts\""
+    "test": "tsx --test \"src/**/*.test.ts\"",
+    "prepare": "tsup"
   },
   "dependencies": {
     "@clack/prompts": "^0.9.1",

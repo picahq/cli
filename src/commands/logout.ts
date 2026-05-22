@@ -11,7 +11,7 @@ import {
 import * as output from '../lib/output.js';
 import type { Config } from '../lib/types.js';
 
-function formatWhoami(config: Config, apiKey: string, pc: typeof import('picocolors').default): string[] {
+function formatWhoami(config: Config, apiKey: string, pc: typeof import('picocolors')): string[] {
   const whoami = config.whoami;
   const env = getEnvFromApiKey(apiKey);
   const envLabel = env === 'test' ? pc.yellow('test') : pc.green('live');

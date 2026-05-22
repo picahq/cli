@@ -714,7 +714,11 @@ export async function actionsExecuteParallelCommand(): Promise<void> {
 
     // Schema validation
     if (actionDetails && !flags.skipValidation && segErrors.length === 0) {
-      const validation = validateActionInput(actionDetails, { data, pathVariables, queryParams });
+      const validation = validateActionInput(actionDetails, {
+        data: data as Record<string, unknown> | undefined,
+        pathVariables,
+        queryParams,
+      });
       if (!validation.valid) {
         for (const m of validation.missing) {
           segErrors.push(`Missing ${m.flag} "${m.param}"${m.description ? ` — ${m.description}` : ''}`);
