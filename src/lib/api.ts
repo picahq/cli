@@ -372,6 +372,7 @@ export class OneApi {
       'x-one-connection-key': args.connectionKey,
       'x-one-action-id': action._id,
       'Content-Type': contentType,
+      Accept: 'application/json, text/event-stream, */*',
       ...args.headers,
     };
 
