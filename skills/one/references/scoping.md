@@ -3,7 +3,7 @@
 The One CLI can be configured at two scopes:
 
 - **Global** — `~/.one/config.json`. Applies everywhere the user runs `one`.
-- **Project** — `~/.one/projects/<slug>/config.json`, where `<slug>` is the project root path with slashes replaced by dashes (e.g. `/Users/jane/acme` → `-Users-jane-acme`). Only applies when running `one` from inside that project folder.
+- **Project** — `~/.one/projects/<slug>/config.json`, where `<slug>` is the project root path with path separators (and any character Windows forbids in a path component) replaced by dashes (e.g. `/Users/jane/acme` → `-Users-jane-acme`; on Windows, `C:\Users\jane\acme` → `C--Users-jane-acme`). Only applies when running `one` from inside that project folder.
 
 **Detecting the project root.** The CLI walks up from cwd looking for `.one`, `.git`, or `package.json` and treats the nearest hit as the project root — `.one` is checked first so a monorepo subproject can opt into being its own root with `mkdir .one`. Without a `.one` opt-in, every cwd under a parent `.git`/`package.json` shares one project config keyed by that parent.
 

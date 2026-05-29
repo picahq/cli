@@ -3,9 +3,44 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { getProjectRoot, resolveConfig } from './config.js';
+import { getProjectRoot, getProjectSlug, resolveConfig } from './config.js';
 
-// All tests sandbox $HOME to a temp dir so they read/write under
+describe('getProjectSlug', () => {
+  it('encodes a POSIX absolute path by replacing path separators', () => {
+    assert.equal(getProjectSlug('/Users/jane/projects/acme'), '-Users-jane-projects-acme');
+  });
+
+  it('replaces the Windows drive-letter colon (INT-2828)', () => {
+    // Pre-fix this produced `C:-Users-DeathStalker`, which mkdirSync
+    // rejects on NTFS because `:` is forbidden inside a path component.
+    const slug = getProjectSlug('C:\\Users\\DeathStalker');
+    assert.equal(slug, 'C--Users-DeathStalker');
+    assert.equal(slug.includes(':'), false, 'slug must not contain ":" on Windows');
+  });
+
+  it('replaces a colon anywhere in the path, not just the drive letter', () => {
+    assert.equal(getProjectSlug('/tmp/some:weird/dir'), '-tmp-some-weird-dir');
+  });
+
+  it('handles mixed forward and backward slashes (Windows MSYS / WSL boundary)', () => {
+    assert.equal(getProjectSlug('C:\\Users\\jane/projects'), 'C--Users-jane-projects');
+  });
+
+  it('replaces every Windows-forbidden character (< > : " | ? *)', () => {
+    // None of these would normally appear in a path the CLI sees (Windows
+    // forbids them in components), but stripping them defensively keeps
+    // the slug a valid filename on any OS regardless of how it was
+    // constructed.
+    assert.equal(getProjectSlug('a<b>c:d"e|f?g*h'), 'a-b-c-d-e-f-g-h');
+  });
+
+  it('is idempotent — re-encoding an already-encoded slug is a no-op', () => {
+    const slug = getProjectSlug('C:\\Users\\jane');
+    assert.equal(getProjectSlug(slug), slug);
+  });
+});
+
+// All tests below sandbox $HOME to a temp dir so they read/write under
 // `<tmp>/.one/...` instead of the developer's real `~/.one/`. The config
 // module deliberately resolves home-rooted paths lazily on every call
 // (see the comment at the top of config.ts), so flipping HOME here is
@@ -28,7 +63,7 @@ function withSandbox(): {
     tmpDir,
     homeDir,
     writeProjectConfig(absDir, content) {
-      const slug = absDir.replace(/[\\/]/g, '-');
+      const slug = getProjectSlug(absDir);
       const dir = path.join(projectsDir, slug);
       fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify(content));

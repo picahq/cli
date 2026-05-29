@@ -53,12 +53,20 @@ export function getProjectRoot(cwd: string = process.cwd()): string {
 }
 
 /**
- * Encode an absolute path into a slug, matching Claude Code's convention:
- * replace path separators with '-'. e.g.
- *   /Users/moe/projects/acme → -Users-moe-projects-acme
+ * Encode an absolute path into a slug suitable for use as a single
+ * directory name on every supported OS. Replaces path separators and
+ * any character Windows forbids in a path component (`< > : " | ? *`)
+ * with `-`. e.g.
+ *   /Users/moe/projects/acme  → -Users-moe-projects-acme
+ *   C:\Users\moe\projects\acme → C--Users-moe-projects-acme
+ *
+ * Without `:` in the replace set, a Windows path's drive-letter colon
+ * survives in the slug — `C:-Users-...` — and `mkdirSync` of
+ * `<HOME>\.one\projects\C:-Users-...` errors with ENOENT because NTFS
+ * rejects `:` inside a path component. INT-2828.
  */
 export function getProjectSlug(projectRoot: string = getProjectRoot()): string {
-  return projectRoot.replace(/[\\/]/g, '-');
+  return projectRoot.replace(/[\\/<>:"|?*]/g, '-');
 }
 
 export function getProjectConfigDir(projectRoot: string = getProjectRoot()): string {
