@@ -28,14 +28,20 @@ export interface ResolvedConfig {
 // ── Project detection ────────────────────────────────────────────────
 
 /**
- * Walk up from cwd looking for a project marker (.git, package.json).
+ * Walk up from cwd looking for a project marker (.one, .git, package.json).
  * Falls back to cwd if nothing is found.
+ *
+ * `.one` is listed first so a monorepo subproject can opt into being its
+ * own project root with `mkdir .one`, even when a parent already has .git
+ * or package.json. Without this opt-in, every cwd under a parent marker
+ * shares one project config keyed by the parent's slug.
  */
 export function getProjectRoot(cwd: string = process.cwd()): string {
   let dir = path.resolve(cwd);
   const root = path.parse(dir).root;
   while (dir !== root) {
     if (
+      fs.existsSync(path.join(dir, '.one')) ||
       fs.existsSync(path.join(dir, '.git')) ||
       fs.existsSync(path.join(dir, 'package.json'))
     ) {
@@ -75,23 +81,18 @@ export function getGlobalConfigPath(): string {
  * should use this; convenience wrappers below preserve the legacy API.
  */
 export function resolveConfig(): ResolvedConfig {
-  const projectRoot = getProjectRoot();
-  const projectSlug = getProjectSlug(projectRoot);
-  const projectPath = getProjectConfigPath(projectRoot);
+  const detectedRoot = getProjectRoot();
+  const detectedSlug = getProjectSlug(detectedRoot);
 
-  // Check detected project root first
-  if (fs.existsSync(projectPath)) {
-    const config = readConfigFile(projectPath);
-    if (config) {
-      return { config, scope: 'project', path: projectPath, projectRoot, projectSlug };
-    }
-  }
-
-  // Walk up from cwd checking each ancestor for a project config
+  // Walk from cwd up, checking each level's slug for a project config.
+  // First match wins — closer to cwd is more specific (mirrors how
+  // .gitignore / .envrc / .editorconfig resolve). This also catches the
+  // "orphan config" case where a project config exists under cwd's slug
+  // but cwd has no marker, so the marker walk above would otherwise
+  // skip over it and fall through to global.
   const root = path.parse(process.cwd()).root;
   let dir = path.resolve(process.cwd());
-  while (dir !== root) {
-    dir = path.dirname(dir);
+  while (true) {
     const slug = getProjectSlug(dir);
     const configPath = path.join(projectsDir(), slug, 'config.json');
     if (fs.existsSync(configPath)) {
@@ -100,16 +101,21 @@ export function resolveConfig(): ResolvedConfig {
         return { config, scope: 'project', path: configPath, projectRoot: dir, projectSlug: slug };
       }
     }
+    if (dir === root) break;
+    dir = path.dirname(dir);
   }
 
+  // No project config anywhere; check global. Report the marker-detected
+  // root in projectRoot so `one config path` still shows where a future
+  // project config *would* live.
   if (fs.existsSync(configFile())) {
     const config = readConfigFile(configFile());
     if (config) {
-      return { config, scope: 'global', path: configFile(), projectRoot, projectSlug };
+      return { config, scope: 'global', path: configFile(), projectRoot: detectedRoot, projectSlug: detectedSlug };
     }
   }
 
-  return { config: null, scope: null, path: configFile(), projectRoot, projectSlug };
+  return { config: null, scope: null, path: configFile(), projectRoot: detectedRoot, projectSlug: detectedSlug };
 }
 
 function readConfigFile(filePath: string): Config | null {

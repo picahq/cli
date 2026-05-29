@@ -140,6 +140,8 @@ Supports Claude Code, Claude Desktop, Cursor, Windsurf, Codex, and Kiro.
 
 When you run `one` in a project, it uses the project config if one exists and falls back to the global config otherwise. Use `one config path` to see which config is active and the full resolution order.
 
+In a monorepo, the project root is the nearest ancestor with `.one/`, `.git`, or `package.json` — checked in that order. Run `mkdir .one` in a nested subproject to make it its own project root (so the config is keyed by the nested dir's slug instead of the monorepo's).
+
 If you've already set up, `one init` shows your current status for the active scope and lets you update your key, install to more agents, or reconfigure.
 
 | Flag | What it does |
