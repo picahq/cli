@@ -110,7 +110,7 @@ Request specific sections:
 ## Important Notes
 
 - **Always use \`--agent\` flag** for structured JSON output
-- Platform names are always **kebab-case** (e.g., \`hub-spot\`, \`google-calendar\`)
+- Platform names are **lowercase**; multi-word names use dashes (e.g., \`hubspot\`, \`google-calendar\`)
 - Always use the **exact action ID** from search results — don't guess
 - Always read **knowledge** before executing any action
 - Connection keys come from \`one connection list\` — don't hardcode them
@@ -210,7 +210,7 @@ All errors return JSON: \`{"error": "message"}\`. Check the \`error\` key.
 
 ## Notes
 
-- Platform names are **kebab-case** (e.g., \`hub-spot\`)
+- Platform names are **lowercase**; multi-word names use dashes (e.g., \`hubspot\`, \`ship-station\`)
 - JSON flags use single quotes around the JSON to avoid shell escaping
 - If search returns no results, try broader queries
 - Access control settings from \`one config\` may restrict execution
@@ -965,7 +965,7 @@ export const PLATFORM_DEMO_ACTIONS: Record<string, { description: string; query:
   'google-calendar': { description: 'List upcoming events', query: 'list events' },
   'slack': { description: 'List channels', query: 'list channels' },
   'shopify': { description: 'List products', query: 'list products' },
-  'hub-spot': { description: 'List contacts', query: 'list contacts' },
+  'hubspot': { description: 'List contacts', query: 'list contacts' },
   'github': { description: 'List repositories', query: 'list repos' },
   'stripe': { description: 'List customers', query: 'list customers' },
   'notion': { description: 'Search pages', query: 'search' },
@@ -980,7 +980,7 @@ export function getWorkflowExamples(connectedPlatforms: string[]): string[] {
   if (has('gmail') && has('slack')) examples.push('Gmail → Slack: Forward important emails to a channel');
   if (has('stripe') && has('slack')) examples.push('Stripe → Slack: Notify on new payments');
   if (has('shopify') && has('gmail')) examples.push('Shopify → Gmail: Send order confirmation emails');
-  if (has('hub-spot') && has('gmail')) examples.push('HubSpot → Gmail: Auto-email new leads');
+  if (has('hubspot') && has('gmail')) examples.push('HubSpot → Gmail: Auto-email new leads');
   if (has('github') && has('slack')) examples.push('GitHub → Slack: Notify on new issues/PRs');
 
   if (examples.length === 0) {

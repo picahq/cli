@@ -134,7 +134,7 @@ program
     $ one actions execute gmail conn_mod_def::xxx::yyy live::gmail::default::abc123 \\
         -d '{"to":"j@example.com","subject":"Hello","body":"Hi!","connectionKey":"live::gmail::default::abc123"}'
 
-  Platform names are always kebab-case (e.g. hub-spot, ship-station, google-calendar).
+  Platform names are lowercase; multi-word names use dashes (e.g. hubspot, ship-station, google-calendar).
   Run 'one platforms' to browse all 250+ available platforms.`)
   .version(version);
 

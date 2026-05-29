@@ -156,11 +156,11 @@ Connect a new platform via OAuth.
 
 ```bash
 one add shopify
-one add hub-spot
+one add hubspot
 one add gmail
 ```
 
-Opens your browser, you authorize, done. The CLI polls until the connection is live. Platform names are kebab-case - run `one platforms` to see them all.
+Opens your browser, you authorize, done. The CLI polls until the connection is live. Platform names are lowercase (with dashes for multi-word names) - run `one platforms` to see them all.
 
 ### `one list`
 
@@ -209,7 +209,7 @@ Search for API actions on a connected platform using natural language.
 
 ```bash
 one actions search shopify "list products"
-one actions search hub-spot "create contact" -t execute
+one actions search hubspot "create contact" -t execute
 one actions search gmail "send email"
 ```
 
@@ -234,7 +234,7 @@ Execute an API action on a connected platform.
 one actions execute shopify <actionId> <connectionKey>
 
 # POST with data
-one actions execute hub-spot <actionId> <connectionKey> \
+one actions execute hubspot <actionId> <connectionKey> \
   -d '{"properties": {"email": "jane@example.com", "firstname": "Jane"}}'
 
 # With path variables

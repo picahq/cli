@@ -259,7 +259,7 @@ function buildDemoActions(connections: Connection[]): string {
   lines.push('Try these to prove it works:');
 
   const connectedPlatforms = connections.map(c => c.platform.toLowerCase());
-  const popularPlatforms = ['gmail', 'google-calendar', 'slack', 'shopify', 'hub-spot', 'github'];
+  const popularPlatforms = ['gmail', 'google-calendar', 'slack', 'shopify', 'hubspot', 'github'];
 
   const platformsToShow = [
     ...connectedPlatforms.filter(p => PLATFORM_DEMO_ACTIONS[p]),

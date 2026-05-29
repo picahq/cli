@@ -59,7 +59,7 @@ Removes a connection. Returns `{"deleted": true, "platform": "...", "key": "..."
 one --agent actions search <platform> "<query>" -t execute
 ```
 
-- Platform names are always kebab-case: `gmail`, `hub-spot`, `ship-station`
+- Platform names are lowercase; multi-word names use dashes: `gmail`, `hubspot`, `ship-station`, `google-calendar`
 - Use `-t execute` when performing actions, `-t knowledge` when researching or writing code
 - If no results, broaden the query (e.g., `"list"` instead of `"list active premium customers"`)
 
@@ -97,7 +97,7 @@ Examples:
 one --agent actions execute shopify <actionId> <connectionKey>
 
 # POST with body data
-one --agent actions execute hub-spot <actionId> <connectionKey> \
+one --agent actions execute hubspot <actionId> <connectionKey> \
   -d '{"properties": {"email": "jane@example.com", "firstname": "Jane"}}'
 
 # Path variables + query params
@@ -130,7 +130,7 @@ All errors return JSON: `{"error": "message"}`. Parse output as JSON and check f
 ## Important Rules
 
 - Always use `--agent` flag for structured JSON output
-- Platform names are always kebab-case (`hub-spot` not `HubSpot`)
+- Platform names are lowercase; multi-word names use dashes (`hubspot` not `HubSpot`, `google-calendar` not `googleCalendar`)
 - Always use the exact action ID from search results — never guess or construct them
 - Always read knowledge before executing — it has required params, validation rules, and caveats
 - JSON values passed to `-d`, `--path-vars`, `--query-params` must be valid JSON (use single quotes around JSON to avoid shell escaping)
