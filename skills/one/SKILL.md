@@ -1,21 +1,21 @@
 ---
 name: one
 description: |
-  Use the One CLI (`one`) to interact with 250+ third-party platforms — Gmail, Slack, Shopify, HubSpot, Stripe, GitHub, Notion, Salesforce, and more — through their APIs. One handles authentication, request building, and execution through a single unified interface.
+  Use the One CLI (`one`) to interact with 3rd-party platforms — Gmail, Slack, Stripe, Notion, etc. through their APIs. One handles auth, request building, and execution.
 
-  TRIGGER when the user wants to:
-  - Interact with ANY third-party platform or external service (e.g., "send an email", "create a Shopify order", "look up a HubSpot contact", "post to Slack")
-  - List their connected platforms or check what integrations are available
-  - Search for what they can do on a platform (e.g., "what can I do with Gmail")
-  - Execute any API call against a connected platform
+  TRIGGER when:
+  - Interact with ANY 3rd-party platform or external service (e.g., "send an email", "create a Shopify order", "find a HubSpot contact", "post to Slack")
+  - List their connected platforms or check available ones
+  - Search for available actions (e.g., "what can I do with Gmail")
+  - Execute API calls with a connected platform
   - Set up webhook-driven automations between platforms (e.g., "when a Stripe payment comes in, notify Slack")
   - Build multi-step workflows that chain actions across platforms (e.g., "fetch Stripe customers and email each one")
-  - Anything involving third-party APIs, integrations, or connected apps — even if they don't mention "One" by name
+  - Anything involving 3rd-party APIs, integrations, or connected apps — even if they don't mention "One" by name
 
   DO NOT TRIGGER for:
-  - Setting up One or installing MCP (that's `one init`)
-  - Adding new connections (that's `one add <platform>`)
-  - Configuring access control (that's `one config`)
+  - Setting up One or installing MCP (use `one init`)
+  - Adding new connections (use `one add <platform>`)
+  - Configuring access control (use `one config`)
 ---
 
 # One CLI
