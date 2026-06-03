@@ -27,7 +27,7 @@ Before using any feature, read its guide section first: \`one guide actions\`, \
 
 ## Features
 
-### 1. Actions — Execute API calls on 250+ platforms
+### 1. Actions — Execute API calls on 400+ platforms
 Search for actions, read their docs, and execute them. This is the core workflow.
 
 **Quick start:**

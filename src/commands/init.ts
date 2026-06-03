@@ -111,7 +111,7 @@ async function chooseConfigScope(
         message: 'Which config do you want to edit?',
         options: [
           { value: 'project', label: `This project (${projectName})`, hint: homeProject },
-          { value: 'global',  label: 'Global (all folders)',           hint: homeGlobal },
+          { value: 'global', label: 'Global (all folders)', hint: homeGlobal },
         ],
         initialValue: 'project',
       });
@@ -800,7 +800,7 @@ function printOnboardingPrompt(): void {
   console.log(pc.cyan('  ┌─────────────────────────────────────────────────────────────'));
   console.log(pc.cyan('  │'));
   console.log(pc.cyan('  │  The One CLI (`one`) is now installed on this machine. It'));
-  console.log(pc.cyan('  │  lets you interact with 250+ third-party platforms (Gmail,'));
+  console.log(pc.cyan('  │  lets you interact with 400+ third-party platforms (Gmail,'));
   console.log(pc.cyan('  │  Slack, Shopify, HubSpot, Stripe, GitHub, etc.) through'));
   console.log(pc.cyan('  │  their APIs. Whenever you need to interact with any'));
   console.log(pc.cyan('  │  third-party platform or external service, use the `one`'));
@@ -1087,7 +1087,7 @@ async function freshSetup(
   const resolutionHint =
     scope === 'project'
       ? `When you run ${pc.cyan('one')} from ${pc.bold(path.basename(getProjectRoot()))}, it uses this project config.\n` +
-        `From anywhere else, it falls back to your global config.`
+      `From anywhere else, it falls back to your global config.`
       : `This config applies to every folder unless a project config is set.`;
 
   p.note(
