@@ -548,6 +548,20 @@ Settings propagate automatically to all installed agent configs.
 
 Auto-sync refuses to resurrect skills if you opted out of skill installation during `one init` — the canonical dir has to already exist.
 
+### `one update`
+
+Updates the CLI to the latest version (`npm install -g @withone/cli@latest`).
+
+The CLI also **auto-updates in the background**: when a newer version has been published for more than 30 minutes, the next `one` command silently kicks off a global install. This is hardened against concurrent runs — a lock file in `~/.one/` ensures at most one install runs at a time (so parallel agent invocations can't collide and wedge npm), and the lock self-heals after 10 minutes if an install ever crashes or hangs.
+
+To disable background auto-updates entirely (e.g. on CI or a shared agent host), set:
+
+```bash
+export ONE_NO_AUTO_UPDATE=1
+```
+
+Run `one update` manually whenever you want to upgrade.
+
 ### Project config (`.onerc`)
 
 Drop a `.onerc` file in your project root to override global settings per-project. Simple `KEY=VALUE` format; `#` for comments. Read from the current working directory (no parent lookup).

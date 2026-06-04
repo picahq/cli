@@ -724,7 +724,7 @@ program
 
 program
   .command('update')
-  .description('Update the One CLI to the latest version')
+  .description('Update the One CLI to the latest version (background auto-update can be disabled with ONE_NO_AUTO_UPDATE=1)')
   .action(async () => {
     await updateCommand();
   });
