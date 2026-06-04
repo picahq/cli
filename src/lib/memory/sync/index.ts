@@ -610,13 +610,18 @@ async function syncRunCommand(platform: string, options: SyncRunOptions): Promis
     } catch (err) {
       // Use real counts attached by the runner (if available) instead of 0
       const errObj = err as any;
+      const errorContext: { message: string; httpStatus?: number; retryAfter?: number } = {
+        message: err instanceof Error ? err.message : String(err),
+        ...(errObj?._httpStatus !== undefined ? { httpStatus: errObj._httpStatus } : {}),
+        ...(errObj?._retryAfter !== undefined ? { retryAfter: errObj._retryAfter } : {}),
+      };
       results.push({
         model: profile.model,
         recordsSynced: errObj?._recordsSynced ?? 0,
         pagesProcessed: errObj?._pagesProcessed ?? 0,
         duration: '0s',
         status: 'failed',
-        error: err instanceof Error ? err.message : String(err),
+        error: errorContext,
       });
     }
   }
@@ -643,8 +648,11 @@ async function syncRunCommand(platform: string, options: SyncRunOptions): Promis
       const archivedColor = sc.archived > sc.active ? pc.red : pc.dim;
       console.log(`    memory: ${pc.green(String(sc.active))} active, ${archivedColor(String(sc.archived))} archived`);
     }
-    if ('error' in r && r.error) {
-      console.log(`    ${pc.red(r.error as string)}`);
+    if (r.error) {
+      const errParts = [r.error.message];
+      if (r.error.httpStatus) errParts.push(`HTTP ${r.error.httpStatus}`);
+      if (r.error.retryAfter) errParts.push(`retry after ${r.error.retryAfter}s`);
+      console.log(`    ${pc.red(errParts.join(' — '))}`);
     }
   }
 }

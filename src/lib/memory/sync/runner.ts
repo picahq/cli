@@ -847,6 +847,11 @@ export async function syncModel(
     const rawMsg = err instanceof Error ? err.message : String(err);
     const shortMsg = truncate(rawMsg, 500);
 
+    // Propagate HTTP-level context so callers can distinguish 429/401/5xx
+    // from network failures without parsing the message string.
+    const httpStatus = err instanceof ApiError ? err.status : undefined;
+    const retryAfter = err instanceof ApiError ? err.retryAfterSeconds : undefined;
+
     if (pagesProcessed > 0) {
       const resumeErr = new Error(
         `Sync interrupted after page ${pagesProcessed} (${totalRecords} records). ` +
@@ -855,6 +860,8 @@ export async function syncModel(
       // Attach real counts so callers can report progress
       (resumeErr as any)._recordsSynced = totalRecords;
       (resumeErr as any)._pagesProcessed = pagesProcessed;
+      (resumeErr as any)._httpStatus = httpStatus;
+      (resumeErr as any)._retryAfter = retryAfter;
       throw resumeErr;
     }
 
@@ -862,6 +869,8 @@ export async function syncModel(
     const wrapped = new Error(shortMsg);
     (wrapped as any)._recordsSynced = totalRecords;
     (wrapped as any)._pagesProcessed = pagesProcessed;
+    (wrapped as any)._httpStatus = httpStatus;
+    (wrapped as any)._retryAfter = retryAfter;
     throw wrapped;
   } finally {
     process.off('SIGINT', onSigint);

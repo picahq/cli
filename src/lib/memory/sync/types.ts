@@ -180,12 +180,22 @@ export interface ModelSyncState {
 
 export type SyncState = Record<string, Record<string, ModelSyncState>>;
 
+export interface SyncRunError {
+  message: string;
+  /** HTTP status code when the failure originated from an API response (e.g. 429, 401). */
+  httpStatus?: number;
+  /** Seconds until retry is safe, parsed from Retry-After (set when httpStatus is 429). */
+  retryAfter?: number;
+}
+
 export interface SyncRunResult {
   model: string;
   recordsSynced: number;
   pagesProcessed: number;
   duration: string;
   status: 'complete' | 'failed' | 'dry-run';
+  /** Populated when status is "failed" — structured error context for programmatic handling. */
+  error?: SyncRunError;
   /** Rows removed by --full-refresh because they were no longer in the source. */
   deletedStale?: number;
   /** Whether --full-refresh actually ran reconcile (skipped on truncated pagination). */
