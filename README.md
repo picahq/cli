@@ -144,11 +144,21 @@ In a monorepo, the project root is the nearest ancestor with `.one/`, `.git`, or
 
 If you've already set up, `one init` shows your current status for the active scope and lets you update your key, install to more agents, or reconfigure.
 
+**Agent-driven setup (no prompts).** Pass `--auth` and `one init` runs end-to-end without any terminal interaction — handy when an AI agent is onboarding you. It saves the key, auto-installs the One skill, and skips the connect step (`one add` later).
+
+```bash
+one init --auth browser            # opens a login window; you authenticate, the window closes — done
+one init --auth manual --api-key sk_live_...   # headless / CI, no browser
+```
+
 | Flag | What it does |
 |------|-------------|
 | `-y` | Skip confirmations |
 | `-g` | Non-interactive: write the One config globally (`~/.one/config.json`) |
 | `-p` | Non-interactive: write the One config for this project (`~/.one/projects/<slug>/config.json`) |
+| `--auth <browser\|manual>` | Run setup with **no prompts**. `browser` opens a login window; `manual` uses `--api-key`. Scope from `-g`/`-p` (default global). |
+| `--api-key <key>` | API key for `--auth manual` (`sk_live_…` / `sk_test_…`) |
+| `--openai-key <key>` | Optional OpenAI key for `one mem` semantic search |
 
 ### `one add <platform>`
 

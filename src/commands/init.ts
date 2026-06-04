@@ -49,9 +49,26 @@ import { writeInstalledSkillVersion } from '../lib/skill-sync.js';
 import { getCurrentVersion } from './update.js';
 import { browserLogin } from './login.js';
 
-export async function initCommand(options: { yes?: boolean; global?: boolean; project?: boolean }): Promise<void> {
+export interface InitOptions {
+  yes?: boolean;
+  global?: boolean;
+  project?: boolean;
+  auth?: string;
+  apiKey?: string;
+  openaiKey?: string;
+}
+
+export async function initCommand(options: InitOptions): Promise<void> {
+  // Non-interactive path — `--auth` turns off every terminal prompt so an
+  // agent can run setup end-to-end. Browser auth still opens a window for the
+  // user to authenticate, but the CLI never blocks on stdin.
+  if (options.auth) {
+    await nonInteractiveInit(options);
+    return;
+  }
+
   if (output.isAgentMode()) {
-    output.error('This command requires interactive input. Run without --agent.');
+    output.error('This command is interactive. Run without --agent, or pass --auth <browser|manual> for a non-interactive setup.');
   }
 
   printBanner();
@@ -72,6 +89,130 @@ export async function initCommand(options: { yes?: boolean; global?: boolean; pr
     return;
   }
   await freshSetup(scope, options);
+}
+
+// ── Non-interactive setup (agent-driven) ─────────────────────────────
+//
+// Triggered by `--auth <browser|manual>`. Runs the full onboarding without
+// any stdin prompts so an AI agent can install + authenticate the user:
+//
+//   one init --auth browser            → opens a browser, waits for callback
+//   one init --auth manual --api-key … → validates the supplied key
+//
+// Scope comes from --global/--project (default: global). The One skill is
+// auto-installed to the primary agents. Connecting platforms is skipped —
+// the user can run `one add <platform>` afterwards.
+
+async function nonInteractiveInit(options: InitOptions): Promise<void> {
+  const auth = options.auth;
+  if (auth !== 'browser' && auth !== 'manual') {
+    output.error(`Invalid --auth value '${auth}'. Use 'browser' or 'manual'.`);
+  }
+
+  // Global takes precedence when both flags are passed (matches the picker).
+  const scope: ConfigScope = options.global ? 'global' : options.project ? 'project' : 'global';
+
+  let apiKey: string;
+  let whoami: import('../lib/types.js').WhoAmIResponse;
+
+  if (auth === 'browser') {
+    const result = await browserLogin();
+    if (!result) {
+      output.error('Browser login did not complete. Try again: one init --auth browser');
+    }
+    apiKey = result.apiKey;
+    whoami = result.whoami;
+  } else {
+    const key = options.apiKey?.trim();
+    if (!key) {
+      output.error('--auth manual requires --api-key <sk_live_… | sk_test_…>.');
+    }
+    if (!key.startsWith('sk_live_') && !key.startsWith('sk_test_')) {
+      output.error('API key should start with sk_live_ or sk_test_.');
+    }
+    const api = new OneApi(key, getApiBase());
+    let validated: import('../lib/types.js').WhoAmIResponse | false;
+    try {
+      validated = await api.validateApiKey();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      output.error(`Could not validate API key: ${msg}`);
+    }
+    if (!validated) {
+      output.error(`Invalid API key. Get a valid key at ${getApiKeyUrl()}`);
+    }
+    apiKey = key;
+    whoami = validated;
+  }
+
+  // Persist credentials at the chosen scope, preserving any existing config.
+  const existing = scope === 'project' ? readProjectConfig() : readGlobalConfig();
+  writeConfig(
+    {
+      apiKey,
+      installedAgents: existing?.installedAgents ?? [],
+      createdAt: existing?.createdAt ?? new Date().toISOString(),
+      accessControl: existing?.accessControl,
+      apiBase: existing?.apiBase,
+      cacheTtl: existing?.cacheTtl,
+      whoami,
+    },
+    scope,
+  );
+
+  // Optional OpenAI key for `one mem` semantic search.
+  if (options.openaiKey?.trim()) {
+    try {
+      setOpenAiApiKey(options.openaiKey.trim());
+    } catch {
+      // Non-fatal — memory still works with FTS only.
+    }
+  }
+
+  // Auto-install the One skill to the primary agents.
+  const primaryIds = SKILL_AGENTS.filter(a => a.primary).map(a => a.id);
+  const { installed, failed } = installSkillForAgents(primaryIds);
+
+  const configPath = scope === 'project' ? getProjectConfigPath() : getGlobalConfigPath();
+
+  if (output.isAgentMode()) {
+    output.json({
+      success: true,
+      scope,
+      configPath,
+      auth,
+      account: {
+        user: whoami.user,
+        organization: whoami.organization,
+        project: whoami.project,
+        env: getEnvFromApiKey(apiKey),
+      },
+      skillInstalled: installed,
+      skillFailed: failed,
+    });
+    return;
+  }
+
+  // Human-readable summary (agent watched the browser, user may read this too).
+  const env = getEnvFromApiKey(apiKey);
+  const contextParts: string[] = [];
+  if (whoami.organization) contextParts.push(whoami.organization.name);
+  if (whoami.project) contextParts.push(whoami.project.name);
+  const scopeDisplay = contextParts.length > 0 ? contextParts.join(' / ') : 'Personal';
+  const envLabel = env === 'test' ? pc.yellow('test') : pc.green('live');
+
+  console.log();
+  console.log(`  ${pc.bold('Setup complete')} ${scopeLabel(scope)}`);
+  console.log(`  ${pc.dim('─'.repeat(42))}`);
+  console.log(`  ${pc.dim('Account:')} ${scopeDisplay} ${pc.dim('·')} ${envLabel}`);
+  console.log(`  ${pc.dim('User:')}    ${whoami.user.name} ${pc.dim(`(${whoami.user.email})`)}`);
+  console.log(`  ${pc.dim('Config:')}  ${tildify(configPath)}`);
+  if (installed.length > 0) {
+    console.log(`  ${pc.dim('Skill:')}   ${pc.green('installed')} ${pc.dim('· ' + installed.join(', '))}`);
+  }
+  console.log();
+  console.log(`  ${pc.dim('Connect a platform later with')} ${pc.cyan('one add <platform>')}`);
+  printOnboardingPrompt();
 }
 
 // ── Scope picker ─────────────────────────────────────────────────────

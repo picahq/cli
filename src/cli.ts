@@ -68,7 +68,7 @@ program
   Setup:
     one login                             Authenticate via browser (opens app.withone.ai)
     one logout                            Clear local credentials
-    one init                              Set up API key and install MCP server
+    one init                              Set up API key + skill (add --auth browser for no-prompt agent setup)
     one add <platform>                    Connect a platform via OAuth (e.g. gmail, slack, shopify)
     one connection delete <key>           Remove a connection (alias: one connection rm)
     one config                            Configure access control (permissions, scoping)
@@ -177,10 +177,13 @@ program.hook('postAction', async () => {
 
 program
   .command('init')
-  .description('Set up One and install MCP to your AI agents (interactive: picks global or project scope)')
+  .description('Set up One and install the skill to your AI agents (interactive; pass --auth for a no-prompt setup)')
   .option('-y, --yes', 'Skip confirmations')
   .option('-g, --global', 'Write the One config globally (~/.one/config.json) — skips the scope picker')
   .option('-p, --project', 'Write the One config for this project only (~/.one/projects/<slug>/) — skips the scope picker')
+  .option('--auth <method>', 'Non-interactive setup (no prompts): "browser" opens a login window, "manual" uses --api-key')
+  .option('--api-key <key>', 'API key for --auth manual (sk_live_… or sk_test_…)')
+  .option('--openai-key <key>', 'Optional OpenAI key for `one mem` semantic search (non-interactive setup)')
   .action(async (options) => {
     await initCommand(options);
   });

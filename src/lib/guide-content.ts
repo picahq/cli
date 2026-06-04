@@ -11,6 +11,17 @@ export const GUIDE_OVERVIEW = `# One CLI — Agent Guide
 
 You can also use \`one login\` / \`one logout\` to manage authentication separately (global or per-directory).
 
+### Agent-driven setup (no prompts)
+To onboard a user without any terminal interaction, pass \`--auth\` to \`one init\`. This disables every prompt, auto-installs the One skill, and skips the connect-a-platform step (run \`one add <platform>\` afterwards).
+
+\`\`\`bash
+one init --auth browser              # opens a login window; the user authenticates, the CLI saves the key
+one init --auth browser --project    # same, but scoped to this folder (default scope is global)
+one init --auth manual --api-key sk_live_...   # headless / CI — no browser
+\`\`\`
+
+With \`--auth browser\` the user sees a browser window, picks how to authenticate, and the window closes when done — the agent never blocks on stdin. Add \`--openai-key sk-...\` to enable semantic search in \`one mem\` during setup.
+
 ## The --agent Flag
 
 Always use \`--agent\` for machine-readable JSON output. It disables colors, spinners, and interactive prompts.
