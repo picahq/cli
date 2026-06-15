@@ -440,7 +440,7 @@ actions
   .command('search <platform> <query>')
   .description('Search for actions on a platform (e.g. one actions search gmail "send email")')
   .option('-t, --type <type>', 'execute (to run it) or knowledge (to learn about it). Default: knowledge')
-  .option('--no-cache', 'Skip cache, fetch fresh from API')
+  .option('--no-cache', 'Bypass the cache and re-fetch from the API (the fresh response still refreshes the cache)')
   .action(async (platform: string, query: string, options: { type?: string; cache?: boolean }) => {
     await actionsSearchCommand(platform, query, options);
   });
@@ -449,7 +449,7 @@ actions
   .command('knowledge <platform> <actionId>')
   .alias('k')
   .description('Get full docs for an action — MUST call before execute to know required params')
-  .option('--no-cache', 'Skip cache, fetch fresh from API')
+  .option('--no-cache', 'Bypass the cache and re-fetch from the API (the fresh response still refreshes the cache)')
   .option('--cache-status', 'Print cache metadata without fetching')
   .action(async (platform: string, actionId: string, options: { cache?: boolean; cacheStatus?: boolean }) => {
     await actionsKnowledgeCommand(platform, actionId, options);
@@ -470,7 +470,7 @@ actions
   .option('--dry-run', 'Show request that would be sent without executing')
   .option('--mock', 'Return example response without making an API call')
   .option('--skip-validation', 'Skip input validation against the action schema')
-  .option('--no-cache', 'Fetch action details fresh instead of using the local cache (execution itself is never cached)')
+  .option('--no-cache', 'Bypass the cached action details and re-fetch them (the fresh details still refresh the cache; execution itself is never cached)')
   .option('--output <path>', 'Save binary response to a file (for non-JSON responses like file downloads)')
   .option('--parallel', 'Execute multiple actions concurrently (separate actions with --)')
   .option('--max-concurrency <n>', 'Max concurrent actions when using --parallel (default: 5)', '5')

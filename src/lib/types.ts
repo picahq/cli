@@ -239,6 +239,28 @@ export interface CacheMeta {
   fresh: boolean;
 }
 
+export interface SearchCacheAction {
+  actionId: string;
+  title: string;
+  method: string;
+  path: string;
+}
+
+/**
+ * Payload of a search cache entry. The `platform`/`query`/`searchType` fields
+ * record the exact request that produced these results so `cache update` can
+ * re-run the search and refresh the data — the entry `key`
+ * (`platform_query_type`) isn't reversibly splittable because a query may
+ * itself contain `_`. Older entries lack these fields; treat them as
+ * non-refreshable (timestamp bump only).
+ */
+export interface SearchCacheData {
+  actions: SearchCacheAction[];
+  platform?: string;
+  query?: string;
+  searchType?: 'execute' | 'knowledge';
+}
+
 export interface ApiResponseWithMeta<T> {
   data: T;
   etag: string | null;

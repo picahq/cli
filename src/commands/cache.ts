@@ -1,6 +1,7 @@
 import pc from 'picocolors';
-import { getApiKey, getApiBase } from '../lib/config.js';
-import { OneApi } from '../lib/api.js';
+import { getApiKey, getApiBase, getAccessControlFromAllSources } from '../lib/config.js';
+import { OneApi, filterByPermissions, isActionAllowed } from '../lib/api.js';
+import type { PermissionLevel, SearchCacheData } from '../lib/types.js';
 import { printTable } from '../lib/table.js';
 import * as output from '../lib/output.js';
 import {
@@ -91,6 +92,9 @@ export async function cacheUpdateAllCommand(): Promise<void> {
   }
 
   const api = new OneApi(apiKey, getApiBase());
+  const ac = getAccessControlFromAllSources();
+  const permissions: PermissionLevel = ac.permissions || 'admin';
+  const actionIds: string[] = ac.actionIds || ['*'];
   const entries = listCacheEntries();
 
   if (entries.length === 0) {
@@ -117,12 +121,38 @@ export async function cacheUpdateAllCommand(): Promise<void> {
         writeCache(e.filePath, newEntry);
         updated++;
       } else {
-        // Search entries: re-fetch based on the cached key parts
-        // Key format: platform_query_type
-        // We can't perfectly reconstruct the original query, so just refresh TTL
-        // by marking as freshly cached with existing data
-        const refreshed = { ...e.entry, cachedAt: new Date().toISOString() };
-        writeCache(e.filePath, refreshed);
+        // Search entries record the request params (platform/query/searchType)
+        // so we can re-run the exact search. Entries written before that change
+        // lack them — fall back to a timestamp bump for those.
+        const data = e.entry.data as SearchCacheData;
+        if (data?.platform && data?.query) {
+          const searchType = data.searchType ?? 'knowledge';
+          const result = await api.searchActionsWithMeta(
+            data.platform, data.query, searchType, e.entry.etag ?? undefined
+          );
+          if (result.status === 304) {
+            // Unchanged — just refresh the timestamp.
+            writeCache(e.filePath, { ...e.entry, cachedAt: new Date().toISOString() });
+          } else {
+            let actions = result.data;
+            actions = filterByPermissions(actions, permissions);
+            actions = actions.filter((a) => isActionAllowed(a.systemId, actionIds));
+            const cleaned = actions.map((a) => ({
+              actionId: a.systemId,
+              title: a.title,
+              method: a.method,
+              path: a.path,
+            }));
+            writeCache(e.filePath, makeCacheEntry(
+              e.entry.key,
+              { actions: cleaned, platform: data.platform, query: data.query, searchType },
+              result.etag
+            ));
+          }
+        } else {
+          // Legacy entry without request params — can't re-fetch; bump TTL only.
+          writeCache(e.filePath, { ...e.entry, cachedAt: new Date().toISOString() });
+        }
         updated++;
       }
     } catch (err) {

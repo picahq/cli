@@ -32,6 +32,8 @@ export interface ResolvedActionDetails {
   details: ActionDetails;
   /** True when the details came from disk (fresh hit, 304, or stale fallback). */
   cacheHit: boolean;
+  /** True only when a (stale) cache entry was served because the network failed. */
+  stale: boolean;
   entry: CacheEntry<ActionDetails> | null;
 }
 
@@ -55,15 +57,19 @@ export function isActionDetailsEntry(
 export async function resolveActionDetails(
   api: Pick<OneApi, 'getActionDetailsWithMeta'>,
   actionId: string,
-  opts: { useCache?: boolean } = {}
+  opts: { useCache?: boolean; warn?: (msg: string) => void } = {}
 ): Promise<ResolvedActionDetails> {
   const useCache = opts.useCache !== false;
+  // Default warning sink is stderr; callers that resolve many actions (e.g.
+  // `execute --parallel`) pass a deduping sink so a shared stale action only
+  // warns once instead of once per segment.
+  const warn = opts.warn ?? ((m: string) => { process.stderr.write(m); });
   const cachePath = knowledgeCachePath(actionId);
   const raw = useCache ? readCache<unknown>(cachePath) : null;
   const cached = isActionDetailsEntry(raw) ? raw : null;
 
   if (cached && isFresh(cached)) {
-    return { details: cached.data, cacheHit: true, entry: cached };
+    return { details: cached.data, cacheHit: true, stale: false, entry: cached };
   }
 
   try {
@@ -72,18 +78,18 @@ export async function resolveActionDetails(
     if (result.status === 304 && cached) {
       cached.cachedAt = new Date().toISOString();
       writeCache(cachePath, cached);
-      return { details: cached.data, cacheHit: true, entry: cached };
+      return { details: cached.data, cacheHit: true, stale: false, entry: cached };
     }
 
     const entry = makeCacheEntry(actionId, result.data, result.etag);
     writeCache(cachePath, entry);
-    return { details: result.data, cacheHit: false, entry };
+    return { details: result.data, cacheHit: false, stale: false, entry };
   } catch (fetchError) {
     if (cached) {
-      process.stderr.write(
+      warn(
         `Warning: serving cached action details (network unavailable, cached ${formatAge(getAge(cached))} ago)\n`
       );
-      return { details: cached.data, cacheHit: true, entry: cached };
+      return { details: cached.data, cacheHit: true, stale: true, entry: cached };
     }
     throw fetchError;
   }

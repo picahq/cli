@@ -90,7 +90,7 @@ Options:
 - `--mock` — Return example response without making an API call (useful for building UI)
 - `--skip-validation` — Skip input validation against the action schema
 - `--output <path>` — Save response to a file (for binary downloads like PDFs, images, documents)
-- `--no-cache` — Fetch action details fresh instead of from the local cache (execution itself is never cached)
+- `--no-cache` — Bypass the cached action details and re-fetch them; the fresh details still refresh the cache (execution itself is never cached)
 
 The CLI validates required parameters before executing. Missing params return a structured error with the flag name, parameter name, and description. Pass `--skip-validation` to bypass.
 

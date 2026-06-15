@@ -125,7 +125,43 @@ describe('resolveActionDetails', () => {
     const result = await resolveActionDetails(api, ACTION_ID);
 
     assert.equal(result.cacheHit, true);
+    assert.equal(result.stale, true);
     assert.deepEqual(result.details, FULL_DETAILS);
+  });
+
+  it('routes the stale-fallback warning to a custom warn sink instead of stderr', async () => {
+    writeEntry(makeEntry(FULL_DETAILS, { ageSeconds: 7200, ttl: 3600 }));
+    const api = stubApi(() => { throw new Error('network down'); });
+    const warnings: string[] = [];
+
+    const result = await resolveActionDetails(api, ACTION_ID, { warn: (m) => warnings.push(m) });
+
+    assert.equal(result.stale, true);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /network unavailable/);
+  });
+
+  it('reports stale:false on every non-fallback path (fresh hit, 304, fresh fetch)', async () => {
+    // fresh hit
+    writeEntry(makeEntry(FULL_DETAILS));
+    let r = await resolveActionDetails(stubApi(() => { throw new Error('no'); }), ACTION_ID);
+    assert.equal(r.stale, false);
+
+    // 304 revalidation
+    writeEntry(makeEntry(FULL_DETAILS, { ageSeconds: 7200, ttl: 3600 }));
+    r = await resolveActionDetails(
+      stubApi(() => ({ data: null as unknown as ActionDetails, etag: 'etag-1', status: 304 })),
+      ACTION_ID
+    );
+    assert.equal(r.stale, false);
+
+    // fresh fetch (miss)
+    fs.rmSync(knowledgeCachePath(ACTION_ID), { force: true });
+    r = await resolveActionDetails(
+      stubApi(() => ({ data: FULL_DETAILS, etag: 'etag-9', status: 200 })),
+      ACTION_ID
+    );
+    assert.equal(r.stale, false);
   });
 
   it('fetches fresh with useCache:false but still writes the cache', async () => {

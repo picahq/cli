@@ -10,7 +10,7 @@ import {
 } from '../lib/api.js';
 import { printTable } from '../lib/table.js';
 import * as output from '../lib/output.js';
-import type { PermissionLevel, ActionKnowledgeResponse, ActionDetails } from '../lib/types.js';
+import type { PermissionLevel, ActionKnowledgeResponse, ActionDetails, SearchCacheData, SearchCacheAction } from '../lib/types.js';
 import { validateActionInput } from '../lib/validate.js';
 import { resolveActionDetails } from '../lib/action-details.js';
 import {
@@ -68,10 +68,11 @@ export async function actionsSearchCommand(
       : (options.type as 'execute' | 'knowledge' | undefined) || 'execute';
 
     const useCache = options.cache !== false;
-    const cachePath = searchCachePath(platform, query, agentType || 'knowledge');
-    const cached = useCache ? readCache<{ actions: Array<{ actionId: string; title: string; method: string; path: string }> }>(cachePath) : null;
+    const searchType = agentType || 'knowledge';
+    const cachePath = searchCachePath(platform, query, searchType);
+    const cached = useCache ? readCache<SearchCacheData>(cachePath) : null;
 
-    let cleanedActions: Array<{ actionId: string; title: string; method: string; path: string }>;
+    let cleanedActions: SearchCacheAction[];
     let cacheHit = false;
 
     if (cached && isFresh(cached)) {
@@ -103,10 +104,11 @@ export async function actionsSearchCommand(
             path: action.path,
           }));
 
-          // Write to cache
+          // Write to cache, recording the request params so `cache update`
+          // can re-run this exact search later.
           writeCache(cachePath, makeCacheEntry(
-            `${platform}_${query}_${agentType || 'knowledge'}`,
-            { actions: cleanedActions },
+            `${platform}_${query}_${searchType}`,
+            { actions: cleanedActions, platform, query, searchType },
             result.etag
           ));
         }
@@ -343,7 +345,7 @@ export async function actionsExecuteCommand(
   const api = new OneApi(apiKey, getApiBase());
 
   const spinner = output.createSpinner();
-  spinner.start('Loading action details...');
+  spinner.start('Resolving action details...');
 
   try {
     // Served from the knowledge cache when fresh — in the standard
@@ -359,7 +361,10 @@ export async function actionsExecuteCommand(
       );
     }
 
-    spinner.stop(`Action: ${actionDetails.title} [${actionDetails.method}]`);
+    spinner.stop(
+      `Action: ${actionDetails.title} [${actionDetails.method}]` +
+        (preflightCacheHit ? pc.dim(' (cached)') : '')
+    );
 
     // Parse optional JSON arguments
     const data = options.data ? parseJsonArg(options.data, '--data') : undefined;
@@ -640,6 +645,10 @@ export async function actionsExecuteParallelCommand(): Promise<void> {
   const prepared: PreparedAction[] = [];
   const errors: { segment: number; label: string; messages: string[] }[] = [];
 
+  // Dedupe the resolver's stale-fallback warning: when several segments share
+  // one stale action (network down), warn once for that action, not per segment.
+  const staleWarned = new Set<string>();
+
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i];
     const label = `${seg.platform}/${seg.actionId}`;
@@ -657,7 +666,14 @@ export async function actionsExecuteParallelCommand(): Promise<void> {
     let actionDetails: ActionDetails | undefined;
     let preflightCacheHit = false;
     try {
-      const resolved = await resolveActionDetails(api, seg.actionId, { useCache: flags.useCache });
+      const resolved = await resolveActionDetails(api, seg.actionId, {
+        useCache: flags.useCache,
+        warn: (msg) => {
+          if (staleWarned.has(seg.actionId)) return;
+          staleWarned.add(seg.actionId);
+          process.stderr.write(msg);
+        },
+      });
       actionDetails = resolved.details;
       preflightCacheHit = resolved.cacheHit;
     } catch (err) {

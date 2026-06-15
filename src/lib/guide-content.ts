@@ -59,7 +59,7 @@ one --agent actions execute <platform> <actionId> <key> -d '{}'  # Execute it
 - \`--mock\` — Return example response without making an API call (useful for building UI against a response shape)
 - \`--skip-validation\` — Skip input validation against the action schema
 - \`--output <path>\` — Save response to a file (for binary downloads like PDFs, images, documents)
-- \`--no-cache\` — Fetch action details fresh instead of from the local cache (execution itself is never cached)
+- \`--no-cache\` — Bypass the cached action details and re-fetch them; the fresh details still refresh the cache (execution itself is never cached)
 
 The CLI validates required parameters against the action schema before executing. If you're missing a required path variable, query param, or body field, you'll get a clear error listing what's missing and which flag to use. Pass \`--skip-validation\` to bypass.
 
@@ -186,7 +186,7 @@ one --agent actions execute <platform> <actionId> <connectionKey> [options]
 - \`--mock\` — Return example response without making an API call
 - \`--skip-validation\` — Skip input validation against the action schema
 - \`--output <path>\` — Save response to a file (for binary downloads like PDFs, images, documents)
-- \`--no-cache\` — Fetch action details fresh instead of from the local cache (execution itself is never cached)
+- \`--no-cache\` — Bypass the cached action details and re-fetch them; the fresh details still refresh the cache (execution itself is never cached)
 
 Execute reuses the action details cached by \`actions knowledge\` (method, path, schema), so in the standard search → knowledge → execute flow it makes a single API call — the action being executed. The live response is never cached. In \`--agent\` mode the response includes \`"_preflight": {"cache": "hit"|"miss"}\` showing whether the lookup was served from disk.
 
