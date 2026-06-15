@@ -4,21 +4,27 @@ import os from 'node:os';
 import type { CacheEntry, CacheMeta } from './types.js';
 import { getCacheTtl } from './config.js';
 
-const CACHE_BASE = path.join(os.homedir(), '.one', 'cache');
-const KNOWLEDGE_DIR = path.join(CACHE_BASE, 'knowledge');
-const SEARCH_DIR = path.join(CACHE_BASE, 'search');
+// Resolved lazily (not at module load) so tests that sandbox $HOME get the
+// sandboxed path — same pattern as config.ts.
+function knowledgeDir(): string {
+  return path.join(os.homedir(), '.one', 'cache', 'knowledge');
+}
+
+function searchDir(): string {
+  return path.join(os.homedir(), '.one', 'cache', 'search');
+}
 
 export function sanitizeFilename(input: string): string {
   return input.replace(/[^a-zA-Z0-9_\-\.]/g, '_');
 }
 
 export function knowledgeCachePath(actionId: string): string {
-  return path.join(KNOWLEDGE_DIR, `${sanitizeFilename(actionId)}.json`);
+  return path.join(knowledgeDir(), `${sanitizeFilename(actionId)}.json`);
 }
 
 export function searchCachePath(platform: string, query: string, type: string): string {
   const key = `${platform}_${sanitizeFilename(query)}_${type || 'knowledge'}`;
-  return path.join(SEARCH_DIR, `${key}.json`);
+  return path.join(searchDir(), `${key}.json`);
 }
 
 export function readCache<T>(filePath: string): CacheEntry<T> | null {
@@ -77,7 +83,7 @@ export function formatAge(seconds: number): string {
 export function listCacheEntries(): Array<{ type: 'knowledge' | 'search'; filePath: string; entry: CacheEntry }> {
   const entries: Array<{ type: 'knowledge' | 'search'; filePath: string; entry: CacheEntry }> = [];
 
-  for (const [dir, type] of [[KNOWLEDGE_DIR, 'knowledge'], [SEARCH_DIR, 'search']] as const) {
+  for (const [dir, type] of [[knowledgeDir(), 'knowledge'], [searchDir(), 'search']] as const) {
     try {
       const files = fs.readdirSync(dir);
       for (const file of files) {
@@ -98,7 +104,7 @@ export function listCacheEntries(): Array<{ type: 'knowledge' | 'search'; filePa
 
 export function clearAll(): number {
   let count = 0;
-  for (const dir of [KNOWLEDGE_DIR, SEARCH_DIR]) {
+  for (const dir of [knowledgeDir(), searchDir()]) {
     try {
       const files = fs.readdirSync(dir);
       for (const file of files) {

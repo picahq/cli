@@ -268,6 +268,7 @@ one actions execute stripe <actionId> <connectionKey> \
 | `--mock` | Return example response without making an API call |
 | `--skip-validation` | Skip input validation against the action schema |
 | `--output <path>` | Save response to a file (for binary downloads) |
+| `--no-cache` | Fetch action details fresh instead of from the local cache (execution itself is never cached) |
 
 The CLI validates required parameters (path variables, query params, body fields) against the action schema before executing. Missing params return a clear error with the flag name and description. Pass `--skip-validation` to bypass.
 
@@ -289,11 +290,11 @@ Each segment follows the same format: `<platform> <actionId> <connectionKey> [-d
 | `--parallel` | Enable parallel mode |
 | `--max-concurrency <n>` | Max concurrent actions per batch (default: 5) |
 
-Agent-mode output includes `parallel: true`, per-action `status`/`durationMs`/`response`, plus `totalDurationMs`, `succeeded`, and `failed` counts.
+Agent-mode output includes `parallel: true`, per-action `status`/`durationMs`/`response`/`_preflight` (`{"cache":"hit"|"miss"}`), plus `totalDurationMs`, `succeeded`, and `failed` counts.
 
 ### `one cache`
 
-Manage the local cache for knowledge and search responses. The CLI automatically caches `actions knowledge` and `actions search` results so repeated calls serve instantly from disk.
+Manage the local cache for knowledge and search responses. The CLI automatically caches `actions knowledge` and `actions search` results so repeated calls serve instantly from disk. `actions execute` reuses the cached action details (method, path, validation schema) for its preflight lookup, so a knowledge call followed by execute costs a single API round trip.
 
 ```bash
 one cache list                    # List all cached entries with age and status
@@ -309,11 +310,12 @@ Knowledge and search commands also support cache flags:
 one actions knowledge gmail <actionId> --no-cache       # Skip cache, fetch fresh
 one actions knowledge gmail <actionId> --cache-status   # Check cache status
 one actions search gmail "send email" --no-cache        # Skip cache for search
+one actions execute gmail <actionId> <key> --no-cache   # Fresh action-details lookup
 ```
 
 Default TTL is 1 hour. Configure via `ONE_CACHE_TTL` environment variable or `cacheTtl` in `~/.one/config.json`.
 
-Note: `actions execute` is never cached — it always hits the API fresh.
+Note: execution responses are never cached — the action always runs live. Only action metadata (docs, method, path, schema) is cached, and agent-mode execute output reports it via `"_preflight": {"cache": "hit"|"miss"}`.
 
 ### `one mem` — unified memory store
 

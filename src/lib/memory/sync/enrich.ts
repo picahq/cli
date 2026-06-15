@@ -1,5 +1,6 @@
 import type { OneApi } from '../../api.js';
 import { ApiError } from '../../api.js';
+import { resolveActionDetails } from '../../action-details.js';
 import { isAgentMode } from '../../output.js';
 import type { EnrichConfig, SyncProfile } from './types.js';
 import type { ActionDetails } from '../../types.js';
@@ -222,10 +223,10 @@ export async function enrichPhase(
     }
   }
 
-  // Preload the detail action once
+  // Preload the detail action once (cache-served when fresh)
   let detailAction: ActionDetails;
   try {
-    detailAction = await api.getActionDetails(config.actionId);
+    detailAction = (await resolveActionDetails(api, config.actionId)).details;
   } catch (err) {
     throw new Error(
       `Enrich: could not load action ${config.actionId}: ${err instanceof Error ? err.message : String(err)}`

@@ -59,6 +59,7 @@ one --agent actions execute <platform> <actionId> <key> -d '{}'  # Execute it
 - \`--mock\` — Return example response without making an API call (useful for building UI against a response shape)
 - \`--skip-validation\` — Skip input validation against the action schema
 - \`--output <path>\` — Save response to a file (for binary downloads like PDFs, images, documents)
+- \`--no-cache\` — Fetch action details fresh instead of from the local cache (execution itself is never cached)
 
 The CLI validates required parameters against the action schema before executing. If you're missing a required path variable, query param, or body field, you'll get a clear error listing what's missing and which flag to use. Pass \`--skip-validation\` to bypass.
 
@@ -185,6 +186,9 @@ one --agent actions execute <platform> <actionId> <connectionKey> [options]
 - \`--mock\` — Return example response without making an API call
 - \`--skip-validation\` — Skip input validation against the action schema
 - \`--output <path>\` — Save response to a file (for binary downloads like PDFs, images, documents)
+- \`--no-cache\` — Fetch action details fresh instead of from the local cache (execution itself is never cached)
+
+Execute reuses the action details cached by \`actions knowledge\` (method, path, schema), so in the standard search → knowledge → execute flow it makes a single API call — the action being executed. The live response is never cached. In \`--agent\` mode the response includes \`"_preflight": {"cache": "hit"|"miss"}\` showing whether the lookup was served from disk.
 
 **Do NOT** pass path or query parameters in \`-d\`. Use the correct flags.
 
@@ -199,13 +203,13 @@ one --agent actions execute --parallel \\
   -- google-sheets append-row conn789 -d '{"values":["x"]}'
 \`\`\`
 
-Each segment separated by \`--\` follows the same format: \`<platform> <actionId> <connectionKey> [-d ...] [--path-vars ...] [--query-params ...]\`. Global flags (\`--dry-run\`, \`--mock\`, \`--skip-validation\`) apply to all segments.
+Each segment separated by \`--\` follows the same format: \`<platform> <actionId> <connectionKey> [-d ...] [--path-vars ...] [--query-params ...]\`. Global flags (\`--dry-run\`, \`--mock\`, \`--skip-validation\`, \`--no-cache\`) apply to all segments.
 
 All segments are validated upfront before any execution starts — if one segment has bad params, nothing runs. Execution uses \`Promise.allSettled\` so if one action fails the rest still complete. Use \`--max-concurrency <n>\` (default 5) to control batch size.
 
-Agent-mode output:
+Agent-mode output (each result carries its own \`_preflight\` showing whether that action's details were served from cache):
 \`\`\`json
-{"parallel":true,"totalDurationMs":1234,"succeeded":2,"failed":0,"results":[{"segment":1,"platform":"gmail","actionId":"send-email","status":"success","durationMs":800,"response":{...}},{"segment":2,"platform":"slack","actionId":"post-message","status":"success","durationMs":600,"response":{...}}]}
+{"parallel":true,"totalDurationMs":1234,"succeeded":2,"failed":0,"results":[{"segment":1,"platform":"gmail","actionId":"send-email","status":"success","durationMs":800,"response":{...},"_preflight":{"cache":"hit"}},{"segment":2,"platform":"slack","actionId":"post-message","status":"success","durationMs":600,"response":{...},"_preflight":{"cache":"miss"}}]}
 \`\`\`
 
 ## Input Validation
@@ -343,7 +347,7 @@ export const GUIDE_CACHE = `# One Cache — Reference
 
 ## Overview
 
-The One CLI caches \`actions knowledge\` and \`actions search\` responses locally so repeated calls serve instantly from disk instead of hitting the API. This is the single biggest latency win for agents who call knowledge for the same actions repeatedly.
+The One CLI caches \`actions knowledge\` and \`actions search\` responses locally so repeated calls serve instantly from disk instead of hitting the API. The knowledge cache stores the action's full details (docs, method, path, schema), so \`actions execute\` reuses it for its preflight lookup — in the standard search → knowledge → execute flow, execute makes exactly one API call: the action itself.
 
 Cache location: \`~/.one/cache/knowledge/\` and \`~/.one/cache/search/\`
 
@@ -353,6 +357,7 @@ Cache location: \`~/.one/cache/knowledge/\` and \`~/.one/cache/search/\`
 - **Subsequent calls (within TTL)**: serves from cache instantly, no API call
 - **After TTL expires**: makes a conditional request (ETag). If content unchanged, refreshes the cache timestamp. If changed, writes fresh data.
 - **Network failure with stale cache**: serves the stale cache with a warning — never fails hard when a cache exists
+- **Shared preflight**: \`actions execute\`, flow action steps, and \`sync\` all read action details (method, path, validation schema) from the same cache and warm it on a miss — so a knowledge call, a flow run, and a later execute of the same action all reuse one cached lookup
 
 Default TTL: 3600 seconds (1 hour). Configure via \`ONE_CACHE_TTL\` env var or \`cacheTtl\` in \`~/.one/config.json\`.
 
@@ -360,8 +365,9 @@ Default TTL: 3600 seconds (1 hour). Configure via \`ONE_CACHE_TTL\` env var or \
 
 | Cached | Not Cached |
 |--------|-----------|
-| \`actions knowledge\` (API docs, change infrequently) | \`actions execute\` (live data, always fresh) |
+| \`actions knowledge\` (API docs, change infrequently) | \`actions execute\` responses (live data, always fresh) |
 | \`actions search\` results | \`connection list\` (changes with add/remove) |
+| Action details used by execute / flow / sync preflight (method, path, schema) | |
 
 ## Agent Mode \`_cache\` Metadata
 
@@ -392,7 +398,12 @@ one --agent actions knowledge <platform> <actionId> --cache-status
 
 # Same for search
 one --agent actions search <platform> "<query>" --no-cache
+
+# Same for execute's action-details preflight (the action itself always runs live)
+one --agent actions execute <platform> <actionId> <key> --no-cache
 \`\`\`
+
+In \`--agent\` mode, execute responses include \`"_preflight": {"cache": "hit"|"miss"}\` showing whether the action details came from disk.
 
 ## Cache Management Commands
 

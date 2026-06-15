@@ -12,6 +12,7 @@ import { printTable } from '../lib/table.js';
 import * as output from '../lib/output.js';
 import type { PermissionLevel, ActionKnowledgeResponse, ActionDetails } from '../lib/types.js';
 import { validateActionInput } from '../lib/validate.js';
+import { resolveActionDetails } from '../lib/action-details.js';
 import {
   knowledgeCachePath,
   searchCachePath,
@@ -254,51 +255,16 @@ export async function actionsKnowledgeCommand(
   spinner.start(`Loading knowledge for action ${pc.dim(actionId)}...`);
 
   try {
-    const useCache = options.cache !== false;
-    const cached = useCache ? readCache<ActionKnowledgeResponse>(cachePath) : null;
+    // The cache stores the full ActionDetails (method, path, ioSchema, ...) so
+    // a later `actions execute` can reuse it and skip its preflight round trip.
+    const { details, cacheHit, entry } = await resolveActionDetails(api, actionId, {
+      useCache: options.cache !== false,
+    });
 
-    let knowledgeData: ActionKnowledgeResponse;
-    let cacheHit = false;
-    let cacheEntry = cached;
-
-    if (cached && isFresh(cached) && useCache) {
-      // Fresh cache hit — serve directly
-      knowledgeData = cached.data;
-      cacheHit = true;
-    } else {
-      // Fetch from API (conditional if stale cache exists)
-      try {
-        const result = await api.getActionKnowledgeWithMeta(
-          actionId, cached?.etag ?? undefined
-        );
-
-        if (result.status === 304 && cached) {
-          // Content unchanged — refresh cachedAt
-          cached.cachedAt = new Date().toISOString();
-          writeCache(cachePath, cached);
-          knowledgeData = cached.data;
-          cacheHit = true;
-        } else {
-          knowledgeData = result.data;
-
-          // Write to cache
-          const newEntry = makeCacheEntry(actionId, knowledgeData, result.etag);
-          writeCache(cachePath, newEntry);
-          cacheEntry = newEntry;
-        }
-      } catch (fetchError) {
-        // Network failure — serve stale cache if available
-        if (cached) {
-          process.stderr.write(
-            `Warning: serving cached knowledge (network unavailable, cached ${formatAge(getAge(cached))} ago)\n`
-          );
-          knowledgeData = cached.data;
-          cacheHit = true;
-        } else {
-          throw fetchError;
-        }
-      }
-    }
+    const knowledgeData: ActionKnowledgeResponse = {
+      knowledge: details.knowledge || 'No knowledge was found',
+      method: details.method || 'No method was found',
+    };
 
     const knowledgeWithGuidance = buildActionKnowledgeWithGuidance(
       knowledgeData.knowledge,
@@ -311,7 +277,7 @@ export async function actionsKnowledgeCommand(
       const response: Record<string, unknown> = {
         knowledge: knowledgeWithGuidance,
         method: knowledgeData.method,
-        _cache: buildCacheMeta(cacheEntry, cacheHit),
+        _cache: buildCacheMeta(entry, cacheHit),
       };
       output.json(response);
       return;
@@ -349,6 +315,7 @@ export async function actionsExecuteCommand(
     mock?: boolean;
     skipValidation?: boolean;
     output?: string;
+    cache?: boolean;
   }
 ): Promise<void> {
   output.intro(pc.bgCyan(pc.black(' One ')));
@@ -379,7 +346,10 @@ export async function actionsExecuteCommand(
   spinner.start('Loading action details...');
 
   try {
-    const actionDetails = await api.getActionDetails(actionId);
+    // Served from the knowledge cache when fresh — in the standard
+    // search → knowledge → execute flow this costs zero network.
+    const { details: actionDetails, cacheHit: preflightCacheHit } =
+      await resolveActionDetails(api, actionId, { useCache: options.cache !== false });
 
     // Check method permissions
     if (!isMethodAllowed(actionDetails.method, permissions)) {
@@ -441,6 +411,7 @@ export async function actionsExecuteCommand(
           },
           response: mockResponse,
           ...(mockResponse === null ? { message: 'No example output available for this action' } : {}),
+          _preflight: { cache: preflightCacheHit ? 'hit' : 'miss' },
         });
         return;
       }
@@ -486,6 +457,7 @@ export async function actionsExecuteCommand(
           data: options.dryRun ? result.requestConfig.data : undefined,
         },
         response: options.dryRun ? undefined : result.responseData,
+        _preflight: { cache: preflightCacheHit ? 'hit' : 'miss' },
       });
       return;
     }
@@ -538,6 +510,7 @@ interface GlobalParallelFlags {
   mock: boolean;
   skipValidation: boolean;
   maxConcurrency: number;
+  useCache: boolean;
 }
 
 interface SegmentResult {
@@ -551,6 +524,7 @@ interface SegmentResult {
   request?: unknown;
   response?: unknown;
   error?: string;
+  _preflight?: { cache: 'hit' | 'miss' };
 }
 
 function parseParallelSegments(): { segments: ParsedSegment[]; flags: GlobalParallelFlags } {
@@ -572,7 +546,7 @@ function parseParallelSegments(): { segments: ParsedSegment[]; flags: GlobalPara
   const raw = argv.slice(execIdx + 1);
 
   // Strip global flags and collect their values
-  const flags: GlobalParallelFlags = { dryRun: false, mock: false, skipValidation: false, maxConcurrency: 5 };
+  const flags: GlobalParallelFlags = { dryRun: false, mock: false, skipValidation: false, maxConcurrency: 5, useCache: true };
   const cleaned: string[] = [];
   for (let i = 0; i < raw.length; i++) {
     const t = raw[i];
@@ -580,6 +554,7 @@ function parseParallelSegments(): { segments: ParsedSegment[]; flags: GlobalPara
     if (t === '--dry-run') { flags.dryRun = true; continue; }
     if (t === '--mock') { flags.mock = true; continue; }
     if (t === '--skip-validation') { flags.skipValidation = true; continue; }
+    if (t === '--no-cache') { flags.useCache = false; continue; }
     if (t === '--max-concurrency') { flags.maxConcurrency = parseInt(raw[++i], 10) || 5; continue; }
     cleaned.push(t);
   }
@@ -655,6 +630,7 @@ export async function actionsExecuteParallelCommand(): Promise<void> {
     segment: ParsedSegment;
     index: number;
     actionDetails: ActionDetails;
+    preflightCacheHit: boolean;
     data?: unknown;
     pathVariables?: Record<string, unknown>;
     queryParams?: Record<string, unknown>;
@@ -677,10 +653,13 @@ export async function actionsExecuteParallelCommand(): Promise<void> {
       segErrors.push(`Connection key "${seg.connectionKey}" is not allowed`);
     }
 
-    // Fetch action details
+    // Fetch action details (cache-served when fresh)
     let actionDetails: ActionDetails | undefined;
+    let preflightCacheHit = false;
     try {
-      actionDetails = await api.getActionDetails(seg.actionId);
+      const resolved = await resolveActionDetails(api, seg.actionId, { useCache: flags.useCache });
+      actionDetails = resolved.details;
+      preflightCacheHit = resolved.cacheHit;
     } catch (err) {
       segErrors.push(`Action not found: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -729,7 +708,7 @@ export async function actionsExecuteParallelCommand(): Promise<void> {
     if (segErrors.length > 0) {
       errors.push({ segment: i + 1, label, messages: segErrors });
     } else if (actionDetails) {
-      prepared.push({ segment: seg, index: i, actionDetails, data, pathVariables, queryParams, headers });
+      prepared.push({ segment: seg, index: i, actionDetails, preflightCacheHit, data, pathVariables, queryParams, headers });
     }
   }
 
@@ -775,6 +754,7 @@ export async function actionsExecuteParallelCommand(): Promise<void> {
             mock: true,
             request: { method: action.actionDetails.method, url: action.actionDetails.path },
             response: mockResponse,
+            _preflight: { cache: action.preflightCacheHit ? 'hit' : 'miss' },
           };
         }
 
@@ -804,6 +784,7 @@ export async function actionsExecuteParallelCommand(): Promise<void> {
             ...(flags.dryRun ? { headers: result.requestConfig.headers, data: result.requestConfig.data } : {}),
           },
           response: flags.dryRun ? undefined : result.responseData,
+          _preflight: { cache: action.preflightCacheHit ? 'hit' : 'miss' },
         };
       }),
     );

@@ -1,6 +1,7 @@
 import type { Command } from 'commander';
 import * as output from '../../output.js';
 import { OneApi } from '../../api.js';
+import { resolveActionDetails } from '../../action-details.js';
 import { getApiKey, getApiBase, getAccessControlFromAllSources } from '../../config.js';
 import { discoverModels } from './models.js';
 import { readProfile, writeProfile, writeDraftProfile, listProfiles, generateTemplate } from './profile.js';
@@ -248,8 +249,8 @@ async function syncInitCommand(platform: string, model: string, options: { confi
       // Try to infer from knowledge if no built-in was found
       if (actionId && !builtin) {
         try {
-          const knowledgeResp = await api.getActionKnowledge(actionId);
-          inferred = inferProfileFromKnowledge(knowledgeResp?.knowledge, model, platform);
+          const { details } = await resolveActionDetails(api, actionId);
+          inferred = inferProfileFromKnowledge(details.knowledge, model, platform);
 
           // Replace the template's default pagination entirely with the inferred
           // one — merging would preserve stale FILL_IN keys that the inferred

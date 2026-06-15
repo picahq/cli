@@ -90,6 +90,7 @@ Options:
 - `--mock` — Return example response without making an API call (useful for building UI)
 - `--skip-validation` — Skip input validation against the action schema
 - `--output <path>` — Save response to a file (for binary downloads like PDFs, images, documents)
+- `--no-cache` — Fetch action details fresh instead of from the local cache (execution itself is never cached)
 
 The CLI validates required parameters before executing. Missing params return a structured error with the flag name, parameter name, and description. Pass `--skip-validation` to bypass.
 
@@ -123,7 +124,7 @@ one --agent actions execute --parallel \
   -- slack post-message conn456 -d '{"text":"done"}'
 ```
 
-All segments are validated before any execution. Failed actions don't block others. Use `--max-concurrency <n>` (default 5) to control batching. Agent-mode output: `{"parallel":true,"results":[...],"succeeded":N,"failed":N,"totalDurationMs":N}`.
+All segments are validated before any execution. Failed actions don't block others. Use `--max-concurrency <n>` (default 5) to control batching. Agent-mode output: `{"parallel":true,"results":[...],"succeeded":N,"failed":N,"totalDurationMs":N}`. Each result carries `"_preflight":{"cache":"hit"|"miss"}` showing whether that action's details were served from cache.
 
 ## Error Handling
 
@@ -140,15 +141,15 @@ All errors return JSON: `{"error": "message"}`. Parse output as JSON and check f
 
 ## Caching
 
-Knowledge and search responses are cached locally (`~/.one/cache/`). Subsequent calls for the same action serve instantly from disk.
+Knowledge and search responses are cached locally (`~/.one/cache/`). Subsequent calls for the same action serve instantly from disk. `actions execute` reuses the cached action details for its preflight lookup, so after a knowledge call (or a prior execute of the same action) it makes a single API call — the action itself.
 
 - Cache is automatic — no setup required
 - Default TTL: 1 hour (configurable via `ONE_CACHE_TTL` env var)
-- In `--agent` mode, responses include a `_cache` field: `{"hit": true, "age": 1423, "fresh": true}`
-- Use `--no-cache` to force a fresh fetch: `one --agent actions knowledge <platform> <actionId> --no-cache`
+- In `--agent` mode, responses include a `_cache` field: `{"hit": true, "age": 1423, "fresh": true}`; execute responses include `"_preflight": {"cache": "hit"|"miss"}`
+- Use `--no-cache` to force a fresh fetch: works on `knowledge`, `search`, and `execute` (refreshes execute's action-details lookup)
 - Use `--cache-status` to check cache state without fetching
 - Manage cache: `one cache list`, `one cache clear`, `one cache update-all`
-- `actions execute` is NEVER cached — always fresh
+- Execution responses are NEVER cached — the action always runs live; only action metadata (docs, method, path, schema) is cached
 
 ## Unified Memory
 

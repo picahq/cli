@@ -296,10 +296,15 @@ export class OneApi {
     return { data, etag, status: response.status };
   }
 
-  async getActionKnowledgeWithMeta(
+  /**
+   * Full action details (method, path, tags, ioSchema, knowledge) with ETag
+   * support. This is what the knowledge cache stores: caching the complete
+   * object lets `actions execute` reuse it and skip its preflight round trip.
+   */
+  async getActionDetailsWithMeta(
     actionId: string,
     ifNoneMatch?: string
-  ): Promise<ApiResponseWithMeta<ActionKnowledgeResponse>> {
+  ): Promise<ApiResponseWithMeta<ActionDetails>> {
     const result = await this.requestWithMeta<{ rows: ActionDetails[] }>({
       path: '/knowledge',
       queryParams: { _id: actionId },
@@ -307,7 +312,7 @@ export class OneApi {
     });
 
     if (result.status === 304) {
-      return { data: null as unknown as ActionKnowledgeResponse, etag: result.etag, status: 304 };
+      return { data: null as unknown as ActionDetails, etag: result.etag, status: 304 };
     }
 
     const actions = result.data?.rows || [];
@@ -315,13 +320,7 @@ export class OneApi {
       throw new ApiError(404, `Action with ID ${actionId} not found`);
     }
 
-    const action = actions[0];
-    const knowledge: ActionKnowledgeResponse = {
-      knowledge: action.knowledge || 'No knowledge was found',
-      method: action.method || 'No method was found',
-    };
-
-    return { data: knowledge, etag: result.etag, status: result.status };
+    return { data: actions[0], etag: result.etag, status: result.status };
   }
 
   async searchActionsWithMeta(

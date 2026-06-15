@@ -1,5 +1,6 @@
 import type { OneApi } from '../../api.js';
 import { ApiError } from '../../api.js';
+import { resolveActionDetails } from '../../action-details.js';
 import { getByDotPath } from '../../dot-path.js';
 import { isAgentMode } from '../../output.js';
 import type { SyncProfile, SyncRunResult, SyncRunOptions, ModelSyncState } from './types.js';
@@ -305,8 +306,9 @@ export async function syncModel(
       }
     }
 
-    // Get preloaded action details for efficiency
-    const actionDetails = await api.getActionDetails(profile.actionId);
+    // Get preloaded action details (cache-served when fresh — shared with the
+    // knowledge/execute warm cache, so repeated sync runs skip the lookup).
+    const { details: actionDetails } = await resolveActionDetails(api, profile.actionId);
 
     // Hard block: sync never uses custom/composer actions. They run on a
     // small shared fleet that collapses under sync-scale load and often

@@ -470,6 +470,7 @@ actions
   .option('--dry-run', 'Show request that would be sent without executing')
   .option('--mock', 'Return example response without making an API call')
   .option('--skip-validation', 'Skip input validation against the action schema')
+  .option('--no-cache', 'Fetch action details fresh instead of using the local cache (execution itself is never cached)')
   .option('--output <path>', 'Save binary response to a file (for non-JSON responses like file downloads)')
   .option('--parallel', 'Execute multiple actions concurrently (separate actions with --)')
   .option('--max-concurrency <n>', 'Max concurrent actions when using --parallel (default: 5)', '5')
@@ -492,6 +493,7 @@ actions
       mock: options.mock,
       skipValidation: options.skipValidation,
       output: options.output,
+      cache: options.cache,
     });
   });
 

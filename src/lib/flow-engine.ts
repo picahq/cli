@@ -5,6 +5,7 @@ import { exec, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { OneApi } from './api.js';
 import { isMethodAllowed, isActionAllowed } from './api.js';
+import { resolveActionDetails } from './action-details.js';
 import type { PermissionLevel, ActionDetails } from './types.js';
 import { validateActionInput } from './validate.js';
 import type {
@@ -363,7 +364,7 @@ async function executeActionStep(
     throw new Error(`Action "${actionId}" is not in the allowed action list`);
   }
 
-  const actionDetails = await api.getActionDetails(actionId);
+  const { details: actionDetails } = await resolveActionDetails(api, actionId);
   if (!isMethodAllowed(actionDetails.method, permissions)) {
     throw new Error(`Method "${actionDetails.method}" is not allowed under "${permissions}" permission level`);
   }
@@ -1143,7 +1144,7 @@ export async function executeSingleStep(
         if (step.type === 'action' && step.action) {
           const actionId = resolveValue(step.action.actionId, context) as string;
           try {
-            const actionDetails = await api.getActionDetails(actionId);
+            const { details: actionDetails } = await resolveActionDetails(api, actionId);
             // Validate even in mock mode (unless skipped)
             if (!options.skipValidation) {
               const data = step.action.data ? resolveValue(step.action.data, context) as Record<string, unknown> : undefined;

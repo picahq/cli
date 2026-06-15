@@ -15,7 +15,6 @@ import {
   makeCacheEntry,
   knowledgeCachePath,
 } from '../lib/cache.js';
-import type { ActionKnowledgeResponse } from '../lib/types.js';
 
 export async function cacheClearCommand(actionId?: string): Promise<void> {
   if (actionId) {
@@ -113,7 +112,7 @@ export async function cacheUpdateAllCommand(): Promise<void> {
   for (const e of entries) {
     try {
       if (e.type === 'knowledge') {
-        const result = await api.getActionKnowledgeWithMeta(e.entry.key);
+        const result = await api.getActionDetailsWithMeta(e.entry.key);
         const newEntry = makeCacheEntry(e.entry.key, result.data, result.etag);
         writeCache(e.filePath, newEntry);
         updated++;
