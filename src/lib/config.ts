@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { randomUUID } from 'node:crypto';
 import type { Config, AccessControlSettings, PermissionLevel, WhoAmIResponse } from './types.js';
 import type { OneApi } from './api.js';
 
@@ -398,4 +399,78 @@ export async function ensureWhoAmI(api: OneApi): Promise<WhoAmIResponse | null> 
 
 export function getEnvFromApiKey(apiKey: string): 'live' | 'test' {
   return apiKey.startsWith('sk_test_') ? 'test' : 'live';
+}
+
+// ── Analytics helpers (~/.one markers, no PII) ───────────────────────
+
+function deviceIdFile(): string { return path.join(configDir(), 'device-id'); }
+function telemetryNoticeFile(): string { return path.join(configDir(), '.telemetry-notice'); }
+
+/**
+ * Stable, random per-install id used as the analytics distinct_id before
+ * the user authenticates (once logged in we key on the One user id instead,
+ * so CLI + dashboard events unify on the same person). Stored once in
+ * ~/.one/device-id. Best-effort: if the file can't be written we still return
+ * a usable id for this process.
+ */
+export function getDeviceId(): string {
+  try {
+    const existing = fs.readFileSync(deviceIdFile(), 'utf-8').trim();
+    if (existing) return existing;
+  } catch { /* not created yet */ }
+
+  const id = randomUUID();
+  try {
+    if (!fs.existsSync(configDir())) fs.mkdirSync(configDir(), { mode: 0o700 });
+    fs.writeFileSync(deviceIdFile(), id, { mode: 0o600 });
+  } catch { /* best-effort; fall through with the in-memory id */ }
+  return id;
+}
+
+/** Whether the one-time telemetry disclosure has already been shown. */
+export function telemetryNoticeShown(): boolean {
+  return fs.existsSync(telemetryNoticeFile());
+}
+
+/** Record that the one-time telemetry disclosure has been shown. */
+export function markTelemetryNoticeShown(): void {
+  try {
+    if (!fs.existsSync(configDir())) fs.mkdirSync(configDir(), { mode: 0o700 });
+    fs.writeFileSync(telemetryNoticeFile(), new Date().toISOString(), { mode: 0o600 });
+  } catch { /* best-effort */ }
+}
+
+// Bounded on-disk queue of analytics events not yet confirmed delivered. A
+// CLI process is short-lived and analytics latency is ~1s, so we persist
+// events instantly (sync) and deliver them opportunistically / on a later
+// run — telemetry never blocks a command and nothing is lost when the process
+// exits before a request completes. JSONL, one event per line.
+function analyticsQueueFile(): string { return path.join(configDir(), '.analytics-queue.jsonl'); }
+const ANALYTICS_QUEUE_MAX = 500;
+
+export function appendAnalyticsQueue(line: string): void {
+  try {
+    if (!fs.existsSync(configDir())) fs.mkdirSync(configDir(), { mode: 0o700 });
+    fs.appendFileSync(analyticsQueueFile(), `${line}\n`, { mode: 0o600 });
+  } catch { /* best-effort */ }
+}
+
+export function readAnalyticsQueue(): string[] {
+  try {
+    return fs.readFileSync(analyticsQueueFile(), 'utf-8').split('\n').filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/** Replace the queue with `lines` (capped, newest kept); deletes it when empty. */
+export function writeAnalyticsQueue(lines: string[]): void {
+  try {
+    if (lines.length === 0) {
+      fs.rmSync(analyticsQueueFile(), { force: true });
+      return;
+    }
+    if (!fs.existsSync(configDir())) fs.mkdirSync(configDir(), { mode: 0o700 });
+    fs.writeFileSync(analyticsQueueFile(), `${lines.slice(-ANALYTICS_QUEUE_MAX).join('\n')}\n`, { mode: 0o600 });
+  } catch { /* best-effort */ }
 }

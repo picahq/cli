@@ -54,6 +54,7 @@ import { updateCommand, checkLatestVersionCached, getCurrentVersion, isNewerVers
 import { closeBackendIfCached } from './lib/memory/runtime.js';
 import { setAgentMode, isAgentMode, json as outputJson, error as outputError } from './lib/output.js';
 import { syncSkillsIfStale, forceSyncSkills, getSkillStatus } from './lib/skill-sync.js';
+import * as analytics from './lib/analytics.js';
 
 const require = createRequire(import.meta.url);
 const { version } = require('../package.json');
@@ -141,11 +142,19 @@ program
 // Fire a non-blocking version check alongside every command
 let updateCheckPromise: Promise<{ version: string; publishedAt: string | null } | null> | undefined;
 
-program.hook('preAction', (thisCommand) => {
+program.hook('preAction', (thisCommand, actionCommand) => {
   const opts = program.opts();
   if (opts.agent) {
     setAgentMode(true);
   }
+  // CLI usage telemetry (opt-out, linked to the One account). Records only the command path —
+  // never args/flags. captureCommand() queues the event to disk instantly;
+  // drainQueue() then sends it (plus any left over from prior runs) in the
+  // background, overlapping the command. The postAction flush below stops any
+  // in-flight request so telemetry never blocks exit. See lib/analytics.ts.
+  analytics.maybeShowTelemetryNotice();
+  analytics.captureCommand(actionCommand);
+  analytics.drainQueue();
   // Start the fetch early so it resolves by the time the command finishes
   const commandName = thisCommand.args?.[0];
   if (commandName !== 'update') {
@@ -165,6 +174,10 @@ program.hook('postAction', async () => {
   // command's work is done. Without this, `mem search` prints its JSON
   // immediately but the process hangs for ~10s before exiting.
   await closeBackendIfCached();
+
+  // Stop any in-flight telemetry send so it can't hold the process open, and
+  // persist anything undelivered for retry next run. See lib/analytics.ts.
+  analytics.flush();
 
   if (!updateCheckPromise) return;
   const info = await updateCheckPromise;

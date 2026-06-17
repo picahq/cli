@@ -89,6 +89,12 @@ export interface Config {
    * and the memory module).
    */
   memory?: unknown;
+  /**
+   * Analytics opt-out. When `'off'`, the CLI emits no usage telemetry. The
+   * primary opt-out is the `ONE_NO_TELEMETRY` env var / `DO_NOT_TRACK`; this
+   * field persists the choice in config. See lib/analytics.ts.
+   */
+  telemetry?: 'off';
 }
 
 export interface ConnectionsResponse {
