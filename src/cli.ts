@@ -148,12 +148,15 @@ program.hook('preAction', (thisCommand, actionCommand) => {
     setAgentMode(true);
   }
   // CLI usage telemetry (opt-out, linked to the One account). Records only the command path —
-  // never args/flags. captureCommand() queues the event to disk instantly;
-  // drainQueue() then sends it (plus any left over from prior runs) in the
-  // background, overlapping the command. The postAction flush below stops any
-  // in-flight request so telemetry never blocks exit. See lib/analytics.ts.
+  // never args/flags. recordCommand() appends the command to a local log and
+  // periodically rolls it up into ONE aggregated event, keeping PostHog volume
+  // (and the bill) bounded no matter how many commands an agent fires;
+  // drainQueue() then sends any due rollups (plus anything left from prior
+  // runs) in the background, overlapping the command. The postAction flush
+  // below stops any in-flight request so telemetry never blocks exit. See
+  // lib/analytics.ts.
   analytics.maybeShowTelemetryNotice();
-  analytics.captureCommand(actionCommand);
+  analytics.recordCommand(actionCommand);
   analytics.drainQueue();
   // Start the fetch early so it resolves by the time the command finishes
   const commandName = thisCommand.args?.[0];
@@ -175,8 +178,10 @@ program.hook('postAction', async () => {
   // immediately but the process hangs for ~10s before exiting.
   await closeBackendIfCached();
 
-  // Stop any in-flight telemetry send so it can't hold the process open, and
-  // persist anything undelivered for retry next run. See lib/analytics.ts.
+  // Flush any usage rollup that came due during the command, then stop any
+  // in-flight telemetry send so it can't hold the process open, persisting
+  // anything undelivered for retry next run. See lib/analytics.ts.
+  analytics.flushUsageRollups();
   analytics.flush();
 
   if (!updateCheckPromise) return;

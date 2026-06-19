@@ -566,7 +566,7 @@ Run `one update` manually whenever you want to upgrade.
 
 ### Telemetry
 
-The CLI collects **usage analytics** — which command was run, the CLI version, OS/arch, and whether it ran in `--agent` mode — to help us prioritize improvements. Events are linked to your One account (user id, email, name, org) so they line up with your dashboard activity. **Command arguments, inputs, connection data, and secrets are never collected** (only the command name, e.g. `actions execute`). A one-time notice is shown on first run. Events are queued locally and sent in the background, so telemetry never slows down or blocks a command.
+The CLI collects **usage analytics** — which command was run, the CLI version, OS/arch, and whether it ran in `--agent` mode — to help us prioritize improvements. Events are linked to your One account (user id, email, name, org) so they line up with your dashboard activity. **Command arguments, inputs, connection data, and secrets are never collected** (only the command name, e.g. `actions execute`). A one-time notice is shown on first run. Commands are aggregated locally and sent as periodic, batched roll-ups in the background, so telemetry never slows down or blocks a command (and stays lightweight even under heavy automation).
 
 To opt out, set any of:
 

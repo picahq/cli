@@ -474,3 +474,57 @@ export function writeAnalyticsQueue(lines: string[]): void {
     fs.writeFileSync(analyticsQueueFile(), `${lines.slice(-ANALYTICS_QUEUE_MAX).join('\n')}\n`, { mode: 0o600 });
   } catch { /* best-effort */ }
 }
+
+// Append-only log of CLI commands awaiting roll-up. To avoid flooding PostHog
+// (and its bill) with one event per command, the CLI appends each command here
+// and periodically emits ONE aggregated "CLI Usage Rollup" event with exact
+// counts. Append-only JSONL is crash- and concurrency-safe — parallel CLI
+// invocations can't corrupt it (same property the analytics queue relies on).
+function usageLogFile(): string { return path.join(configDir(), '.cli-usage-log.jsonl'); }
+function usageStateFile(): string { return path.join(configDir(), '.cli-usage-state.json'); }
+const USAGE_LOG_MAX = 5000; // hard safety cap; the flush triggers keep it far below this
+
+export function appendUsageLog(line: string): void {
+  try {
+    if (!fs.existsSync(configDir())) fs.mkdirSync(configDir(), { mode: 0o700 });
+    fs.appendFileSync(usageLogFile(), `${line}\n`, { mode: 0o600 });
+  } catch { /* best-effort */ }
+}
+
+export function readUsageLog(): string[] {
+  try {
+    return fs.readFileSync(usageLogFile(), 'utf-8').split('\n').filter(Boolean).slice(-USAGE_LOG_MAX);
+  } catch {
+    return [];
+  }
+}
+
+/** Replace the usage log with `lines` (capped, newest kept); deletes it when empty. */
+export function writeUsageLog(lines: string[]): void {
+  try {
+    if (lines.length === 0) {
+      fs.rmSync(usageLogFile(), { force: true });
+      return;
+    }
+    if (!fs.existsSync(configDir())) fs.mkdirSync(configDir(), { mode: 0o700 });
+    fs.writeFileSync(usageLogFile(), `${lines.slice(-USAGE_LOG_MAX).join('\n')}\n`, { mode: 0o600 });
+  } catch { /* best-effort */ }
+}
+
+/** First-touch bookkeeping so every user is captured on their first command of the day. */
+export interface UsageState { lastDay?: string; distinctId?: string }
+
+export function readUsageState(): UsageState {
+  try {
+    return JSON.parse(fs.readFileSync(usageStateFile(), 'utf-8')) as UsageState;
+  } catch {
+    return {};
+  }
+}
+
+export function writeUsageState(state: UsageState): void {
+  try {
+    if (!fs.existsSync(configDir())) fs.mkdirSync(configDir(), { mode: 0o700 });
+    fs.writeFileSync(usageStateFile(), JSON.stringify(state), { mode: 0o600 });
+  } catch { /* best-effort */ }
+}

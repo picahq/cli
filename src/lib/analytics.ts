@@ -13,6 +13,11 @@ import {
   appendAnalyticsQueue,
   readAnalyticsQueue,
   writeAnalyticsQueue,
+  appendUsageLog,
+  readUsageLog,
+  writeUsageLog,
+  readUsageState,
+  writeUsageState,
 } from './config.js';
 import { isAgentMode } from './output.js';
 
@@ -29,6 +34,13 @@ import { isAgentMode } from './output.js';
  * ingest key (write-only; safe to embed, like the dashboard's
  * NEXT_PUBLIC_POSTHOG_KEY). Events are keyed on the One user id, so CLI
  * activity unifies onto the same PostHog person as the dashboard.
+ *
+ * AGGREGATION — one event per command would let a single agent loop emit tens
+ * of thousands of events a day and blow our PostHog bill. Instead the CLI
+ * appends each command to a local log and rolls it up into ONE "CLI Usage
+ * Rollup" event with EXACT counts, flushed at most ~once per 5 min of activity
+ * per user (see recordCommand / flushUsageRollups). The first command of each
+ * day flushes immediately, so no user is ever missed — even a one-and-done try.
  *
  * DELIVERY — a CLI process is short-lived and a network round-trip is ~1s, so
  * we never make the user wait: each event is written to a tiny on-disk queue
@@ -183,30 +195,140 @@ function send(item: QueuedEvent): void {
  * it survives an immediate process exit). Sending is done by drainQueue().
  * Never throws, never blocks. No-op when telemetry is disabled.
  */
-export function capture(event: string, properties: Record<string, unknown> = {}): void {
+export function capture(
+  event: string,
+  properties: Record<string, unknown> = {},
+  opts: { distinctId?: string; timestamp?: string } = {},
+): void {
   if (isTelemetryDisabled()) {
     debugLog(`disabled — skipping "${event}"`);
     return;
   }
+  const did = opts.distinctId ?? distinctId();
   const props: Record<string, unknown> = { ...baseProperties(), ...properties, $insert_id: randomUUID() };
-  const set = personSet();
-  if (set) props.$set = set;
+  // Person props belong only to the *current* user; never tag a rollup for a
+  // previous login (distinct_id ≠ current) with the new user's email/name.
+  if (did === distinctId()) {
+    const set = personSet();
+    if (set) props.$set = set;
+  }
   const item: QueuedEvent = {
     event,
-    distinct_id: distinctId(),
+    distinct_id: did,
     properties: props,
-    timestamp: new Date().toISOString(),
+    timestamp: opts.timestamp ?? new Date().toISOString(),
   };
   appendAnalyticsQueue(JSON.stringify(item));
 }
 
+/** Flush a rollup at most ~once per this window of activity per user. */
+const ROLLUP_WINDOW_MS = 5 * 60 * 1000;
+/** ...or after this many commands accumulate (burst safety cap). */
+const ROLLUP_MAX_BATCH = 500;
+
+interface UsageEntry { ts: number; command: string; agent: boolean; did: string }
+
+/** UTC calendar day (YYYY-MM-DD) of a timestamp — the first-touch boundary. */
+function utcDay(ts: number): string {
+  return new Date(ts).toISOString().slice(0, 10);
+}
+
 /**
- * Emit the "CLI Command Run" usage event for the command about to execute.
- * Records only the command PATH (e.g. "actions execute") — never positional
- * args or flag values, which can contain PII or secrets.
+ * Record the command about to run for usage analytics. Appends the command
+ * PATH (e.g. "actions execute") — never args/flags — to the local rollup log
+ * (instant, sync), then flushes any due rollups. The first command of the day
+ * flushes immediately so a user is captured even if they run the CLI once and
+ * never again. Never throws, never blocks. No-op when telemetry is disabled.
  */
-export function captureCommand(command: Command): void {
-  capture('CLI Command Run', { command: commandPath(command) });
+export function recordCommand(command: Command): void {
+  if (isTelemetryDisabled()) {
+    writeUsageLog([]);
+    return;
+  }
+  const did = distinctId();
+  const entry: UsageEntry = { ts: Date.now(), command: commandPath(command), agent: isAgentMode(), did };
+  appendUsageLog(JSON.stringify(entry));
+
+  const today = utcDay(entry.ts);
+  const state = readUsageState();
+  // First command today (or first ever, or right after a login) → flush now so
+  // the user is captured immediately and can never be missed.
+  const firstTouch = state.lastDay !== today || state.distinctId !== did;
+  flushUsageRollups({ force: firstTouch });
+  if (firstTouch) writeUsageState({ lastDay: today, distinctId: did });
+}
+
+/**
+ * Aggregate the local usage log into "CLI Usage Rollup" events and enqueue the
+ * ones that are due — a batch is due when forced (first-touch / exit drain),
+ * the window elapsed, it hit the size cap, or a newer login superseded it.
+ * Counts are EXACT (no sampling). Entries not yet due are kept for the next run.
+ */
+export function flushUsageRollups(opts: { force?: boolean } = {}): void {
+  if (isTelemetryDisabled()) {
+    writeUsageLog([]);
+    return;
+  }
+  const entries: UsageEntry[] = [];
+  for (const line of readUsageLog()) {
+    try {
+      const e = JSON.parse(line) as UsageEntry;
+      if (e && typeof e.ts === 'number' && typeof e.command === 'string' && typeof e.did === 'string') {
+        entries.push(e);
+      }
+    } catch {
+      // skip a malformed line
+    }
+  }
+  if (entries.length === 0) {
+    writeUsageLog([]);
+    return;
+  }
+
+  const currentDid = entries[entries.length - 1].did;
+  const now = Date.now();
+  // Group by distinct_id (a login mid-log yields one rollup per identity).
+  const groups = new Map<string, UsageEntry[]>();
+  for (const e of entries) {
+    const g = groups.get(e.did);
+    if (g) g.push(e);
+    else groups.set(e.did, [e]);
+  }
+
+  const kept: UsageEntry[] = [];
+  for (const [did, group] of groups) {
+    const due =
+      opts.force === true ||
+      did !== currentDid || // a superseded login's batch — flush it now
+      group.length >= ROLLUP_MAX_BATCH ||
+      now - group[0].ts >= ROLLUP_WINDOW_MS;
+    if (due) emitRollup(did, group);
+    else kept.push(...group);
+  }
+  writeUsageLog(kept.map((e) => JSON.stringify(e)));
+}
+
+/** Build + enqueue one "CLI Usage Rollup" event carrying exact counts for a batch. */
+function emitRollup(did: string, group: UsageEntry[]): void {
+  const byCommand: Record<string, number> = {};
+  let agentCount = 0;
+  for (const e of group) {
+    byCommand[e.command] = (byCommand[e.command] ?? 0) + 1;
+    if (e.agent) agentCount += 1;
+  }
+  capture(
+    'CLI Usage Rollup',
+    {
+      command_count: group.length,
+      by_command: byCommand,
+      agent_count: agentCount,
+      human_count: group.length - agentCount,
+      window_start: new Date(group[0].ts).toISOString(),
+      window_end: new Date(group[group.length - 1].ts).toISOString(),
+    },
+    { distinctId: did, timestamp: new Date(group[group.length - 1].ts).toISOString() },
+  );
+  debugLog(`rollup — ${group.length} command(s) for ${did}`);
 }
 
 function commandPath(command: Command): string {
