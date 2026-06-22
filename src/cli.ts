@@ -52,9 +52,14 @@ import { loginCommand } from './commands/login.js';
 import { logoutCommand } from './commands/logout.js';
 import { updateCommand, checkLatestVersionCached, getCurrentVersion, isNewerVersion, autoUpdate } from './commands/update.js';
 import { closeBackendIfCached } from './lib/memory/runtime.js';
-import { setAgentMode, isAgentMode, json as outputJson, error as outputError } from './lib/output.js';
+import { setAgentMode, isAgentMode, json as outputJson, error as outputError, silenceWarningsInAgentMode } from './lib/output.js';
 import { syncSkillsIfStale, forceSyncSkills, getSkillStatus } from './lib/skill-sync.js';
 import * as analytics from './lib/analytics.js';
+
+// Before anything runs: in --agent mode, keep process warnings off stdout/stderr
+// so they can't corrupt the JSON a machine consumer parses (#88). Done here at
+// module load — earlier than commander's flag parsing and any fetch() call.
+silenceWarningsInAgentMode();
 
 const require = createRequire(import.meta.url);
 const { version } = require('../package.json');
@@ -540,7 +545,8 @@ flow
   .option('--skip-validation', 'Skip input validation against action schemas')
   .option('--allow-bash', 'Allow bash step execution (disabled by default for security)')
   .option('-v, --verbose', 'Show full request/response for each step')
-  .action(async (keyOrPath: string, options: { input?: string[]; dryRun?: boolean; verbose?: boolean; mock?: boolean; allowBash?: boolean; skipValidation?: boolean }) => {
+  .option('--output-file <path>', 'Write the full result to a file (streamed) instead of stdout — avoids truncation/string-limit errors for large results; stdout/agent output then carries an outputFile pointer')
+  .action(async (keyOrPath: string, options: { input?: string[]; dryRun?: boolean; verbose?: boolean; mock?: boolean; allowBash?: boolean; skipValidation?: boolean; outputFile?: string }) => {
     await flowExecuteCommand(keyOrPath, options);
   });
 

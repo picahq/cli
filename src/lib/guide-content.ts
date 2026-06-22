@@ -84,6 +84,8 @@ one --agent flow list                                 # List all workflows
 - AI analysis via bash steps: \`claude --print\` with \`parseJson: true\`
 - Use \`--allow-bash\` to enable bash steps, \`--mock\` for dry-run with realistic mock responses (uses example data from action schemas)
 - Use \`--skip-validation\` to bypass input validation on action steps
+- Use \`--output-file <path>\` to stream the full result to a file instead of stdout — for large results that would otherwise be truncated or hit the JSON string-size limit; stdout (and \`--agent\` output) then carries an \`outputFile\` pointer instead of inline \`steps\`
+- Step-level \`if\`/\`unless\` (and \`while\`/\`condition\` steps) are null-safe: a condition referencing a skipped or not-yet-run step's output (e.g. \`$.steps.maybeSkipped.output.x\`) evaluates to \`false\` instead of crashing the flow
 
 ### 3. Relay — Webhook event forwarding between platforms
 Receive webhooks from platforms (Stripe, GitHub, Airtable, Attio, Google Calendar) and forward event data to any connected platform using passthrough actions with Handlebars templates. No middleware, no code.

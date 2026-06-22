@@ -271,6 +271,10 @@ Selectors in data fields (`data`, `queryParams`, `pathVars`, `connectionKey`) ar
 
 The `if`, `unless`, `condition.expression`, `while.condition`, `transform.expression`, and `code.source` fields **do** support full JavaScript expressions (e.g., `$.input.email && $.input.email.length > 0`).
 
+**Condition null-safety:** `if`/`unless`, `while.condition`, and `condition.expression` are null-safe. A condition that walks into a skipped or not-yet-run step's output — e.g. `$.steps.maybeSkipped.output.value` — evaluates to `false` instead of throwing `Cannot read properties of undefined`. (This applies to *conditions* only; `transform.expression` and `code.source` still throw on undefined access, since their output feeds downstream steps and should fail loudly.)
+
+**Large results:** pass `--output-file <path>` to `flow execute` to stream the full result to a file instead of stdout. Use it when a flow aggregates large outputs that would otherwise be truncated on stdout or exceed the JSON string-size limit. stdout (and `--agent` output) then carries `{"event":"workflow:result", ..., "outputFile":"<path>"}` instead of inline `steps` — read the file for the full result.
+
 ## Step Types
 
 ### `action` — Execute a One API action

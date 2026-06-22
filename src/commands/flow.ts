@@ -5,10 +5,44 @@ import * as output from '../lib/output.js';
 import { printTable } from '../lib/table.js';
 import { validateFlow } from '../lib/flow-validator.js';
 import { FlowRunner, loadFlowWithMeta, listFlows, saveFlow, resolveFlowPath, flowRequiresBash } from '../lib/flow-runner.js';
-import type { Flow, FlowEvent } from '../lib/flow-types.js';
+import type { Flow, FlowEvent, StepResult } from '../lib/flow-types.js';
 import type { PermissionLevel } from '../lib/types.js';
 import fs from 'node:fs';
 import path from 'node:path';
+
+/**
+ * Stream a `workflow:result` envelope to a file, serializing each step's
+ * result separately rather than building one giant JSON string. A flow that
+ * aggregates many/large sub-flow outputs can exceed V8's max string length
+ * (`RangeError: Invalid string length`) or get truncated on stdout — both
+ * reported in #87. Streaming bounds peak memory to the largest single step,
+ * not the sum, and keeps the full result off stdout entirely.
+ */
+export async function writeFlowResultFile(
+  filePath: string,
+  meta: { runId: string; logFile: string; status: string },
+  steps: Record<string, StepResult>,
+): Promise<string> {
+  const abs = path.resolve(filePath);
+  const ws = fs.createWriteStream(abs);
+  const done = new Promise<void>((resolve, reject) => {
+    ws.on('finish', () => resolve());
+    ws.on('error', reject);
+  });
+  ws.write(
+    `{"event":"workflow:result","runId":${JSON.stringify(meta.runId)},` +
+    `"logFile":${JSON.stringify(meta.logFile)},"status":${JSON.stringify(meta.status)},"steps":{`,
+  );
+  let first = true;
+  for (const [id, result] of Object.entries(steps)) {
+    ws.write(`${first ? '' : ','}${JSON.stringify(id)}:${JSON.stringify(result)}`);
+    first = false;
+  }
+  ws.write('}}');
+  ws.end();
+  await done;
+  return abs;
+}
 
 function getConfig() {
   const apiKey = getApiKey();
@@ -156,7 +190,7 @@ export async function flowCreateCommand(
 
 export async function flowExecuteCommand(
   keyOrPath: string,
-  options: { input?: string[]; dryRun?: boolean; verbose?: boolean; mock?: boolean; allowBash?: boolean; skipValidation?: boolean },
+  options: { input?: string[]; dryRun?: boolean; verbose?: boolean; mock?: boolean; allowBash?: boolean; skipValidation?: boolean; outputFile?: string },
 ): Promise<void> {
   output.intro(pc.bgCyan(pc.black(' One Workflow ')));
 
@@ -267,15 +301,24 @@ export async function flowExecuteCommand(
       execSpinner.stop('Workflow completed');
     }
 
+    // --output-file: write the full result to disk (streamed) instead of
+    // stdout, so a large aggregate result can't be truncated or blow the V8
+    // string limit. stdout then carries only a compact pointer. See #87.
+    const resultFile = options.outputFile
+      ? await writeFlowResultFile(options.outputFile, { runId, logFile: logPath, status: 'success' }, context.steps)
+      : undefined;
+
     if (output.isAgentMode()) {
-      output.json({
-        event: 'workflow:result',
-        runId,
-        logFile: logPath,
-        status: 'success',
-        steps: context.steps,
-      });
+      output.json(
+        resultFile
+          ? { event: 'workflow:result', runId, logFile: logPath, status: 'success', outputFile: resultFile }
+          : { event: 'workflow:result', runId, logFile: logPath, status: 'success', steps: context.steps },
+      );
       return;
+    }
+
+    if (resultFile) {
+      output.note(`Full result written to ${resultFile}`, 'Output');
     }
 
     // Print results summary

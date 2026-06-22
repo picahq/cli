@@ -267,6 +267,26 @@ export function evaluateExpression(expr: string, context: FlowContext): unknown 
   return fn(context);
 }
 
+/**
+ * Evaluate a boolean condition (`if`/`unless`, `while`, and `condition`
+ * steps). Unlike a transform — whose output feeds downstream steps and so
+ * must fail loudly — a condition that walks into a skipped or not-yet-
+ * produced step output should not crash the flow. Accessing
+ * `$.steps.skippedStep.output.x` throws a `TypeError` ("Cannot read
+ * properties of undefined"); we treat that as `false` so a missing upstream
+ * value simply makes the condition falsy. Syntax/reference errors still
+ * throw so genuinely malformed expressions surface (the validator also
+ * catches these at flow-create time). See issue #89.
+ */
+export function evaluateCondition(expr: string, context: FlowContext): boolean {
+  try {
+    return Boolean(evaluateExpression(expr, context));
+  } catch (err) {
+    if (err instanceof TypeError) return false;
+    throw err;
+  }
+}
+
 // ── Dot-path Helpers (for pagination) ──
 
 // getByDotPath and setByDotPath imported from ./dot-path.js
@@ -554,7 +574,7 @@ async function executeConditionStep(
   flowStack: string[],
 ): Promise<StepResult> {
   const condition = step.condition!;
-  const result = evaluateExpression(condition.expression, context);
+  const result = evaluateCondition(condition.expression, context);
 
   const branch = result ? condition.then : (condition.else || []);
   const branchResults = await executeSteps(branch, context, api, permissions, allowedActionIds, options, undefined, flowStack);
@@ -754,7 +774,7 @@ async function executeWhileStep(
   for (let iteration = 0; iteration < maxIterations; iteration++) {
     // Do-while: skip condition check on iteration 0
     if (iteration > 0) {
-      const conditionResult = evaluateExpression(config.condition, context);
+      const conditionResult = evaluateCondition(config.condition, context);
       if (!conditionResult) break;
     }
 
@@ -1096,7 +1116,7 @@ export async function executeSingleStep(
 ): Promise<StepResult> {
   // Conditional execution
   if (step.if) {
-    const condResult = evaluateExpression(step.if, context);
+    const condResult = evaluateCondition(step.if, context);
     if (!condResult) {
       const result: StepResult = { status: 'skipped' };
       context.steps[step.id] = result;
@@ -1104,7 +1124,7 @@ export async function executeSingleStep(
     }
   }
   if (step.unless) {
-    const condResult = evaluateExpression(step.unless, context);
+    const condResult = evaluateCondition(step.unless, context);
     if (condResult) {
       const result: StepResult = { status: 'skipped' };
       context.steps[step.id] = result;
