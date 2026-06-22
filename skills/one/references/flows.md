@@ -145,7 +145,7 @@ Two rules: (1) prepend the stdin-read line, (2) replace `return X` with `process
 one --agent flow validate <key>
 ```
 
-`flow validate` parses every inline `code.source` and runs `node --check` on every `code.module` file, so syntax errors (brace/paren mismatches, duplicate `let`, etc.) surface here instead of after upstream steps have already run. It also extracts `$.steps.X` and `$.input.X` references from inside `code.source` and `transform.expression` and reports any reference to an undefined step/input or to a step declared **after** the current one (forward references resolve to `undefined` at runtime — silent data loss). The same checks run automatically at the start of `flow execute` so a broken step in position 15 fails the run immediately rather than 15 minutes in.
+`flow validate` parses every inline `code.source` and runs `node --check` on every `code.module` file, so syntax errors (brace/paren mismatches, duplicate `let`, etc.) surface here instead of after upstream steps have already run. It also extracts `$.steps.X` and `$.input.X` references from inside `code.source`, `transform.expression`, **and external `code.module` `.mjs` files**, and reports any reference to an undefined step/input or to a step declared **after** the current one (forward references resolve to `undefined` at runtime — silent data loss). The same checks run automatically at the start of `flow execute` so a broken step in position 15 fails the run immediately rather than 15 minutes in.
 
 ### Step 6: Execute
 

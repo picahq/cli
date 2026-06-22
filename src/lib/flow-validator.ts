@@ -368,7 +368,7 @@ export function validateStepIds(flow: Flow): ValidationError[] {
 
 // ── Selector reference validation ──
 
-export function validateSelectorReferences(flow: Flow): ValidationError[] {
+export function validateSelectorReferences(flow: Flow, rootDir?: string): ValidationError[] {
   const errors: ValidationError[] = [];
   const inputNames = new Set(Object.keys(flow.inputs));
   const nestedKeys = getNestedStepsKeys();
@@ -510,6 +510,23 @@ export function validateSelectorReferences(flow: Flow): ValidationError[] {
           if (typeof text === 'string') {
             const fieldName = step.type === 'code' ? 'source' : 'expression';
             checkSelectors(extractSelectors(text), `${pathPrefix}.${descriptor.configKey}.${fieldName}`, preceding);
+          }
+          // External code modules: scan the .mjs file's $.steps.X / $.input.X
+          // tokens through the same ordering + undefined checks as inline
+          // source, so a module reading a later/undefined step is caught at
+          // validate time too (cli#75). Skipped when the file is missing —
+          // validateCodeModules already reports that.
+          const modulePath = step.type === 'code' ? (c.module as string | undefined) : undefined;
+          if (rootDir && typeof modulePath === 'string' && modulePath.length > 0) {
+            const abs = path.resolve(rootDir, modulePath);
+            if (fs.existsSync(abs)) {
+              try {
+                const moduleText = fs.readFileSync(abs, 'utf-8');
+                checkSelectors(extractSelectors(moduleText), `${pathPrefix}.${descriptor.configKey}.module`, preceding);
+              } catch {
+                // Unreadable file — validateCodeModules surfaces I/O errors.
+              }
+            }
           }
         }
       }
@@ -728,7 +745,7 @@ export function validateFlow(flow: unknown, rootDir?: string): ValidationError[]
   const f = flow as Flow;
   return [
     ...validateStepIds(f),
-    ...validateSelectorReferences(f),
+    ...validateSelectorReferences(f, rootDir),
     ...validateOutputSchemas(f),
     ...(rootDir ? validateCodeModules(f, rootDir) : []),
   ];
