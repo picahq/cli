@@ -251,7 +251,7 @@ Without declared paths, the default walker concatenates every string in the reco
 
 **Sync rejects custom actions** — profiles must use passthrough. `sync init` only surfaces passthrough models; `sync run` aborts if the list or enrich action is tagged `custom`. If no passthrough exists, compose a flow instead.
 
-**Connections are late-bound** — profiles use `"connection": { "platform": "<name>" }`, not literal `connectionKey` strings. The key is resolved at sync time, so `one add <platform>` (re-auth) doesn't break the profile. For multi-account platforms, add `"tag": "<connection-tag>"` to disambiguate. Don't hardcode connection keys in profiles.
+**Connections are late-bound** — profiles use `"connection": { "platform": "<name>" }`, not literal `connectionKey` strings. The key is resolved at sync time, so `one add <platform>` (re-auth) doesn't break the profile. For multi-account platforms, add `"tag": "<connection-tag>"` to disambiguate, and create the tagged connection with `one add <platform> --tag <name>`. Don't hardcode connection keys in profiles.
 
 **Advanced features** (enrich, transform, exclude, identityKey, hooks, --full-refresh, alternative backends, embedding tuning): run `one guide memory` or `one guide sync` for the full reference.
 
@@ -267,8 +267,9 @@ One also supports more advanced patterns. Read the relevant reference file befor
 If the user needs a platform that isn't connected yet, tell them to run:
 ```bash
 one add <platform>
+one add <platform> --tag <name>   # tag it (for multiple connections per platform)
 ```
-This is interactive and opens the browser for OAuth. After connecting, the platform will appear in `one --agent connection list`.
+This is interactive and opens the browser for OAuth. After connecting, the platform will appear in `one --agent connection list`. Use `--tag` when the user has (or will have) more than one connection for the same platform so sync/flow profiles can target a specific one via `"connection": { "platform": "<name>", "tag": "<name>" }`.
 
 ## Removing Connections
 

@@ -168,9 +168,14 @@ Connect a new platform via OAuth.
 one add shopify
 one add hubspot
 one add gmail
+one add gmail --tag work        # tag the connection
 ```
 
 Opens your browser, you authorize, done. The CLI polls until the connection is live. Platform names are lowercase (with dashes for multi-word names) - run `one platforms` to see them all.
+
+| Flag | What it does |
+|------|-------------|
+| `--tag <name>` | Tag the new connection once it's created. Lets sync/flow profiles target a specific connection via `"connection": { "platform": "gmail", "tag": "work" }` when you have several connections for one platform (e.g. personal vs work Gmail). |
 
 ### `one list`
 

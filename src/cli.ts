@@ -421,8 +421,9 @@ connection
   .command('add [platform]')
   .alias('a')
   .description('Add a new connection')
-  .action(async (platform) => {
-    await connectionAddCommand(platform);
+  .option('--tag <name>', 'Tag the new connection (disambiguates multiple connections per platform in sync/flow profiles)')
+  .action(async (platform, options) => {
+    await connectionAddCommand(platform, { tag: options.tag });
   });
 
 connection
@@ -818,8 +819,9 @@ program
 program
   .command('add [platform]')
   .description('Shortcut for: connection add')
-  .action(async (platform) => {
-    await connectionAddCommand(platform);
+  .option('--tag <name>', 'Tag the new connection (disambiguates multiple connections per platform in sync/flow profiles)')
+  .action(async (platform, options) => {
+    await connectionAddCommand(platform, { tag: options.tag });
   });
 
 program

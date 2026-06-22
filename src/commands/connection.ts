@@ -8,7 +8,7 @@ import { printTable } from '../lib/table.js';
 import * as output from '../lib/output.js';
 import type { Connection } from '../lib/types.js';
 
-export async function connectionAddCommand(platformArg?: string): Promise<void> {
+export async function connectionAddCommand(platformArg?: string, options?: { tag?: string }): Promise<void> {
   if (output.isAgentMode()) {
     output.error('This command requires interactive input. Run without --agent.');
   }
@@ -120,7 +120,26 @@ export async function connectionAddCommand(platformArg?: string): Promise<void> 
     const connection = await api.waitForConnection(platform, 5 * 60 * 1000, 5000);
     pollSpinner.stop(`${platform} connected!`);
 
-    p.log.success(`${pc.green('✓')} ${connection.platform} is now available to your AI agents.`);
+    // Tag the freshly-created connection so sync/flow profiles can target it
+    // via `connection: { platform, tag }` when multiple connections share a
+    // platform (e.g. personal vs work Gmail). See cli#122.
+    const tag = options?.tag?.trim();
+    if (tag) {
+      const tagSpinner = p.spinner();
+      tagSpinner.start(`Tagging connection "${tag}"...`);
+      try {
+        await api.updateConnectionTags(connection.id, [tag]);
+        tagSpinner.stop(`Tagged "${tag}"`);
+      } catch (err) {
+        tagSpinner.stop('Could not set tag');
+        p.log.warn(
+          `Connected, but tagging failed: ${err instanceof Error ? err.message : 'Unknown error'}\n` +
+          `The connection is usable; set the tag later in the dashboard or retry.`
+        );
+      }
+    }
+
+    p.log.success(`${pc.green('✓')} ${connection.platform} is now available to your AI agents.${tag ? ` (tag: ${tag})` : ''}`);
     p.outro('Connection complete!');
   } catch (error) {
     pollSpinner.stop('Connection timed out');

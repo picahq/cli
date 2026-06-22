@@ -124,6 +124,17 @@ export class OneApi {
   }
 
   /**
+   * Set the tag set on a connection (replaces existing tags). Backs
+   * `one add <platform> --tag <name>`, which tags a connection right after
+   * the OAuth flow creates it so sync/flow profiles can reference it via
+   * `connection: { platform, tag }` when several connections share a platform.
+   * Maps to `PATCH /v1/vault/connections/{id}` (UpdateConnection { tags }).
+   */
+  async updateConnectionTags(id: string, tags: string[]): Promise<void> {
+    await this.requestFull({ path: `/vault/connections/${id}`, method: 'PATCH', body: { tags } });
+  }
+
+  /**
    * Resolve a late-bound `ConnectionRef` to a current `Connection`. Pass
    * `cache` (a pre-fetched connection list) when resolving many refs in a
    * loop, so each resolve doesn't repeat the listConnections round-trip.
