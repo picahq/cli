@@ -464,7 +464,16 @@ export function validateSelectorReferences(flow: Flow, rootDir?: string): Valida
     }
   }
 
-  function checkStep(step: FlowStep, pathPrefix: string, preceding: Set<string>): void {
+  // Returns the set of step ids declared *within this step's nested subtree*
+  // (a parallel block's children, a loop/while body, a condition's branches).
+  // The engine stores those children directly in the shared `context.steps`
+  // when the block runs, so steps that come AFTER the block can legitimately
+  // reference them (e.g. a gate reading `$.steps.parallelChild.status`). The
+  // caller merges this set into `preceding` so those downstream references
+  // don't false-positive as forward references (cli#58). Intra-block ordering
+  // is unaffected — children are still only visible to *later* siblings.
+  function checkStep(step: FlowStep, pathPrefix: string, preceding: Set<string>): Set<string> {
+    const subtreeIds = new Set<string>();
     // if/unless are JS expressions — validate selector references but allow operators
     if (step.if) checkSelectors(extractSelectors(step.if), `${pathPrefix}.if`, preceding);
     if (step.unless) checkSelectors(extractSelectors(step.unless), `${pathPrefix}.unless`, preceding);
@@ -540,19 +549,27 @@ export function validateSelectorReferences(flow: Flow, rootDir?: string): Valida
           if (c && Array.isArray(c[fieldName])) {
             const childPreceding = new Set(preceding);
             (c[fieldName] as FlowStep[]).forEach((s, i) => {
-              checkStep(s, `${pathPrefix}.${configKey}.${fieldName}[${i}]`, childPreceding);
+              const childSubtree = checkStep(s, `${pathPrefix}.${configKey}.${fieldName}[${i}]`, childPreceding);
+              // Earlier siblings (and their subtrees) are visible to later
+              // siblings within the same block — preserves intra-block ordering.
               childPreceding.add(s.id);
+              for (const id of childSubtree) childPreceding.add(id);
+              // Surface this child + its descendants to the parent's later siblings.
+              subtreeIds.add(s.id);
+              for (const id of childSubtree) subtreeIds.add(id);
             });
           }
         }
       }
     }
+    return subtreeIds;
   }
 
   const preceding = new Set<string>();
   flow.steps.forEach((step, i) => {
-    checkStep(step, `steps[${i}]`, preceding);
+    const subtree = checkStep(step, `steps[${i}]`, preceding);
     preceding.add(step.id);
+    for (const id of subtree) preceding.add(id);
   });
   return errors;
 }

@@ -391,7 +391,7 @@ Use when fetching from 2+ independent data sources before combining results. Eac
 }
 ```
 
-After a parallel step, access each substep's output by its `id`: `$.steps.fetchEmails.response`, `$.steps.fetchEvents.response`.
+After a parallel step, access each substep's output by its `id`: `$.steps.fetchEmails.response`, `$.steps.fetchEvents.response`. Each substep also carries its own result metadata — `$.steps.<id>.status` (`"success"` | `"failed"` | `"timeout"` | `"skipped"`), `.error`, `.errorCode` (e.g. `"TIMEOUT"`), `.durationMs` — so a downstream gate can tell a timed-out substep (retry-able) from one that genuinely returned nothing: `$.steps.fetchEvents.status === 'timeout'`. These substep references resolve at runtime (the engine stores each child in the context) and `flow validate` recognizes them — referencing a parallel/`loop`/`while`/`condition` child from a later step is not a forward-reference error.
 
 ### `file-read` / `file-write` — Filesystem access
 
