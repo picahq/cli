@@ -552,7 +552,8 @@ one --agent mem reindex         # re-embed records under current model
 ## Admin
 
 \`\`\`bash
-one --agent mem export records.jsonl
+one --agent mem export records.jsonl                  # streamed JSONL — memory-safe on large stores
+one --agent mem export -                              # stream to stdout
 one --agent mem import records.jsonl                  # idempotent via keys[]
 one --agent mem migrate --dry-run                     # preview legacy .db → memory
 one --agent mem migrate --cleanup -y                  # migrate + delete .db files

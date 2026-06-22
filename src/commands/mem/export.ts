@@ -7,48 +7,62 @@
  */
 
 import fs from 'node:fs';
+import { once } from 'node:events';
+import type { Writable } from 'node:stream';
 import * as output from '../../lib/output.js';
 import { getBackend } from '../../lib/memory/runtime.js';
 import { okJson, requireMemoryInit } from './util.js';
 import type { MemRecord, RecordInput } from '../../lib/memory/index.js';
+
+/** Write one line, awaiting `drain` when the stream buffer is full so memory
+ *  stays bounded regardless of how fast records are produced. */
+async function writeLine(stream: Writable, line: string): Promise<void> {
+  if (!stream.write(line)) {
+    await once(stream, 'drain');
+  }
+}
 
 export async function memExportCommand(outfile: string | undefined): Promise<void> {
   requireMemoryInit();
   const backend = await getBackend();
   const stats = await backend.stats();
 
-  // Iterate distinct types via context() as a quick enumerator — falls back
-  // to fetching a page of every type. For v1 we just dump each type found.
+  // Stream records as JSONL page-by-page straight to the output, so peak
+  // memory is O(page) — never materialize the whole store into one array or
+  // one giant string. Previously a `records.map().join()` over the full set
+  // OOM'd (RangeError: Invalid string length) around ~94K records. See #151.
+  const toFile = !!outfile && outfile !== '-';
+  const stream: Writable = toFile ? fs.createWriteStream(outfile as string, 'utf-8') : process.stdout;
+
   const all = await listAllTypes(backend);
-  const records: MemRecord[] = [];
+  const pageSize = 500;
+  let written = 0;
+
   for (const type of all) {
-    let offset = 0;
-    const pageSize = 500;
-    while (true) {
-      const page = await backend.list(type, { limit: pageSize, offset, status: 'active' });
-      records.push(...page);
-      if (page.length < pageSize) break;
-      offset += pageSize;
-    }
-    offset = 0;
-    while (true) {
-      const page = await backend.list(type, { limit: pageSize, offset, status: 'archived' });
-      records.push(...page);
-      if (page.length < pageSize) break;
-      offset += pageSize;
+    for (const status of ['active', 'archived'] as const) {
+      let offset = 0;
+      while (true) {
+        const page = await backend.list(type, { limit: pageSize, offset, status });
+        for (const r of page) {
+          await writeLine(stream, JSON.stringify(r) + '\n');
+          written++;
+        }
+        if (page.length < pageSize) break;
+        offset += pageSize;
+      }
     }
   }
 
-  const lines = records.map(r => JSON.stringify(r)).join('\n') + '\n';
-  if (!outfile || outfile === '-') {
-    process.stdout.write(lines);
-    if (!output.isAgentMode()) {
-      process.stderr.write(`Exported ${records.length} records (${stats.recordCount} total in store).\n`);
-    }
+  if (toFile) {
+    stream.end();
+    await once(stream, 'finish');
+    okJson({ status: 'ok', file: outfile, recordsWritten: written, storeTotal: stats.recordCount });
     return;
   }
-  fs.writeFileSync(outfile, lines, 'utf-8');
-  okJson({ status: 'ok', file: outfile, recordsWritten: records.length, storeTotal: stats.recordCount });
+  // stdout: don't end() the shared process stream.
+  if (!output.isAgentMode()) {
+    process.stderr.write(`Exported ${written} records (${stats.recordCount} total in store).\n`);
+  }
 }
 
 export async function memImportCommand(file: string): Promise<void> {

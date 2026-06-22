@@ -28,6 +28,21 @@ function generateRunId(): string {
   return crypto.randomBytes(6).toString('hex');
 }
 
+/**
+ * JSON.stringify replacer for persisted run-state. A `flow` (sub-flow) step's
+ * output carries an `_steps` alias — a full copy of the sub-flow's step map
+ * (see `flattenedOutput` in flow-engine). It's a runtime convenience, but
+ * persisting it duplicates the entire sub-flow tree at every nesting level:
+ * a parent calling sub-flows that each return a large config object produced
+ * 150MB state files / GBs per day (#152). Drop `_steps` from the written
+ * state — the live runtime context keeps it, and resume still has the
+ * flattened fields and the by-step-id nested paths (`output.<innerId>.output.<field>`);
+ * only the redundant `._steps.<innerId>` alias is omitted on resume.
+ */
+export function stripStepsAlias(key: string, value: unknown): unknown {
+  return key === '_steps' ? undefined : value;
+}
+
 export class FlowRunner {
   private runId: string;
   private flowKey: string;
@@ -97,7 +112,7 @@ export class FlowRunner {
   }
 
   private saveState(): void {
-    fs.writeFileSync(this.statePath, JSON.stringify(this.state, null, 2));
+    fs.writeFileSync(this.statePath, JSON.stringify(this.state, stripStepsAlias, 2));
   }
 
   private createEventHandler(externalHandler?: (event: FlowEvent) => void): (event: FlowEvent) => void {
