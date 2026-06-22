@@ -1,6 +1,6 @@
 {
   "name": "@withone/cli",
-  "version": "1.47.3",
+  "version": "1.47.4",
   "description": "CLI for managing One",
   "type": "module",
   "files": [
@@ -30,7 +30,7 @@
     "@clack/prompts": "^0.9.1",
     "commander": "^13.1.0",
     "open": "^10.1.0",
-    "pgserve": "^2.2.3",
+    "pgserve": "2.2.3",
     "picocolors": "^1.1.1",
     "smol-toml": "^1.6.0"
   },
