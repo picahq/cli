@@ -210,6 +210,14 @@ export interface Flow {
   version?: string;
   inputs: Record<string, FlowInputDeclaration>;
   steps: FlowStep[];
+  /**
+   * Flow-wide default error strategy. Every step that does not declare its own
+   * `onError` inherits this; a step opts out by setting its own `onError`
+   * (e.g. `{ strategy: "fail" }` to stay fatal in an otherwise continue-on-error
+   * flow). Scoped per-flow — a sub-flow uses its own `defaultOnError`, not the
+   * parent's. See cli#93.
+   */
+  defaultOnError?: FlowStepErrorConfig;
 }
 
 export interface StepResult {
@@ -245,6 +253,13 @@ export interface FlowContext {
    * the run's lifetime is safe.
    */
   _connections?: import('./types.js').Connection[];
+  /**
+   * The running flow's `defaultOnError`, set by `executeFlow` so the step
+   * executor can fall back to it for steps without their own `onError`.
+   * Per-flow scoped — each (sub-)flow's `executeFlow` builds its own context
+   * and sets its own default. See cli#93.
+   */
+  _defaultOnError?: FlowStepErrorConfig;
 }
 
 export interface FlowRunState {

@@ -1134,17 +1134,21 @@ export async function executeSingleStep(
 
   const startTime = Date.now();
   let lastError: Error | undefined;
-  const maxAttempts = (step.onError?.strategy === 'retry' && step.onError.retries) ? step.onError.retries + 1 : 1;
+  // Effective error config: the step's own `onError`, else the flow-level
+  // `defaultOnError` (cli#93). Resolved once and used for every retry/strategy
+  // decision below so a step inherits the flow default unless it overrides.
+  const onError = step.onError ?? context._defaultOnError;
+  const maxAttempts = (onError?.strategy === 'retry' && onError.retries) ? onError.retries + 1 : 1;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       if (attempt > 1) {
-        const delay = computeRetryDelay(step.onError!, attempt);
+        const delay = computeRetryDelay(onError!, attempt);
         options.onEvent?.({
           event: 'step:retry',
           stepId: step.id,
           attempt,
-          maxRetries: step.onError!.retries!,
+          maxRetries: onError!.retries!,
           delayMs: delay,
         });
         await sleep(delay);
@@ -1256,9 +1260,9 @@ export async function executeSingleStep(
 
       // Conditional retry (cli#53): if retryOn/failFastOn are set, decide
       // whether THIS particular error should be retried at all.
-      if (step.onError?.strategy === 'retry' &&
-          (step.onError.retryOn || step.onError.failFastOn)) {
-        const decision = shouldRetryError(lastError, step.onError);
+      if (onError?.strategy === 'retry' &&
+          (onError.retryOn || onError.failFastOn)) {
+        const decision = shouldRetryError(lastError, onError);
         if (!decision.retry) {
           options.onEvent?.({
             event: 'step:retry-skip',
@@ -1274,7 +1278,7 @@ export async function executeSingleStep(
 
   // Handle error with strategy
   const errorMessage = lastError?.message || 'Unknown error';
-  const strategy = step.onError?.strategy || 'fail';
+  const strategy = onError?.strategy || 'fail';
   const retriesUsed = Math.max(0, maxAttempts - 1);
   const isTimeout = lastError instanceof StepTimeoutError;
   const errorCode = (lastError as { errorCode?: string } | undefined)?.errorCode;
@@ -1291,7 +1295,7 @@ export async function executeSingleStep(
     return result;
   }
 
-  if (strategy === 'fallback' && step.onError?.fallbackStepId) {
+  if (strategy === 'fallback' && onError?.fallbackStepId) {
     // The fallback step must already be defined in the flow
     // We mark this step as failed and the caller should handle fallback
     const result: StepResult = {
@@ -1454,6 +1458,10 @@ export async function executeFlow(
     loop: {},
   };
   context.input = resolvedInputs;
+  // Per-flow error default — steps without their own `onError` inherit this.
+  // Set on the context (not options) so a sub-flow's executeFlow scopes its
+  // own default rather than leaking the parent's. See cli#93.
+  context._defaultOnError = flow.defaultOnError;
 
   const completedStepIds = resumeState
     ? new Set(resumeState.completedSteps)

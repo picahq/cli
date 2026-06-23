@@ -39,6 +39,19 @@ export function validateFlowSchema(flow: unknown): ValidationError[] {
     errors.push({ path: 'version', message: '"version" must be a string' });
   }
 
+  // Flow-level default error strategy (cli#93) — inherited by steps without
+  // their own `onError`. Validate its strategy the same way step `onError` is.
+  if (f.defaultOnError !== undefined) {
+    if (!f.defaultOnError || typeof f.defaultOnError !== 'object' || Array.isArray(f.defaultOnError)) {
+      errors.push({ path: 'defaultOnError', message: '"defaultOnError" must be an object (e.g. { "strategy": "continue" })' });
+    } else {
+      const oe = f.defaultOnError as Record<string, unknown>;
+      if (!FLOW_SCHEMA.errorStrategies.includes(oe.strategy as string)) {
+        errors.push({ path: 'defaultOnError.strategy', message: `Error strategy must be one of: ${FLOW_SCHEMA.errorStrategies.join(', ')}` });
+      }
+    }
+  }
+
   // ── Validate inputs ──
 
   if (!f.inputs || typeof f.inputs !== 'object' || Array.isArray(f.inputs)) {

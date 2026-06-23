@@ -52,6 +52,7 @@ export const FLOW_SCHEMA: FlowSchemaDescriptor = {
     version:     { type: 'string', required: false, description: 'Semver or arbitrary version string' },
     inputs:      { type: 'object', required: true, description: 'Input declarations (Record<string, InputDeclaration>)' },
     steps:       { type: 'array', required: true, description: 'Ordered array of steps', stepsArray: true },
+    defaultOnError: { type: 'object', required: false, description: 'Default error strategy inherited by every step without its own `onError` (e.g. { "strategy": "continue" }). A step opts out with its own `onError`.' },
   },
 
   inputFields: {

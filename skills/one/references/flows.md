@@ -566,6 +566,22 @@ the outputSchema declaration.
 
 Strategies: `fail` (default), `continue`, `retry`, `fallback`.
 
+**Flow-level default (cli#93).** Set `defaultOnError` at the top of the flow and every step without its own `onError` inherits it — handy when most steps should `continue` (e.g. rendering/formatting pipelines) and you don't want to repeat it N times. A step opts out by declaring its own `onError`:
+
+```json
+{
+  "key": "render-report",
+  "defaultOnError": { "strategy": "continue" },
+  "steps": [
+    { "id": "critical", "onError": { "strategy": "fail" }, ... },   // stays fatal
+    { "id": "chart", ... },                                          // inherits continue
+    { "id": "thumbnail", ... }                                       // inherits continue
+  ]
+}
+```
+
+Scoped per-flow: a sub-flow uses its own `defaultOnError`, not the parent's.
+
 **Retry backoff.** By default each retry waits exactly `retryDelayMs`. For rate-limited APIs add `"backoff": "exponential"` (or `"exponential-jitter"`) and an optional `"maxDelayMs"` cap (defaults to 30000):
 
 ```json
