@@ -64,9 +64,47 @@ export interface FlowParallelConfig {
   maxConcurrency?: number;
 }
 
+export type FileReadSchemaLeafType =
+  | 'string' | 'number' | 'boolean' | 'object' | 'array' | 'null' | 'unknown';
+
+/**
+ * Per-field rule for a `fileRead.schema`. A field value may be a bare type
+ * string (shorthand for `{ type }`, optional) or this descriptor.
+ */
+export interface FileReadFieldSchema {
+  /** Expected type. `unknown` passes anything; `array`/`object` checked structurally. */
+  type?: FileReadSchemaLeafType;
+  /** Field must be present (not undefined). Default false — matches FlowOutputSchema. */
+  required?: boolean;
+  /** Value must strictly equal one of these. */
+  enum?: (string | number | boolean | null)[];
+  /** Schema applied to each element when `type: 'array'`. */
+  items?: FileReadSchemaLeafType | FileReadFieldSchema;
+  /** Array length lower/upper bounds. */
+  minItems?: number;
+  maxItems?: number;
+  /** Exact array length. */
+  length?: number;
+  /** Nested field schema when `type: 'object'`. */
+  properties?: FileReadSchema;
+}
+
+/** A `fileRead.schema`: field name → leaf type (shorthand) or a field descriptor. */
+export type FileReadSchema = {
+  [field: string]: FileReadSchemaLeafType | FileReadFieldSchema;
+};
+
 export interface FlowFileReadConfig {
   path: string;
   parseJson?: boolean;
+  /**
+   * Optional runtime shape check applied to the PARSED output (only consulted
+   * when `parseJson: true`). Unlike `step.outputSchema` — which is a
+   * documentation/wiring aid the engine never enforces — a mismatch here
+   * THROWS (errorCode `SCHEMA_VALIDATION`) and is handled by the step's
+   * `onError`. Absent ⇒ no check, behaviour unchanged. See cli#80.
+   */
+  schema?: FileReadSchema;
 }
 
 export interface FlowFileWriteConfig {

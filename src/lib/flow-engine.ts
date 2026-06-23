@@ -16,6 +16,9 @@ import type {
   FlowEvent,
   FlowExecuteOptions,
   FlowActionConfig,
+  FileReadSchema,
+  FileReadFieldSchema,
+  FileReadSchemaLeafType,
 } from './flow-types.js';
 import { getByDotPath, setByDotPath } from './dot-path.js';
 
@@ -46,6 +49,126 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, stepId: string):
   return Promise.race([promise, timeoutPromise]).finally(() => {
     if (timer) clearTimeout(timer);
   }) as Promise<T>;
+}
+
+/**
+ * Thrown when a `file-read` step's parsed output fails its declared
+ * `fileRead.schema`. Carries `errorCode: 'SCHEMA_VALIDATION'` so it rides the
+ * existing onError/retry/fallback machinery (matchable via retryOn/failFastOn).
+ * See cli#80.
+ */
+class FileReadSchemaError extends Error {
+  errorCode = 'SCHEMA_VALIDATION' as const;
+  constructor(stepId: string, violations: string[]) {
+    super(`Step "${stepId}" output failed schema validation: ${violations.join('; ')}`);
+    this.name = 'FileReadSchemaError';
+  }
+}
+
+/** Normalize a field rule (bare type string → descriptor). */
+function asFieldSchema(node: FileReadSchemaLeafType | FileReadFieldSchema): FileReadFieldSchema {
+  return typeof node === 'string' ? { type: node } : node;
+}
+
+function actualType(v: unknown): string {
+  if (v === null) return 'null';
+  if (Array.isArray(v)) return 'array';
+  return typeof v; // 'string' | 'number' | 'boolean' | 'object' | 'undefined'
+}
+
+/** True when `v` matches the leaf type (`unknown` always matches). */
+function matchesLeafType(v: unknown, t: FileReadSchemaLeafType): boolean {
+  switch (t) {
+    case 'unknown': return true;
+    case 'null': return v === null;
+    case 'array': return Array.isArray(v);
+    case 'object': return v !== null && typeof v === 'object' && !Array.isArray(v);
+    default: return typeof v === t; // string | number | boolean
+  }
+}
+
+/** Recursively collect human-readable violations of `value` against a field map. */
+function isPlainObjectValue(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === 'object' && !Array.isArray(v);
+}
+
+function collectFileReadViolations(value: unknown, schema: FileReadSchema, basePath: string, out: string[]): void {
+  // The root (and any `properties` object) is validated key-by-key. A
+  // non-object here is itself a violation — report it clearly rather than
+  // silently passing (e.g. an all-optional schema against a bare array/scalar)
+  // or attributing it to a missing required field. See cli#80 review.
+  if (!isPlainObjectValue(value)) {
+    const where = basePath ? `at "${basePath.replace(/\.$/, '')}"` : 'at the root';
+    out.push(`expected an object ${where} but got ${actualType(value)}`);
+    return;
+  }
+  const obj = value;
+  for (const [field, raw] of Object.entries(schema)) {
+    const rule = asFieldSchema(raw);
+    const path = `${basePath}${field}`;
+    const present = Object.prototype.hasOwnProperty.call(obj, field) && obj[field] !== undefined;
+
+    if (!present) {
+      if (rule.required) out.push(`field "${path}" is required but missing`);
+      continue; // absent optional field — nothing else to check
+    }
+    checkFileReadRule(obj[field], rule, path, out);
+  }
+}
+
+/** Validate a single present value against its field rule. */
+function checkFileReadRule(value: unknown, rule: FileReadFieldSchema, path: string, out: string[]): void {
+  if (rule.type && !matchesLeafType(value, rule.type)) {
+    out.push(`field "${path}" expected ${rule.type} but got ${actualType(value)}`);
+    return; // type wrong — downstream checks would be noise
+  }
+  // Array.isArray guard so a malformed schema reaching runtime (e.g. via
+  // --skip-validation, where the load-time enum-shape check is bypassed)
+  // degrades to a no-op instead of throwing a raw TypeError without errorCode.
+  if (Array.isArray(rule.enum) && !rule.enum.some(e => e === value)) {
+    out.push(`field "${path}" value ${JSON.stringify(value)} is not one of [${rule.enum.map(e => JSON.stringify(e)).join(', ')}]`);
+  }
+  // Array constraints. `items`/`minItems`/`maxItems`/`length` require
+  // `type:'array'` (enforced at load time), so a non-array value is already
+  // caught above; this block is defensive for the --skip-validation path too.
+  const hasArrayConstraint =
+    rule.items !== undefined || rule.minItems !== undefined || rule.maxItems !== undefined || rule.length !== undefined;
+  if (hasArrayConstraint) {
+    if (!Array.isArray(value)) {
+      if (!rule.type) out.push(`field "${path}" expected array but got ${actualType(value)}`);
+    } else {
+      if (rule.length !== undefined && value.length !== rule.length) {
+        out.push(`field "${path}" expected array of length ${rule.length} but got length ${value.length}`);
+      }
+      if (rule.minItems !== undefined && value.length < rule.minItems) {
+        out.push(`field "${path}" expected at least ${rule.minItems} item${rule.minItems === 1 ? '' : 's'} but got ${value.length}`);
+      }
+      if (rule.maxItems !== undefined && value.length > rule.maxItems) {
+        out.push(`field "${path}" expected at most ${rule.maxItems} item${rule.maxItems === 1 ? '' : 's'} but got ${value.length}`);
+      }
+      if (rule.items !== undefined) {
+        const itemRule = asFieldSchema(rule.items);
+        value.forEach((el, i) => checkFileReadRule(el, itemRule, `${path}[${i}]`, out));
+      }
+    }
+  }
+  // `properties` requires `type:'object'` (enforced at load time). Self-enforce
+  // here too so a non-object value yields a clear violation rather than a
+  // silently-skipped nested schema.
+  if (rule.properties) {
+    if (isPlainObjectValue(value)) {
+      collectFileReadViolations(value, rule.properties, `${path}.`, out);
+    } else if (!rule.type) {
+      out.push(`field "${path}" expected object but got ${actualType(value)}`);
+    }
+  }
+}
+
+/** Throw a single FileReadSchemaError enumerating every violation (empty ⇒ ok). */
+export function assertMatchesFileReadSchema(value: unknown, schema: FileReadSchema, stepId: string): void {
+  const violations: string[] = [];
+  collectFileReadViolations(value, schema, '', violations);
+  if (violations.length > 0) throw new FileReadSchemaError(stepId, violations);
 }
 
 /**
@@ -725,6 +848,11 @@ function executeFileReadStep(step: FlowStep, context: FlowContext): StepResult {
   const resolvedPath = path.resolve(filePath);
   const content = fs.readFileSync(resolvedPath, 'utf-8');
   const output = config.parseJson ? JSON.parse(stripCodeFences(content)) : content;
+  // Optional runtime shape check on the parsed output (cli#80). Throws a
+  // FileReadSchemaError that the executeSingleStep catch routes through onError.
+  if (config.parseJson && config.schema) {
+    assertMatchesFileReadSchema(output, config.schema, step.id);
+  }
   return { status: 'success', output, response: output };
 }
 

@@ -184,14 +184,22 @@ export const FLOW_SCHEMA: FlowSchemaDescriptor = {
     {
       type: 'file-read',
       configKey: 'fileRead',
-      description: 'Read a file (optional JSON parse)',
+      description: 'Read a file (optional JSON parse). With parseJson:true you may add an optional `schema` (field → type string, or { type, required, enum, items, minItems/maxItems/length, properties }) enforced at runtime — a mismatch throws (errorCode SCHEMA_VALIDATION) handled by the step\'s onError. Array constraints (items/minItems/maxItems/length) require type:"array" and properties requires type:"object". Unlike outputSchema (doc/wiring only), this checks the actual parsed value.',
       fields: {
         path:      { type: 'string', required: true, description: 'File path to read' },
         parseJson: { type: 'boolean', required: false, description: 'Parse contents as JSON (default: false)' },
       },
       example: {
         id: 'readConfig', name: 'Read config file', type: 'file-read',
-        fileRead: { path: './data/config.json', parseJson: true },
+        fileRead: {
+          path: './data/config.json',
+          parseJson: true,
+          schema: {
+            name: { type: 'string', required: true },
+            mode: { type: 'string', required: true, enum: ['dev', 'staging', 'prod'] },
+            tags: { type: 'array', items: 'string', minItems: 1, maxItems: 10 },
+          },
+        },
       },
     },
     {

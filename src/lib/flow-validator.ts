@@ -777,6 +777,7 @@ export function validateFlow(flow: unknown, rootDir?: string): ValidationError[]
     ...validateStepIds(f),
     ...validateSelectorReferences(f, rootDir),
     ...validateOutputSchemas(f),
+    ...validateFileReadSchemas(f),
     ...(rootDir ? validateCodeModules(f, rootDir) : []),
   ];
 }
@@ -817,6 +818,127 @@ export function validateCodeModules(flow: Flow, rootDir: string): ValidationErro
         }
       }
       // Recurse into nested step arrays
+      for (const { configKey, fieldName } of nestedKeys) {
+        const config = (step as unknown as Record<string, unknown>)[configKey] as Record<string, unknown> | undefined;
+        if (config && Array.isArray(config[fieldName])) {
+          walk(config[fieldName] as FlowStep[], `${stepPath}.${configKey}.${fieldName}`);
+        }
+      }
+    }
+  }
+
+  walk(flow.steps, 'steps');
+  return errors;
+}
+
+// ── file-read schema shape validation (cli#80) ──
+
+const VALID_FILE_READ_SCHEMA_TYPES = new Set(['string', 'number', 'boolean', 'object', 'array', 'null', 'unknown']);
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === 'object' && !Array.isArray(v);
+}
+
+/** Validate one field rule (type string or descriptor object) at `fieldPath`. */
+function validateFileReadFieldRule(raw: unknown, fieldPath: string, errors: ValidationError[]): void {
+  if (typeof raw === 'string') {
+    if (!VALID_FILE_READ_SCHEMA_TYPES.has(raw)) {
+      errors.push({ path: fieldPath, message: `unknown type "${raw}". Allowed: ${[...VALID_FILE_READ_SCHEMA_TYPES].join(', ')}.` });
+    }
+    return;
+  }
+  if (!isPlainObject(raw)) {
+    errors.push({ path: fieldPath, message: 'field rule must be a type string or an object (e.g. { "type": "string", "required": true })' });
+    return;
+  }
+  const rule = raw;
+  if (rule.type !== undefined && (typeof rule.type !== 'string' || !VALID_FILE_READ_SCHEMA_TYPES.has(rule.type))) {
+    errors.push({ path: `${fieldPath}.type`, message: `unknown type "${String(rule.type)}". Allowed: ${[...VALID_FILE_READ_SCHEMA_TYPES].join(', ')}.` });
+  }
+  if (rule.required !== undefined && typeof rule.required !== 'boolean') {
+    errors.push({ path: `${fieldPath}.required`, message: '"required" must be a boolean' });
+  }
+  if (rule.enum !== undefined) {
+    if (!Array.isArray(rule.enum) || rule.enum.length === 0) {
+      errors.push({ path: `${fieldPath}.enum`, message: '"enum" must be a non-empty array of allowed values' });
+    } else if (rule.enum.some(e => e !== null && typeof e === 'object')) {
+      errors.push({ path: `${fieldPath}.enum`, message: '"enum" entries must be primitives (string/number/boolean) or null' });
+    }
+  }
+  for (const k of ['minItems', 'maxItems', 'length'] as const) {
+    const n = rule[k];
+    if (n !== undefined && (typeof n !== 'number' || !Number.isInteger(n) || n < 0)) {
+      errors.push({ path: `${fieldPath}.${k}`, message: `"${k}" must be a non-negative integer` });
+    }
+  }
+  if (typeof rule.minItems === 'number' && typeof rule.maxItems === 'number' && rule.minItems > rule.maxItems) {
+    errors.push({ path: `${fieldPath}.minItems`, message: '"minItems" must be <= "maxItems"' });
+  }
+  if (rule.length !== undefined && (rule.minItems !== undefined || rule.maxItems !== undefined)) {
+    errors.push({ path: `${fieldPath}.length`, message: '"length" cannot be combined with "minItems"/"maxItems"' });
+  }
+  // Array constraints require `type:'array'` (otherwise they're silently a
+  // no-op at runtime). Require the type, don't just tolerate it. See cli#80 review.
+  const hasArrayConstraint =
+    rule.items !== undefined || rule.minItems !== undefined || rule.maxItems !== undefined || rule.length !== undefined;
+  if (hasArrayConstraint && rule.type !== 'array') {
+    errors.push({ path: `${fieldPath}.type`, message: '"items"/"minItems"/"maxItems"/"length" require "type": "array"' });
+  }
+  if (rule.items !== undefined) {
+    if (typeof rule.items === 'string') {
+      if (!VALID_FILE_READ_SCHEMA_TYPES.has(rule.items)) {
+        errors.push({ path: `${fieldPath}.items`, message: `unknown item type "${rule.items}". Allowed: ${[...VALID_FILE_READ_SCHEMA_TYPES].join(', ')}.` });
+      }
+    } else if (isPlainObject(rule.items)) {
+      validateFileReadFieldRule(rule.items, `${fieldPath}.items`, errors);
+    } else {
+      errors.push({ path: `${fieldPath}.items`, message: '"items" must be a type string or a field rule object' });
+    }
+  }
+  // `properties` requires `type:'object'`.
+  if (rule.properties !== undefined) {
+    if (rule.type !== 'object') {
+      errors.push({ path: `${fieldPath}.properties`, message: '"properties" requires "type": "object"' });
+    }
+    errors.push(...validateFileReadSchemaShape(rule.properties, `${fieldPath}.properties`));
+  }
+}
+
+/** Validate the *shape* of a `fileRead.schema` declaration (not a file value). */
+function validateFileReadSchemaShape(schema: unknown, location: string): ValidationError[] {
+  const errors: ValidationError[] = [];
+  if (!isPlainObject(schema)) {
+    errors.push({ path: location, message: '"schema" must be an object mapping field names to type/rules' });
+    return errors;
+  }
+  for (const [field, raw] of Object.entries(schema)) {
+    validateFileReadFieldRule(raw, `${location}.${field}`, errors);
+  }
+  return errors;
+}
+
+/**
+ * Validate every `fileRead.schema` declaration in the flow tree (cli#80):
+ * malformed schema shapes, and `schema` set without `parseJson: true`.
+ */
+export function validateFileReadSchemas(flow: Flow): ValidationError[] {
+  const errors: ValidationError[] = [];
+  const nestedKeys = getNestedStepsKeys();
+
+  function walk(steps: FlowStep[], pathPrefix: string): void {
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i];
+      const stepPath = `${pathPrefix}[${i}]`;
+      if (step.type === 'file-read' && step.fileRead && (step.fileRead as { schema?: unknown }).schema !== undefined) {
+        const fr = step.fileRead as { parseJson?: unknown; schema?: unknown };
+        if (fr.parseJson !== true) {
+          errors.push({
+            path: `${stepPath}.fileRead.schema`,
+            message: 'fileRead.schema is only checked when parseJson:true — set parseJson:true or remove schema.',
+          });
+        }
+        errors.push(...validateFileReadSchemaShape(fr.schema, `${stepPath}.fileRead.schema`));
+      }
       for (const { configKey, fieldName } of nestedKeys) {
         const config = (step as unknown as Record<string, unknown>)[configKey] as Record<string, unknown> | undefined;
         if (config && Array.isArray(config[fieldName])) {
