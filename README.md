@@ -272,7 +272,7 @@ one actions execute stripe <actionId> <connectionKey> \
 | `--dry-run` | Show the request without executing it |
 | `--mock` | Return example response without making an API call |
 | `--skip-validation` | Skip input validation against the action schema |
-| `--output <path>` | Save response to a file (for binary downloads) |
+| `--output <path>` | Save response to a file (for genuine binary downloads — PDFs, images). Text responses (text/plain, HTML, CSV, XML) render inline automatically. |
 | `--no-cache` | Bypass the cached action details and re-fetch them; the fresh details still refresh the cache (execution itself is never cached) |
 
 The CLI validates required parameters (path variables, query params, body fields) against the action schema before executing. Missing params return a clear error with the flag name and description. Pass `--skip-validation` to bypass.

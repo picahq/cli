@@ -25,6 +25,49 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * True if a `Content-Type` names a textual format that should be rendered as a
+ * string, not treated as binary. Covers `text/*` plus the common textual
+ * `application/*` types (JSON, XML, JS, form-encoded, YAML, and `+json`/`+xml`
+ * structured-suffix variants), ignoring any `; charset=…` parameter. See #163.
+ */
+export function isTextualContentType(contentType: string): boolean {
+  const ct = contentType.toLowerCase().split(';')[0].trim();
+  if (ct.startsWith('text/')) return true;
+  if (ct.endsWith('+json') || ct.endsWith('+xml')) return true;
+  return [
+    'application/json',
+    'application/xml',
+    'application/javascript',
+    'application/ecmascript',
+    'application/x-www-form-urlencoded',
+    'application/yaml',
+    'application/x-yaml',
+    'application/csv',
+  ].includes(ct);
+}
+
+/**
+ * Heuristic: does a UTF-8-decoded body look like human-readable text rather than
+ * binary? The API proxy mislabels text endpoints as `application/octet-stream`
+ * (#163), so when the content-type is unhelpful we sniff the decoded string. A
+ * NUL byte or a U+FFFD replacement char (invalid UTF-8) means binary; otherwise
+ * we allow a small fraction of control characters (some text legitimately
+ * contains the odd control byte) before calling it binary.
+ */
+export function looksLikeText(s: string): boolean {
+  if (s.length === 0) return true;
+  if (s.includes('\u0000') || s.includes('\uFFFD')) return false;
+  let control = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    // Allow tab (0x09), LF (0x0a), CR (0x0d), and (rarely) other whitespace;
+    // count the remaining C0 control chars as binary signal.
+    if ((c < 0x09 || (c > 0x0d && c < 0x20)) || c === 0x7f) control++;
+  }
+  return control / s.length < 0.05;
+}
+
 /** Parse a Retry-After header value (either delta-seconds or HTTP-date). */
 function parseRetryAfter(value: string | null): number | undefined {
   if (!value) return undefined;
@@ -488,16 +531,25 @@ export class OneApi {
     }
 
     const responseContentType = response.headers.get('content-type') || '';
-    const isExplicitJson = responseContentType.includes('application/json') || responseContentType.includes('text/');
 
-    if (isExplicitJson || !responseContentType) {
-      // Explicit JSON/text content-type — fast path
+    // Textual content-type (text/*, application/json|xml|…) or none: read as
+    // text, parse JSON when possible, otherwise return the raw text instead of
+    // crashing on JSON.parse — e.g. text/plain, text/html, CSV, XML. (#163)
+    if (isTextualContentType(responseContentType) || !responseContentType) {
       const responseText = await response.text();
-      const responseData = responseText ? JSON.parse(responseText) : {};
-      return { requestConfig: sanitizedConfig, responseData };
+      if (!responseText) return { requestConfig: sanitizedConfig, responseData: {} };
+      try {
+        return { requestConfig: sanitizedConfig, responseData: JSON.parse(responseText) };
+      } catch {
+        return {
+          requestConfig: sanitizedConfig,
+          responseData: { text: responseText, contentType: responseContentType || 'text/plain' },
+        };
+      }
     }
 
-    // Ambiguous content-type (e.g. application/octet-stream from the API proxy).
+    // Non-textual content-type (e.g. application/octet-stream — which the proxy
+    // also uses for JSON responses AND for mislabeled text endpoints, #163).
     // With --output: stream to disk (memory-safe for large binary files).
     if (args.output) {
       const outputPath = resolve(args.output);
@@ -515,14 +567,21 @@ export class OneApi {
       };
     }
 
-    // Without --output: try JSON parse, fall back to binary metadata.
-    // The API proxy often returns application/octet-stream for JSON responses,
-    // so we must attempt parsing before assuming binary.
+    // Without --output: try JSON parse (the proxy often sends JSON as
+    // octet-stream); then sniff — a printable body is a text endpoint the proxy
+    // mislabeled, so return it as text (#163); only genuine bytes become the
+    // binary stub.
     const responseText = await response.text();
     try {
       const responseData = responseText ? JSON.parse(responseText) : {};
       return { requestConfig: sanitizedConfig, responseData };
     } catch {
+      if (looksLikeText(responseText)) {
+        return {
+          requestConfig: sanitizedConfig,
+          responseData: { text: responseText, contentType: responseContentType },
+        };
+      }
       const contentLength = response.headers.get('content-length');
       const size = contentLength ? parseInt(contentLength, 10) : responseText.length;
       return {
