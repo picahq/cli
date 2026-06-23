@@ -246,6 +246,11 @@ export class FlowRunner {
     }
   }
 
+  /** Path to a run's persisted state file. The post-mortem artifact surfaced by `one flow inspect`. */
+  static statePathFor(flowKey: string, runId: string): string {
+    return path.join(RUNS_DIR, `${flowKey}-${runId}.state.json`);
+  }
+
   static loadRunState(runId: string): FlowRunState | null {
     ensureDir(RUNS_DIR);
     const files = fs.readdirSync(RUNS_DIR).filter(f => f.includes(runId) && f.endsWith('.state.json'));

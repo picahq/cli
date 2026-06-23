@@ -26,6 +26,7 @@ import {
   flowValidateCommand,
   flowResumeCommand,
   flowRunsCommand,
+  flowInspectCommand,
   flowScaffoldCommand,
   collect,
 } from './commands/flow.js';
@@ -541,13 +542,14 @@ flow
   .alias('x')
   .description('Execute a workflow by key or file path')
   .option('-i, --input <name=value>', 'Input parameter (repeatable)', collect, [])
-  .option('--dry-run', 'Validate and show execution plan without running')
+  .option('--dry-run', 'Resolve each step\'s interpolations and show what they evaluate to, without executing any step ($.steps.* refs resolve at runtime)')
   .option('--mock', 'With --dry-run: execute transforms/code with realistic mock API responses')
+  .option('--stop-after <stepId>', 'Execute steps up to and including <stepId>, then stop (later steps are not run). With --dry-run, runs earlier steps for real and dry-resolves <stepId> against their output without executing it. See: one flow inspect')
   .option('--skip-validation', 'Skip input validation against action schemas')
   .option('--allow-bash', 'Allow bash step execution (disabled by default for security)')
   .option('-v, --verbose', 'Show full request/response for each step')
   .option('--output-file <path>', 'Write the full result to a file (streamed) instead of stdout — avoids truncation/string-limit errors for large results; stdout/agent output then carries an outputFile pointer')
-  .action(async (keyOrPath: string, options: { input?: string[]; dryRun?: boolean; verbose?: boolean; mock?: boolean; allowBash?: boolean; skipValidation?: boolean; outputFile?: string }) => {
+  .action(async (keyOrPath: string, options: { input?: string[]; dryRun?: boolean; verbose?: boolean; mock?: boolean; allowBash?: boolean; skipValidation?: boolean; outputFile?: string; stopAfter?: string }) => {
     await flowExecuteCommand(keyOrPath, options);
   });
 
@@ -578,6 +580,14 @@ flow
   .description('List workflow runs (optionally filtered by flow key)')
   .action(async (flowKey?: string) => {
     await flowRunsCommand(flowKey);
+  });
+
+flow
+  .command('inspect <runId>')
+  .description('Inspect a past run\'s per-step outputs (post-mortem, no re-run) from its saved state file')
+  .option('--full', 'Show full step outputs (default truncates large values)')
+  .action(async (runId: string, options: { full?: boolean }) => {
+    await flowInspectCommand(runId, options);
   });
 
 flow

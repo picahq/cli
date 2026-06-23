@@ -474,8 +474,16 @@ Execute a workflow by key or file path. Pass inputs with repeatable `-i` flags.
 one flow execute welcome-customer \
   -i customerEmail=jane@example.com
 
-# Dry run - validate and show plan without executing
+# Dry run - resolve every step's interpolations and show what they evaluate to,
+# without executing any step (catches wiring bugs without burning API credits)
 one flow execute welcome-customer --dry-run -i customerEmail=jane@example.com
+
+# Stop after a specific step (isolate where a long flow breaks)
+one flow execute welcome-customer --stop-after fetch-user -i customerEmail=jane@example.com
+
+# Combine: run steps up to a point for real, then dry-resolve the suspect step
+# against the REAL accumulated output (so $.steps.* references resolve too)
+one flow execute welcome-customer --dry-run --stop-after send-email -i customerEmail=jane@example.com
 
 # Verbose - show each step as it runs
 one flow execute welcome-customer -v -i customerEmail=jane@example.com
@@ -488,8 +496,9 @@ Press Ctrl+C during execution to pause - the run can be resumed later with `one 
 | Option | What it does |
 |--------|-------------|
 | `-i, --input <name=value>` | Input parameter (repeatable) |
-| `--dry-run` | Validate and show execution plan without running |
+| `--dry-run` | Resolve each step's interpolations and show what they evaluate to, without executing any step. `$.input.*`/`$.env.*` resolve up front; `$.steps.*` refs are reported as deferred (they're produced at runtime). |
 | `--mock` | With `--dry-run`: execute transforms/code with realistic mock API responses |
+| `--stop-after <stepId>` | Execute steps up to and including `<stepId>`, then stop (later steps are not run). Combined with `--dry-run`, runs earlier steps for real and dry-resolves `<stepId>` against their output without executing it. Inspect what ran with `one flow inspect <runId>`. |
 | `--skip-validation` | Skip input validation against action schemas |
 | `--allow-bash` | Allow bash step execution (disabled by default for security) |
 | `-v, --verbose` | Show full request/response for each step |
@@ -529,6 +538,17 @@ List workflow runs, optionally filtered by workflow key.
 one flow runs                    # all runs
 one flow runs welcome-customer   # runs for a specific workflow
 ```
+
+### `one flow inspect <runId>`
+
+Inspect a past (or in-progress) run's per-step outputs — post-mortem debugging without re-running the flow. Every run persists a state file that records each step's output as it completes (and is preserved on failure), so this shows exactly how far the run got and what each step produced.
+
+```bash
+one flow inspect abc123          # truncates large outputs
+one flow inspect abc123 --full   # full, pretty-printed outputs
+```
+
+Pairs with `--stop-after`: run up to a step, then `one flow inspect <runId>` to see its output.
 
 ### `one config`
 

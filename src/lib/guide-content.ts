@@ -73,6 +73,9 @@ Chain actions across platforms as JSON workflow files with conditions, loops, pa
 one --agent flow create <key> --definition '<json>'   # Create a workflow
 one --agent flow validate <key>                       # Validate it
 one --agent flow execute <key> -i param=value         # Execute it
+one --agent flow execute <key> --dry-run -i ...       # Resolve interpolations, run nothing
+one --agent flow execute <key> --stop-after <stepId>  # Run up to a step, then stop
+one --agent flow inspect <runId>                      # Per-step outputs of a past run
 one --agent flow list                                 # List all workflows
 \`\`\`
 
@@ -86,6 +89,7 @@ one --agent flow list                                 # List all workflows
 - Use \`--skip-validation\` to bypass input validation on action steps
 - Use \`--output-file <path>\` to stream the full result to a file instead of stdout — for large results that would otherwise be truncated or hit the JSON string-size limit; stdout (and \`--agent\` output) then carries an \`outputFile\` pointer instead of inline \`steps\`
 - Step-level \`if\`/\`unless\` (and \`while\`/\`condition\` steps) are null-safe: a condition referencing a skipped or not-yet-run step's output (e.g. \`$.steps.maybeSkipped.output.x\`) evaluates to \`false\` instead of crashing the flow
+- Debugging: \`--dry-run\` resolves each step's interpolations and shows what they evaluate to without executing (\`$.steps.*\` refs are reported as deferred); \`--stop-after <stepId>\` runs up to a step then stops; \`--dry-run --stop-after <stepId>\` runs earlier steps for real then dry-resolves the target against their output; \`flow inspect <runId>\` shows a past run's per-step outputs (post-mortem, no re-run; \`--full\` for untruncated)
 
 ### 3. Relay — Webhook event forwarding between platforms
 Receive webhooks from platforms (Stripe, GitHub, Airtable, Attio, Google Calendar) and forward event data to any connected platform using passthrough actions with Handlebars templates. No middleware, no code.

@@ -324,6 +324,14 @@ export interface FlowExecuteOptions {
   verbose?: boolean;
   allowBash?: boolean;
   skipValidation?: boolean;
+  /**
+   * Stop execution after the step with this id completes. Steps that follow it
+   * (at any nesting level) are not run. Useful for isolating where a long flow
+   * breaks without running the whole thing (see #97). Combined with `dryRun`,
+   * the steps before the target run for real and the target is dry-resolved
+   * (its interpolations are reported) but never executed.
+   */
+  stopAfter?: string;
   /** Absolute directory that contains this flow's `flow.json` (or the legacy `.one/flows/` dir). Used to resolve code.module paths. */
   rootDir?: string;
   onEvent?: (event: FlowEvent) => void;
