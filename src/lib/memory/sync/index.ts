@@ -1366,6 +1366,14 @@ function registerSyncSubcommands(sync: Command): void {
     });
 
   sync
+    .command('schema <platform/model>')
+    .description('Inspect the JSON structure of synced records (field paths, types, examples) — useful before writing `sync sql` queries')
+    .action(async (platformModel: string) => {
+      const { syncSchemaCommand } = await import('./schema.js');
+      await syncSchemaCommand(platformModel);
+    });
+
+  sync
     .command('delete <platform/model>')
     .description('Delete records from local sync data (e.g. one sync delete notion/pages --id "abc-123")')
     .option('--id <value>', 'Delete record by ID')

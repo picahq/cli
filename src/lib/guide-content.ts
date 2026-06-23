@@ -652,6 +652,7 @@ one --agent sync run stripe
 one --agent mem sync run stripe                    # identical (alias)
 
 # 5. Query + search (read from memory)
+one --agent sync schema stripe/customers                            # inspect field paths/types first
 one --agent sync query stripe/balanceTransactions --where "status=available" --limit 20
 one --agent sync query stripe/customers --where 'address.city=SF'   # dotted --where paths
 one --agent sync search "refund" --platform stripe                  # hybrid FTS + semantic
@@ -892,6 +893,7 @@ Every \`sync X\` command is also exposed as \`mem sync X\` — same handlers, sa
 | \`sync suggest-searchable <plat>/<model>\` | Rank candidate \`memory.searchable\` paths by signal density; emits paste-ready config |
 | \`sync run <platform>\` | Sync data (\`--full-refresh\`, \`--since\`, \`--dry-run\`, \`--no-memory\`) |
 | \`sync query <plat>/<model>\` | Query memory with \`--where\` (dotted paths), \`--after/before\` |
+| \`sync schema <plat>/<model>\` | Inspect the JSON structure of synced records (field paths, types, examples) — run before writing \`--where\` / query paths |
 | \`sync search "<query>"\` | Hybrid FTS + semantic across all synced data |
 | \`sync list [platform]\` | Show profiles, record counts, freshness |
 | \`sync schedule add/list/status/remove/repair\` | Manage cron schedules |

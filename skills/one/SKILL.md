@@ -229,6 +229,7 @@ one --agent sync test attio/attioPeople --show-searchable
 
 # Run — memory is always written; pass --no-memory to skip (rare)
 one --agent sync run stripe
+one --agent sync schema stripe/customers         # inspect field paths/types before querying
 one --agent sync query stripe/balanceTransactions --where "status=available" --limit 20
 one --agent sync search "refund"                 # hybrid across all synced platforms
 one --agent sync list stripe                     # progress + freshness
