@@ -6,7 +6,7 @@ import path from 'node:path';
 import type { Command } from 'commander';
 
 import { recordCommand, flushUsageRollups } from './analytics.js';
-import { appendUsageLog, readUsageLog, readAnalyticsQueue } from './config.js';
+import { appendUsageLog, readUsageLog, readAnalyticsQueue, claimUsageLog } from './config.js';
 
 // These tests exercise the REAL rollup code against REAL files: HOME is
 // sandboxed to a temp dir so all reads/writes land under <tmp>/.one (config.ts
@@ -24,6 +24,8 @@ interface RollupEvent {
     human_count: number;
     window_start: string;
     window_end: string;
+    $insert_id: string;
+    authenticated: boolean;
   };
 }
 
@@ -61,7 +63,7 @@ describe('CLI usage rollups', () => {
   const orig: Record<string, string | undefined> = {};
 
   beforeEach(() => {
-    for (const k of ['HOME', 'CI', 'ONE_NO_TELEMETRY', 'ONE_DISABLE_TELEMETRY', 'DO_NOT_TRACK']) {
+    for (const k of ['HOME', 'CI', 'ONE_NO_TELEMETRY', 'ONE_DISABLE_TELEMETRY', 'DO_NOT_TRACK', 'ONE_SECRET']) {
       orig[k] = process.env[k];
     }
     originalCwd = process.cwd();
@@ -75,6 +77,8 @@ describe('CLI usage rollups', () => {
     delete process.env.ONE_NO_TELEMETRY;
     delete process.env.ONE_DISABLE_TELEMETRY;
     delete process.env.DO_NOT_TRACK;
+    // Authenticated by default so the command-recording tests exercise the normal path.
+    process.env.ONE_SECRET = 'sk_live_test_key';
   });
 
   afterEach(() => {
@@ -206,5 +210,62 @@ describe('CLI usage rollups', () => {
     flushUsageRollups({ force: true });
     assert.equal(emittedRollups().length, 0);
     assert.equal(readUsageLog().length, 0, 'backlog dropped on opt-out');
+  });
+
+  // ── Fix 1: don't record unauthenticated auth-required commands ──────────────
+  it('does NOT record an auth-required command when unauthenticated (no anon pollution)', () => {
+    delete process.env.ONE_SECRET; // a CLI with no login and no API key
+    recordCommand(fakeCommand('actions execute'));
+    assert.equal(emittedRollups().length, 0, 'no rollup for unauthenticated actions execute');
+    assert.equal(readUsageLog().length, 0, 'not even written to the local log');
+  });
+
+  it('still records pre-auth funnel commands when unauthenticated', () => {
+    delete process.env.ONE_SECRET;
+    recordCommand(fakeCommand('login')); // allowlisted pre-auth command
+    const r = emittedRollups();
+    assert.equal(r.length, 1, 'login is recorded even without auth');
+    assert.equal(r[0].properties.authenticated, false, 'flagged as unauthenticated');
+  });
+
+  it('tags rollups with the authenticated flag', () => {
+    recordCommand(fakeCommand('actions execute')); // ONE_SECRET set in beforeEach
+    const r = emittedRollups();
+    assert.equal(r.length, 1);
+    assert.equal(r[0].properties.authenticated, true);
+  });
+
+  // ── Fix 2: deterministic insert_id so duplicate batches dedupe in PostHog ────
+  it('gives identical batches the same $insert_id so PostHog dedupes duplicates', () => {
+    const old = Date.now() - WINDOW_MS - 1000;
+    const mk = () => logEntry({ did: 'whale', ts: old, command: 'actions execute', agent: true });
+    for (let i = 0; i < 5; i++) appendUsageLog(mk());
+    flushUsageRollups();
+    for (let i = 0; i < 5; i++) appendUsageLog(mk()); // a byte-identical batch
+    flushUsageRollups();
+    const r = emittedRollups();
+    assert.equal(r.length, 2, 'two identical batches were emitted');
+    assert.ok(r[0].properties.$insert_id, 'rollup carries an insert id');
+    assert.equal(r[0].properties.$insert_id, r[1].properties.$insert_id, 'identical content → same id (deduped on ingest)');
+  });
+
+  it('gives genuinely different batches different $insert_ids', () => {
+    const old = Date.now() - WINDOW_MS - 1000;
+    appendUsageLog(logEntry({ did: 'a', ts: old }));
+    flushUsageRollups();
+    appendUsageLog(logEntry({ did: 'b', ts: old }));
+    flushUsageRollups();
+    const r = emittedRollups();
+    assert.equal(r.length, 2);
+    assert.notEqual(r[0].properties.$insert_id, r[1].properties.$insert_id);
+  });
+
+  // ── Fix 3: atomic claim so concurrent processes can't double-emit a batch ───
+  it('claimUsageLog hands a batch to exactly one caller (concurrency-safe flush)', () => {
+    for (let i = 0; i < 3; i++) appendUsageLog(logEntry({ did: 'x' }));
+    const first = claimUsageLog();
+    const second = claimUsageLog();
+    assert.equal(first?.length, 3, 'first claimant gets the whole batch');
+    assert.equal(second, null, 'a concurrent second claimant gets nothing → cannot double-emit');
   });
 });
