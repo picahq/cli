@@ -51,6 +51,7 @@ import { guideCommand } from './commands/guide.js';
 import { onboardCommand } from './commands/onboard.js';
 import { loginCommand } from './commands/login.js';
 import { logoutCommand } from './commands/logout.js';
+import { listenCommand } from './commands/listen.js';
 import { updateCommand, checkLatestVersionCached, getCurrentVersion, isNewerVersion, autoUpdate } from './commands/update.js';
 import { closeBackendIfCached } from './lib/memory/runtime.js';
 import { setAgentMode, isAgentMode, json as outputJson, error as outputError, silenceWarningsInAgentMode } from './lib/output.js';
@@ -127,6 +128,7 @@ program
     one relay event-types <platform>      List supported event types
     one relay events                      List received webhook events
     one relay deliveries                  List delivery attempts
+    one listen --forward-to <url>         Stream webhook events to a local endpoint (like \`stripe listen\`)
 
   Example — send an email through Gmail:
     $ one list
@@ -224,6 +226,16 @@ program
   .description('Clear local credentials')
   .action(async () => {
     await logoutCommand();
+  });
+
+program
+  .command('listen')
+  .description('Stream webhook events to a local endpoint (like `stripe listen`)')
+  .requiredOption('--forward-to <url>', 'Local URL to POST events to (e.g. http://localhost:4242/webhook)')
+  .option('--source <source>', 'Which events to stream: relay, subscriptions, or both', 'both')
+  .option('--events <types>', 'Comma-separated event-type filter (e.g. customer.created,invoice.paid)')
+  .action(async (options: { forwardTo: string; source?: string; events?: string }) => {
+    await listenCommand(options);
   });
 
 const config = program
