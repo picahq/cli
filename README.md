@@ -424,6 +424,18 @@ one relay deliveries --endpoint-id <id>    # Check delivery status
 
 Start with `one relay platforms` to discover which platforms support relay at all, then drill into `event-types <platform>` for the specific events. Run `one guide relay` for the full reference including `--metadata` requirements per platform.
 
+### `one listen`
+
+Stream webhook events straight to a local endpoint while you develop — like `stripe listen`, but for every platform One relays plus One's own subscription events. No public URL or tunnel needed: the CLI holds the connection and forwards to your machine, so nothing on the server ever reaches `localhost`.
+
+```bash
+one listen --forward-to http://localhost:4242/webhook          # relay + subscription events
+one listen --forward-to http://localhost:4242/webhook --source relay
+one listen --forward-to http://localhost:4242/webhook --events customer.created,invoice.paid
+```
+
+Each event is POSTed to your endpoint with its **original raw body and headers** (including the signature), so your handler verifies exactly as it would in production. Delivery is best-effort — if the CLI isn't running the event isn't forwarded (your durable webhook endpoints are unaffected) — so it's a dev tool, never a production consumer.
+
 ### `one guide [topic]`
 
 Get the full CLI usage guide, designed for AI agents that only have the binary (no MCP, no IDE skills).

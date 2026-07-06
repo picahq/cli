@@ -126,6 +126,17 @@ one --agent actions execute --parallel \
 
 All segments are validated before any execution. Failed actions don't block others. Use `--max-concurrency <n>` (default 5) to control batching. Agent-mode output: `{"parallel":true,"results":[...],"succeeded":N,"failed":N,"totalDurationMs":N}`. Each result carries `"_preflight":{"cache":"hit"|"miss"}` showing whether that action's details were served from cache.
 
+## Local webhook testing (`one listen`)
+
+Stream webhook events to a local endpoint while developing, like `stripe listen`:
+
+```bash
+one listen --forward-to http://localhost:4242/webhook            # relay + subscription events
+one listen --forward-to http://localhost:4242/webhook --source relay --events customer.created,invoice.paid
+```
+
+Events POST to the local URL with their original raw body + headers (signature intact), so a handler verifies as in production. Best-effort (no retries) — a dev tool, not a durable consumer. `--agent` emits one JSON line per event/status/error.
+
 ## Error Handling
 
 All errors return JSON: `{"error": "message"}`. Parse output as JSON and check for the `error` key.

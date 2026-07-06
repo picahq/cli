@@ -111,6 +111,13 @@ one --agent relay deliveries --endpoint-id <id>                 # Check delivery
 - \`--create-webhook\` auto-registers the webhook URL with the source platform
 - Use \`actions knowledge\` to learn both the incoming payload shape AND the destination API shape before building templates
 
+**Test webhooks locally (\`one listen\`):** stream events to a local endpoint while developing, like \`stripe listen\` — no public URL or tunnel.
+\`\`\`bash
+one listen --forward-to http://localhost:4242/webhook            # relay + subscription events
+one listen --forward-to http://localhost:4242/webhook --source relay --events customer.created
+\`\`\`
+Events arrive with their original raw body + headers (signature intact). Best-effort only — a dev tool, not a production consumer.
+
 ### 4. Memory + Sync — Unified store with hybrid FTS + semantic search
 One ships a local memory store (a real Postgres process bootstrapped on demand via the bundled \`embedded-postgres\` plugin, with a \`postgres\` plugin for remote/self-hosted) that backs both user-authored notes (\`one mem add\`) and synced platform data (\`one sync run\`). Auto-initializes on first use — no separate install step. Run \`one guide memory\` and \`one guide sync\` for the full references.
 
