@@ -231,6 +231,75 @@ describe('PGlite plugin — live integration', () => {
     assert.equal(healed?.archived_reason, null, 'archived_reason must clear on resurrection');
   });
 
+  it('updateKeys replaces the keys column and enforces active uniqueness', async () => {
+    const a = await backend.insert({ type: 'person', data: { name: 'A' }, keys: ['email:a@x.com'] });
+    const b = await backend.insert({ type: 'person', data: { name: 'B' }, keys: ['email:b@x.com'] });
+
+    // Happy path: add a second key to A.
+    const ok = await backend.updateKeys(a.id, ['email:a@x.com', 'phone:+1555']);
+    assert.equal(ok.status, 'ok');
+    assert.deepEqual(
+      new Set((ok as { record: { keys: string[] } }).record.keys),
+      new Set(['email:a@x.com', 'phone:+1555']),
+    );
+
+    // Conflict: try to give A one of B's keys — reports the key + owner.
+    const conflict = await backend.updateKeys(a.id, ['email:b@x.com']);
+    assert.equal(conflict.status, 'conflict');
+    assert.equal((conflict as { key: string }).key, 'email:b@x.com');
+    assert.equal((conflict as { recordId: string }).recordId, b.id);
+
+    // not_found for an unknown id.
+    const missing = await backend.updateKeys('00000000-0000-0000-0000-000000000000', ['email:z@x.com']);
+    assert.equal(missing.status, 'not_found');
+  });
+
+  it('key uniqueness is scoped to active — an archived record frees its key', async () => {
+    const first = await backend.insert({
+      type: 'person', data: { name: 'Squatter' }, keys: ['email:reuse@x.com'],
+    });
+    // While active, a second active record can't claim the key.
+    await assert.rejects(
+      backend.insert({ type: 'person', data: { name: 'Dup' }, keys: ['email:reuse@x.com'] }),
+      /already exist/i,
+    );
+    // Archive the first — its key is now reclaimable.
+    await backend.archive(first.id, 'superseded');
+    const second = await backend.insert({
+      type: 'person', data: { name: 'Reclaimer' }, keys: ['email:reuse@x.com'],
+    });
+    assert.ok(second.id);
+
+    // find-by-source prefers the ACTIVE owner over the archived one.
+    const found = await backend.findBySource('email:reuse@x.com');
+    assert.equal(found?.id, second.id);
+    assert.equal(found?.status, 'active');
+  });
+
+  it('listForSearchableBackfill + updateSearchableText fills NULL rows', async () => {
+    // Insert with an explicit NULL searchable_text (as an SDK/raw write might).
+    const rec = await backend.insert({
+      type: 'backfill-me',
+      data: { name: 'Grace Hopper', title: 'Rear Admiral' },
+      keys: ['email:grace@navy.mil'],
+      searchable_text: null,
+    });
+    const before = await backend.getById(rec.id);
+    assert.equal(before?.searchable_text, null);
+
+    const rows = await backend.listForSearchableBackfill({ type: 'backfill-me', onlyNull: true });
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].id, rec.id);
+
+    await backend.updateSearchableText(rec.id, 'Grace Hopper Rear Admiral');
+    const after = await backend.getById(rec.id);
+    assert.equal(after?.searchable_text, 'Grace Hopper Rear Admiral');
+
+    // Row is no longer returned by the NULL-only scan.
+    const again = await backend.listForSearchableBackfill({ type: 'backfill-me', onlyNull: true });
+    assert.equal(again.length, 0);
+  });
+
   it('sync state round-trips', async () => {
     await backend.setSyncState({
       platform: 'attio',

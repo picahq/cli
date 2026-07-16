@@ -16,6 +16,7 @@ import type {
   UpsertResult,
   UpsertOptions,
   RawSqlResult,
+  KeyUpdateOutcome,
 } from '../../backend.js';
 import { validateReadOnlySql } from './sql-guard.js';
 import type {
@@ -309,6 +310,43 @@ export class CoreBackend implements MemBackend {
     return res.rows[0] ? toRecord(res.rows[0]) : null;
   }
 
+  async updateKeys(id: string, keys: string[]): Promise<KeyUpdateOutcome> {
+    // Conflict-check + write in one transaction so two concurrent key
+    // edits can't both slip past the check and claim the same key. The
+    // key-uniqueness trigger is the ultimate backstop, but doing the
+    // lookup here lets us report WHICH key collided and WHICH record owns
+    // it — the trigger only knows the conflicting record id.
+    return this.client.transaction(async (tx) => {
+      const exists = await tx.query<{ id: string }>(
+        `SELECT id FROM mem_records WHERE id = $1`,
+        [id],
+      );
+      if (!exists.rows[0]) return { status: 'not_found' as const };
+
+      // Scoped to active records — matches mem_enforce_key_uniqueness.
+      // The correlated subquery surfaces the first requested key that
+      // overlaps another active record's keys, so the error can name it.
+      const conflict = await tx.query<{ id: string; type: string; key: string }>(
+        `SELECT r.id, r.type,
+                (SELECT k FROM unnest($2::text[]) AS k WHERE k = ANY(r.keys) LIMIT 1) AS key
+           FROM mem_records r
+          WHERE r.keys && $2::text[] AND r.id != $1 AND r.status = 'active'
+          LIMIT 1`,
+        [id, keys],
+      );
+      const c = conflict.rows[0];
+      if (c) {
+        return { status: 'conflict' as const, key: c.key, recordId: c.id, recordType: c.type };
+      }
+
+      const res = await tx.query<RecordRow>(
+        `UPDATE mem_records SET keys = $2::text[] WHERE id = $1 RETURNING *`,
+        [id, keys.length > 0 ? keys : null],
+      );
+      return { status: 'ok' as const, record: toRecord(res.rows[0]) };
+    });
+  }
+
   async remove(id: string): Promise<boolean> {
     const res = await this.client.query(`DELETE FROM mem_records WHERE id = $1`, [id]);
     return (res.rowCount ?? 0) > 0;
@@ -449,6 +487,76 @@ export class CoreBackend implements MemBackend {
               embedded_at = NOW()
         WHERE id = $1`,
       [id, literal, model],
+    );
+  }
+
+  async listForSearchableBackfill(opts: {
+    type?: string;
+    onlyNull?: boolean;
+    limit?: number;
+    offset?: number;
+  } = {}): Promise<Array<{
+    id: string;
+    type: string;
+    data: Record<string, unknown>;
+    searchable_text: string | null;
+  }>> {
+    const limit = opts.limit ?? 1000;
+    const offset = opts.offset ?? 0;
+    const params: unknown[] = [];
+    const clauses: string[] = [`status = 'active'`];
+
+    if (opts.type) {
+      params.push(opts.type);
+      clauses.push(`type = $${params.length}`);
+    }
+    if (opts.onlyNull) {
+      // NULL *or* empty — an empty string is just as useless to FTS and is
+      // exactly what a bad earlier write left behind.
+      clauses.push(`(searchable_text IS NULL OR searchable_text = '')`);
+    }
+
+    params.push(limit);
+    params.push(offset);
+    // Order by id so paginated runs are stable. Unlike the reindex scan
+    // (whose filter shrinks as it works), a stale-detection pass may leave
+    // rows in place, so the caller pages with a real offset.
+    const res = await this.client.query<{
+      id: string;
+      type: string;
+      data: Record<string, unknown>;
+      searchable_text: string | null;
+    }>(
+      `SELECT id, type, data, searchable_text
+         FROM mem_records
+        WHERE ${clauses.join(' AND ')}
+        ORDER BY id ASC
+        LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      params,
+    );
+    return res.rows;
+  }
+
+  async updateSearchableText(id: string, text: string): Promise<void> {
+    // Clear the embedding bookkeeping too: the stored vector was built
+    // from the OLD searchable_text, so it's now stale. Nulling embedded_at
+    // makes the row eligible for the next `mem reindex` (embedding) pass.
+    // The embedding column only exists when vectorSearch is on.
+    if (this.caps.vectorSearch) {
+      await this.client.query(
+        `UPDATE mem_records
+            SET searchable_text = $2,
+                embedding = NULL,
+                embedded_at = NULL,
+                embedding_model = NULL
+          WHERE id = $1`,
+        [id, text],
+      );
+      return;
+    }
+    await this.client.query(
+      `UPDATE mem_records SET searchable_text = $2 WHERE id = $1`,
+      [id, text],
     );
   }
 

@@ -16,6 +16,7 @@ import {
   memAddCommand,
   memGetCommand,
   memUpdateCommand,
+  memKeyCommand,
   memArchiveCommand,
   memWeightCommand,
   memFlushCommand,
@@ -97,12 +98,14 @@ export function registerMemoryCommands(program: Command): void {
     .action(memVacuumCommand);
 
   mem.command('reindex')
-    .description('Backfill embeddings: re-embed records missing an embedding or under a different model')
+    .description('Backfill embeddings (default) or searchable_text (--searchable)')
     .option('--type <type>', 'Restrict to one record type, e.g. attio/attioPeople')
     .option('--model <name>', 'Override the embedding model')
     .option('--force', 'Re-embed even rows that already have a matching embedding', false)
     .option('--batch <n>', 'OpenAI calls per batch (default 50)', '50')
     .option('--limit <n>', 'Safety cap on total records to scan (default 100000)')
+    .option('--searchable', 'Regenerate searchable_text (NULL or stale vs. data) instead of embeddings', false)
+    .option('--all', 'With --searchable: also rewrite rows whose text is stale, not just NULL', false)
     .action(memReindexCommand);
 
   mem.command('sql <query>')
@@ -125,8 +128,15 @@ export function registerMemoryCommands(program: Command): void {
     .action(memGetCommand);
 
   mem.command('update <id> <patch>')
-    .description('Update a record (patch is JSON merged into data)')
+    .description('Update a record (patch is JSON merged into data; regenerates searchable_text)')
     .action(memUpdateCommand);
+
+  mem.command('key <id>')
+    .description('Manage a record\'s identity keys (unique across active records)')
+    .option('--add <csv>', 'Keys to add (comma-separated, e.g. email:x@y.com)')
+    .option('--remove <csv>', 'Keys to remove (comma-separated)')
+    .option('--set <csv>', 'Replace all keys with this comma-separated list')
+    .action((id: string, flags: { add?: string; remove?: string; set?: string }) => memKeyCommand(id, flags));
 
   mem.command('archive <id>')
     .description('Archive a record')
