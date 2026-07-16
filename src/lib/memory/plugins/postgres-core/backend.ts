@@ -127,6 +127,21 @@ export class CoreBackend implements MemBackend {
 
   async ensureSchema(): Promise<void> {
     const caps = this.caps;
+    // Fast path: if the store already reports the current schema version,
+    // every DDL statement below would be an idempotent no-op — so skip the
+    // whole block (no advisory lock, no CREATE OR REPLACE churn). This is
+    // the hot path taken by essentially every CLI invocation, and it's what
+    // makes concurrent `one mem` processes cheap: with no DDL and no lock
+    // there's nothing left to serialize or deadlock on (the 40P01 the lock
+    // below guards against only arises while DDL actually runs). A version
+    // mismatch (fresh DB, or an upgrade that bumped SCHEMA_VERSION) falls
+    // through to the locked setup exactly once, then this check short-
+    // circuits forever after.
+    try {
+      if ((await this.getSchemaVersion()) === SCHEMA_VERSION) return;
+    } catch {
+      // mem_meta doesn't exist yet (fresh DB) — fall through to full setup.
+    }
     // Apply in logical blocks so a backend without pgvector skips the
     // vector-specific DDL cleanly. The core blocks (tables, indexes,
     // functions) never reference the vector type — the embedding column
