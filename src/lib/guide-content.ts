@@ -482,10 +482,19 @@ one --agent mem add note '{"content":"..."}' --tags work,urgent --weight 8 --key
 # Get (optionally with links)
 one --agent mem get <id> --links
 
-# Update (shallow merge into data)
+# Update (shallow merge into data; regenerates searchable_text from the merged data)
 one --agent mem update <id> '{"status":"done"}'
 
-# Archive / unarchive
+# Manage identity keys AFTER creation (keys are a first-class column, NOT data).
+# Unique across ACTIVE records — a clear error names the record that owns a taken key.
+one --agent mem key <id> --add email:new@x.com
+one --agent mem key <id> --remove email:old@x.com
+one --agent mem key <id> --set 'email:a@x.com,phone:+1555'   # replace all keys
+# NOTE: passing keys to 'mem update' is rejected — keys are not a data field.
+
+# Archive / unarchive. Archiving FREES a record's keys: an archived record no
+# longer blocks a new active record from reusing the same key (uniqueness is
+# scoped to active records).
 one --agent mem archive <id> --reason superseded
 
 # List by type — type is positional. Synced rows are namespaced as <platform>/<model>.
@@ -551,7 +560,11 @@ one --agent mem status          # backend, provider, _upgrade hint
 one --agent mem doctor          # 7-check health report
 one --agent mem vacuum          # backend maintenance (VACUUM ANALYZE)
 one --agent mem reindex         # re-embed records under current model
+one --agent mem reindex --searchable              # backfill searchable_text where NULL
+one --agent mem reindex --searchable --type attio/attioPeople --all   # also rewrite stale text
 \`\`\`
+
+\`mem reindex --searchable\` regenerates \`searchable_text\` from each record's own \`data\` (no embedding provider needed). It fixes rows that landed with NULL searchable_text and, thanks to the cleaned-up text builder, drops UUID/timestamp noise and leads with name/title/email fields so FTS ranks on what humans search. Regenerated rows are re-queued for embedding on the next \`mem reindex\`.
 
 ## Admin
 
