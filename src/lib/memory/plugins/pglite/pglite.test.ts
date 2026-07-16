@@ -33,7 +33,7 @@ describe('PGlite plugin — live integration', () => {
 
   it('reports the schema version after ensureSchema', async () => {
     const v = await backend.getSchemaVersion();
-    assert.equal(v, '2.1.0');
+    assert.equal(v, '2.2.0');
   });
 
   it('advertises capabilities the CoreBackend relies on', () => {

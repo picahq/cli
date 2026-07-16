@@ -592,8 +592,14 @@ export class CoreBackend implements MemBackend {
 
   async findBySource(sourceKey: string): Promise<MemRecord | null> {
     // sourceKey lives in keys[] (indexed GIN), so this is a fast lookup.
+    // Prefer the ACTIVE owner: key uniqueness is scoped to active records
+    // (an archived dupe can legitimately still hold the same key for
+    // provenance), so when both exist the live record is the answer.
     const res = await this.client.query<RecordRow>(
-      `SELECT * FROM mem_records WHERE $1 = ANY(keys) LIMIT 1`,
+      `SELECT * FROM mem_records
+        WHERE $1 = ANY(keys)
+        ORDER BY (status = 'active') DESC, updated_at DESC
+        LIMIT 1`,
       [sourceKey],
     );
     return res.rows[0] ? toRecord(res.rows[0]) : null;
