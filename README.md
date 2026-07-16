@@ -329,8 +329,17 @@ One ships a local memory store (a real Postgres process bootstrapped on demand v
 ```bash
 # User memories — works immediately on a new install
 one mem add note '{"content":"Design review is Thursday"}' --tags work --weight 7
+one mem update <id> '{"status":"done"}'              # merges into data; refreshes searchable_text
 one mem search "design review"                       # hybrid FTS + semantic (if key set)
 one mem list note --limit 20
+
+# Identity keys are a first-class column (unique across ACTIVE records; archiving
+# frees them). Manage them after creation with `mem key` — NOT via `mem update`.
+one mem key <id> --add email:x@y.com                 # also --remove / --set <csv>
+
+# Backfill searchable_text for rows that landed NULL or with UUID-noise-heavy text
+# (drops ids/timestamps, leads with name/title/email). No embedding provider needed.
+one mem reindex --searchable --type attio/attioPeople
 
 # Listing synced platform rows — type is positional and namespaced as <platform>/<model>;
 # there is NO --platform flag and NO platform column in the schema.

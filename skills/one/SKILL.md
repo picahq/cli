@@ -170,9 +170,18 @@ Underneath, the store has no `platform` column — `type` is the only platform-s
 ```bash
 # User memories
 one --agent mem add note '{"content":"..."}' --tags work --weight 7
+one --agent mem update <id> '{"status":"done"}'         # merges into data; refreshes searchable_text
 one --agent mem search "deadline"                       # hybrid if key set, else FTS
 one --agent mem list note --limit 20
 one --agent mem link <from-id> <to-id> relates_to --bi
+
+# Identity keys (first-class column, NOT data). Unique across ACTIVE records;
+# archiving a record frees its keys. `mem update '{"keys":[...]}'` is rejected.
+one --agent mem key <id> --add email:x@y.com            # add/--remove/--set
+one --agent mem find-by-source email:x@y.com            # prefers the active owner
+
+# Backfill searchable_text (no embedding provider needed) — fixes NULL/noisy text
+one --agent mem reindex --searchable --type attio/attioPeople
 
 # Status + diagnostics
 one --agent mem status                                  # backend, provider, _upgrade hint
