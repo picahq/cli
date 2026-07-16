@@ -84,6 +84,17 @@ interface RecordRow {
   updated_at: string;
 }
 
+// Postgres unique_violation (23505). The key-uniqueness trigger raises it
+// with ERRCODE = 'unique_violation'; node-pg surfaces `.code`, and PGlite
+// carries either `.code` or the SQLSTATE/message. Match defensively.
+function isUniqueViolation(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { code?: unknown; message?: unknown };
+  if (e.code === '23505') return true;
+  const msg = typeof e.message === 'string' ? e.message : '';
+  return /23505|unique_violation|Key conflict/i.test(msg);
+}
+
 function toRecord(row: RecordRow): MemRecord {
   return {
     id: row.id,
@@ -294,6 +305,19 @@ export class CoreBackend implements MemBackend {
     const hash = patch.content_hash ?? existing.content_hash ?? null;
     const weight = patch.weight ?? existing.weight;
 
+    // Changing searchable_text invalidates any existing embedding — it was
+    // computed from the OLD text. Plain `mem reindex` only re-embeds rows
+    // missing an embedding or under a wrong model, so without clearing the
+    // bookkeeping here an edited row would serve its pre-edit vector
+    // forever (only `--force` would catch it). Null the embedding columns
+    // in the same UPDATE so the row is re-embedded on the next reindex.
+    // Mirrors updateSearchableText, which does this for the backfill path.
+    const textChanged = searchable !== (existing.searchable_text ?? null);
+    const clearEmbedding = textChanged && this.caps.vectorSearch;
+    const embeddingReset = clearEmbedding
+      ? `, embedding = NULL, embedded_at = NULL, embedding_model = NULL`
+      : '';
+
     const res = await this.client.query<RecordRow>(
       `UPDATE mem_records
          SET data = $2::jsonb,
@@ -302,7 +326,7 @@ export class CoreBackend implements MemBackend {
              sources = $5::jsonb,
              searchable_text = $6,
              content_hash = $7,
-             weight = $8
+             weight = $8${embeddingReset}
        WHERE id = $1
        RETURNING *`,
       [id, JSON.stringify(data), tags, keys, JSON.stringify(sources), searchable, hash, weight],
@@ -316,35 +340,46 @@ export class CoreBackend implements MemBackend {
     // key-uniqueness trigger is the ultimate backstop, but doing the
     // lookup here lets us report WHICH key collided and WHICH record owns
     // it — the trigger only knows the conflicting record id.
-    return this.client.transaction(async (tx) => {
-      const exists = await tx.query<{ id: string }>(
-        `SELECT id FROM mem_records WHERE id = $1`,
-        [id],
-      );
-      if (!exists.rows[0]) return { status: 'not_found' as const };
+    try {
+      return await this.client.transaction(async (tx) => {
+        const exists = await tx.query<{ id: string }>(
+          `SELECT id FROM mem_records WHERE id = $1`,
+          [id],
+        );
+        if (!exists.rows[0]) return { status: 'not_found' as const };
 
-      // Scoped to active records — matches mem_enforce_key_uniqueness.
-      // The correlated subquery surfaces the first requested key that
-      // overlaps another active record's keys, so the error can name it.
-      const conflict = await tx.query<{ id: string; type: string; key: string }>(
-        `SELECT r.id, r.type,
-                (SELECT k FROM unnest($2::text[]) AS k WHERE k = ANY(r.keys) LIMIT 1) AS key
-           FROM mem_records r
-          WHERE r.keys && $2::text[] AND r.id != $1 AND r.status = 'active'
-          LIMIT 1`,
-        [id, keys],
-      );
-      const c = conflict.rows[0];
-      if (c) {
-        return { status: 'conflict' as const, key: c.key, recordId: c.id, recordType: c.type };
+        // Scoped to active records — matches mem_enforce_key_uniqueness.
+        // The correlated subquery surfaces the first requested key that
+        // overlaps another active record's keys, so the error can name it.
+        const conflict = await tx.query<{ id: string; type: string; key: string }>(
+          `SELECT r.id, r.type,
+                  (SELECT k FROM unnest($2::text[]) AS k WHERE k = ANY(r.keys) LIMIT 1) AS key
+             FROM mem_records r
+            WHERE r.keys && $2::text[] AND r.id != $1 AND r.status = 'active'
+            LIMIT 1`,
+          [id, keys],
+        );
+        const c = conflict.rows[0];
+        if (c) {
+          return { status: 'conflict' as const, key: c.key, recordId: c.id, recordType: c.type };
+        }
+
+        const res = await tx.query<RecordRow>(
+          `UPDATE mem_records SET keys = $2::text[] WHERE id = $1 RETURNING *`,
+          [id, keys.length > 0 ? keys : null],
+        );
+        return { status: 'ok' as const, record: toRecord(res.rows[0]) };
+      });
+    } catch (err) {
+      // A concurrent edit could claim one of these keys between our SELECT
+      // and UPDATE; the trigger then throws 23505. Map it back to a
+      // structured conflict (we can't cheaply say which key raced, so
+      // report the first requested one) rather than leaking a raw error.
+      if (isUniqueViolation(err)) {
+        return { status: 'conflict', key: keys[0] ?? '', recordId: 'unknown', recordType: 'unknown' };
       }
-
-      const res = await tx.query<RecordRow>(
-        `UPDATE mem_records SET keys = $2::text[] WHERE id = $1 RETURNING *`,
-        [id, keys.length > 0 ? keys : null],
-      );
-      return { status: 'ok' as const, record: toRecord(res.rows[0]) };
-    });
+      throw err;
+    }
   }
 
   async remove(id: string): Promise<boolean> {
@@ -362,12 +397,38 @@ export class CoreBackend implements MemBackend {
   }
 
   async unarchive(id: string): Promise<boolean> {
-    const res = await this.client.query(
-      `UPDATE mem_records SET status = 'active', archived_reason = NULL
-       WHERE id = $1 AND status = 'archived'`,
-      [id],
-    );
-    return (res.rowCount ?? 0) > 0;
+    // Flipping status back to 'active' re-arms the key-uniqueness trigger.
+    // If this row's key was reclaimed by another active record while it was
+    // archived (the flip side of "archiving frees a key"), the trigger
+    // raises a raw 23505. Translate that into an actionable message naming
+    // the reclaiming record instead of leaking the internal trigger text.
+    try {
+      const res = await this.client.query(
+        `UPDATE mem_records SET status = 'active', archived_reason = NULL
+         WHERE id = $1 AND status = 'archived'`,
+        [id],
+      );
+      return (res.rowCount ?? 0) > 0;
+    } catch (err) {
+      if (!isUniqueViolation(err)) throw err;
+      // Find which key + active record now owns it, for a useful message.
+      const owner = await this.client.query<{ id: string; type: string; key: string }>(
+        `SELECT r.id, r.type,
+                (SELECT k FROM unnest(a.keys) AS k
+                  WHERE k = ANY(r.keys) LIMIT 1) AS key
+           FROM mem_records a
+           JOIN mem_records r
+             ON r.keys && a.keys AND r.id != a.id AND r.status = 'active'
+          WHERE a.id = $1
+          LIMIT 1`,
+        [id],
+      );
+      const o = owner.rows[0];
+      const detail = o
+        ? `key "${o.key}" was reclaimed by active record ${o.id} (type ${o.type}) — re-key it or archive that record first`
+        : `one of its keys was reclaimed by another active record`;
+      throw new Error(`Cannot unarchive ${id}: ${detail}`);
+    }
   }
 
   async list(type: string, opts: ListOptions = {}): Promise<MemRecord[]> {

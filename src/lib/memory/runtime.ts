@@ -139,9 +139,15 @@ export async function addRecord(input: RecordInput, opts: AddOptions = {}): Prom
  * Fixes the stale-searchable_text bug: `backend.update` on its own keeps
  * the old searchable_text, so `mem update` used to leave FTS pointing at
  * pre-edit content (and agent-authored records that were progressively
- * enriched via update never became findable on their new fields). Embedding
- * refresh is intentionally left to `mem reindex` — this only touches the
- * text + hash, which is cheap and needs no API call.
+ * enriched via update never became findable on their new fields).
+ *
+ * Embedding refresh is left to `mem reindex`, but it self-heals: when the
+ * regenerated text differs, `backend.update` nulls the row's embedding
+ * bookkeeping so the next reindex re-embeds it (no expensive API call on
+ * the edit itself). Note this uses `defaultSearchableText` even for synced
+ * types whose profile declares a custom `memory.searchable` block — the
+ * next sync run rewrites it from the profile paths, so it self-heals there
+ * too; interactive edits to synced rows are rare anyway.
  */
 export async function updateRecord(
   id: string,

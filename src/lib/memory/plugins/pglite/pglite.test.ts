@@ -300,6 +300,48 @@ describe('PGlite plugin — live integration', () => {
     assert.equal(again.length, 0);
   });
 
+  it('unarchive surfaces an actionable error when the key was reclaimed', async () => {
+    const a = await backend.insert({
+      type: 'person', data: { name: 'Original' }, keys: ['email:reclaim@x.com'],
+    });
+    await backend.archive(a.id, 'superseded');
+    const b = await backend.insert({
+      type: 'person', data: { name: 'Reclaimer' }, keys: ['email:reclaim@x.com'],
+    });
+
+    // Flipping A back to active would collide with B on the shared key —
+    // must throw a message naming B, not a raw 23505.
+    await assert.rejects(
+      backend.unarchive(a.id),
+      (err: unknown) =>
+        err instanceof Error &&
+        /reclaimed by active record/.test(err.message) &&
+        err.message.includes(b.id),
+    );
+    // A stays archived; B stays active.
+    assert.equal((await backend.getById(a.id))?.status, 'archived');
+    assert.equal((await backend.getById(b.id))?.status, 'active');
+  });
+
+  it('update clears the stale embedding when searchable_text changes', async () => {
+    const rec = await backend.insert({
+      type: 'note', data: { content: 'original' }, searchable_text: 'original',
+    });
+    const vec = new Array(1536).fill(0.01);
+    await backend.updateEmbedding(rec.id, vec, 'openai:test');
+    assert.ok((await backend.getById(rec.id))?.embedded_at, 'precondition: embedded');
+
+    // Text changes → embedding is invalidated so the next reindex re-embeds.
+    const changed = await backend.update(rec.id, { data: { content: 'changed' }, searchable_text: 'changed' });
+    assert.equal(changed?.embedded_at, null, 'embedding must clear when text changes');
+    assert.equal(changed?.embedding_model, null);
+
+    // Metadata-only edit (no text change) → embedding preserved.
+    await backend.updateEmbedding(rec.id, vec, 'openai:test');
+    const weighted = await backend.update(rec.id, { weight: 8 });
+    assert.ok(weighted?.embedded_at, 'embedding preserved when text unchanged');
+  });
+
   it('sync state round-trips', async () => {
     await backend.setSyncState({
       platform: 'attio',
