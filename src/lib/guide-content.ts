@@ -43,7 +43,7 @@ Search for actions, read their docs, and execute them. This is the core workflow
 
 **Quick start:**
 \`\`\`bash
-one --agent connection list                                    # See connected platforms
+one --agent connection list                                    # See connected platforms + your access on each
 one --agent connection delete <connection-key>                 # Remove a connection
 one --agent actions search <platform> "<query>" -t execute     # Find an action
 one --agent actions knowledge <platform> <actionId>            # Read docs (REQUIRED)
@@ -132,6 +132,7 @@ Request specific sections:
 - Always use the **exact action ID** from search results — don't guess
 - Always read **knowledge** before executing any action
 - Connection keys come from \`one connection list\` — don't hardcode them
+- \`connection list\` also reports an \`access\` field per connection (\`full\` / \`methods\` / \`actions\`) — read it before planning so you don't propose an action the access config will reject
 - Skills stay in lockstep with the CLI version automatically — every command checks a \`.one-cli-version\` marker in the canonical skill dir and refreshes the files if the CLI has been upgraded. Check manually with \`one config skills status\`; force a resync with \`one config skills sync\`
 `;
 
@@ -147,7 +148,17 @@ Always follow this sequence. Never skip the knowledge step.
 one --agent connection list
 \`\`\`
 
-Returns platforms, status, connection keys, and tags.
+Returns platforms, status, connection keys, tags, and an \`access\` field per connection describing what the current access config lets you run there:
+
+| \`access\` | Meaning |
+|----------|---------|
+| \`{"policy": "full"}\` | Every action on the connection |
+| \`{"policy": "methods", "methods": ["GET"]}\` | Only actions with these HTTP methods will execute |
+| \`{"policy": "actions", "actions": [{"actionId", "title", "method"}]}\` | Only these exact actions — use them directly, skip \`actions search\` |
+
+Also present when relevant: \`knowledgeOnly: true\` (execution disabled — read knowledge and write code instead), \`unresolvedActionIds\` (allowlisted ids that could not be looked up), and \`accessHint\` (a one-line summary of the restriction).
+
+Read \`access\` before planning — it prevents proposing an action the config will reject. Change it with \`one config\`.
 
 ### 1b. Delete a Connection
 

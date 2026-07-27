@@ -179,7 +179,7 @@ Opens your browser, you authorize, done. The CLI polls until the connection is l
 
 ### `one list`
 
-List your active connections with their status and connection keys.
+List your active connections with their status, connection keys, and what your access config lets you run on each.
 
 ```bash
 one list
@@ -192,6 +192,37 @@ one list
 ```
 
 You need the connection key (rightmost column) when executing actions.
+
+**Access reporting.** Every connection carries an `access` field describing what the current [access control](#one-config) config permits — so an agent knows its reach up front instead of discovering it as a failure mid-workflow. Three policies:
+
+| Policy | Means | Shown when |
+|--------|-------|-----------|
+| `{"policy": "full"}` | Every action on the connection | Default (admin, no action allowlist) |
+| `{"policy": "methods", "methods": ["GET"]}` | Only actions with those HTTP methods | Permission level is `read` or `write` |
+| `{"policy": "actions", "actions": [{"actionId": "...", "title": "...", "method": "..."}]}` | Only these specific actions | An action allowlist is configured |
+
+An action allowlist wins over the permission level (and is then method-filtered by it). When the policy is `actions`, those actions are exactly what may run — no `actions search` needed.
+
+```jsonc
+// one --agent list
+{
+  "total": 2,
+  "showing": 2,
+  "connections": [
+    {
+      "platform": "gmail",
+      "state": "operational",
+      "key": "live::gmail::default::abc123",
+      "access": { "policy": "methods", "methods": ["GET"] }
+    }
+  ],
+  "accessHint": "Permission level \"read\": only GET actions will execute."
+}
+```
+
+`knowledgeOnly: true` appears when knowledge-only mode is on (execution disabled), and `unresolvedActionIds` lists any allowlisted action ids that could not be looked up. In human output, an `Access` column and a summary note appear only when access is actually scoped.
+
+This mirrors the `access` field on the One MCP server's `list_one_integrations` tool, so both surfaces report access the same way.
 
 ### `one connection delete <connection-key>`
 
@@ -575,6 +606,8 @@ one config
 | Knowledge-only mode | Enable/disable execution | Off |
 
 Settings propagate automatically to all installed agent configs.
+
+Run [`one list`](#one-list) to see the effect: each connection reports an `access` field describing exactly what these settings let you run on it.
 
 #### `one config skills status` / `one config skills sync`
 

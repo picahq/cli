@@ -726,7 +726,8 @@ export function replacePathVariables(
 
 import type { PermissionLevel } from './types.js';
 
-const PERMISSION_METHODS: Record<PermissionLevel, string[] | null> = {
+/** `null` means "no method restriction" (admin). */
+export const PERMISSION_METHODS: Record<PermissionLevel, string[] | null> = {
   read: ['GET'],
   write: ['GET', 'POST', 'PUT', 'PATCH'],
   admin: null,
