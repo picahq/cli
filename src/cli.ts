@@ -82,7 +82,7 @@ program
     one whoami                            Show current user, organization, and project
 
   Workflow (use these in order):
-    1. one list                           List your connected platforms and connection keys
+    1. one list                           List connected platforms, keys, and your access on each
     2. one actions search <platform> <q>  Search for actions using natural language
     3. one actions knowledge <plat> <id>  Get full docs for an action (ALWAYS do this before execute)
     4. one actions execute <p> <id> <key> Execute the action
@@ -430,7 +430,7 @@ connection
 connection
   .command('list')
   .alias('ls')
-  .description('List your connections')
+  .description('List your connections and what your access config lets you run on each')
   .option('-s, --search <query>', 'Filter connections by platform name')
   .option('-l, --limit <n>', 'Max connections to return (agent mode default: 20)')
   .action(async (options) => {

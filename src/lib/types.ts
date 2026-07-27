@@ -60,6 +60,37 @@ export interface AccessControlSettings {
   knowledgeAgent?: boolean;
 }
 
+/**
+ * A single action the current access config permits on a connection, resolved
+ * from an allowlisted action id. Same shape as the MCP server's `GrantedAction`.
+ */
+export interface GrantedAction {
+  actionId: string;
+  title: string;
+  method: string;
+}
+
+/**
+ * What the current access config lets you run on one connection, so
+ * `one list` answers "what can I do here" without a search. Same shape as the
+ * MCP server's `ConnectionAccess` (`policy` discriminant):
+ * - `full`: every action on the connection.
+ * - `methods`: only actions whose HTTP method is in the set.
+ * - `actions`: only these specific actions.
+ */
+export type ConnectionAccess =
+  | { policy: 'full' }
+  | { policy: 'methods'; methods: string[] }
+  | { policy: 'actions'; actions: GrantedAction[] };
+
+/**
+ * An allowlisted action id resolved to its metadata, including the platform it
+ * belongs to so it can be bucketed onto the matching connection.
+ */
+export interface ResolvedAllowedAction extends GrantedAction {
+  platform: string;
+}
+
 export interface WhoAmIUser { id: string; name: string; email: string }
 export interface WhoAmIOrg { id: string; name: string }
 export interface WhoAmIProject { id: string; name: string }
@@ -137,6 +168,8 @@ export interface ActionDetails {
   path: string;
   method: string;
   ioSchema?: IoSchema;
+  /** Platform the action belongs to — used to bucket allowlisted actions onto connections. */
+  connectionPlatform?: string;
 }
 
 export interface ActionKnowledgeResponse {
