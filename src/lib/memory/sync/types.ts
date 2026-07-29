@@ -67,13 +67,44 @@ export interface SyncProfile {
   /** Where to send the limit param: "query" (default) or "body" */
   limitLocation?: 'query' | 'body';
   /**
-   * Dot-path to a field that identifies this record across platforms.
-   * The value is extracted, lowercased, and stored as `_identity` on every
-   * record. Use a stable cross-platform identifier like email address.
+   * Dot-path to a field that identifies this record across platforms — i.e.
+   * "this record IS this entity". The value is extracted, lowercased, and
+   * stored as a prefixed entry in the record's `keys[]` array (e.g.
+   * `email:jane@acme.com`). `keys[]` drives upsert-merge and key uniqueness,
+   * so records from Attio / HubSpot / Stripe about the same person collapse
+   * into one memory row. Use a stable cross-platform identifier like an email
+   * address, and make sure the path resolves to exactly ONE value per record —
+   * a path that fans out is ambiguous (which entity is this row?) and is
+   * dropped rather than merged into the wrong entity.
    *
    * Example: "properties.email", "email", "email_addresses[0].email_address"
    */
   identityKey?: string;
+  /**
+   * Cross-platform *participant associations* — "this record INVOLVES these
+   * people" (issue #128). Use for records with N participants: a Gmail
+   * thread's From/To/Cc, calendar attendees, meeting invitees — where a single
+   * `identityKey` can't capture everyone. Each entry's `path` resolves via the
+   * identity-path walker, with `[]` wildcards expanding to ONE key per array
+   * element; each resolved value is lowercased/trimmed (email-prefixed values
+   * get their address extracted out of `"Jane <jane@acme.com>"` headers and
+   * comma-lists) and emitted as `${prefix}:${value}`. `prefix` is normalized
+   * to lowercase and must match `[a-z0-9_]+`; entries with any other prefix
+   * are skipped.
+   *
+   * These values land in the record's separate `identity_keys[]` column
+   * (deduped), NOT in `keys[]`. That separation is the entire reason the field
+   * exists: unlike `identityKey`, association keys never drive upsert-merge or
+   * key uniqueness, so a 30-participant thread stays its own record instead of
+   * collapsing into (or colliding with) 30 contact records. Query them with
+   * `one mem find-by-key email:jane@acme.com`. Combine freely with
+   * `identityKey`.
+   *
+   * Example:
+   *   [{ "prefix": "email", "path": "attendees[].email" },
+   *    { "prefix": "email", "path": "organizer.email" }]
+   */
+  identityKeys?: Array<{ prefix: string; path: string }>;
   /**
    * Dot-path field names to strip from each record before storing.
    * Supports array notation: "messages[].body" strips `body` from each

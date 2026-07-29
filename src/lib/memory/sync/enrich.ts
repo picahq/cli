@@ -4,7 +4,7 @@ import { resolveActionDetails } from '../../action-details.js';
 import { isAgentMode } from '../../output.js';
 import type { EnrichConfig, SyncProfile } from './types.js';
 import type { ActionDetails } from '../../types.js';
-import { writePageToMemory } from './mem-writer.js';
+import { writePageToMemory, resolveEntityIdentity } from './mem-writer.js';
 import type Database from 'better-sqlite3';
 import { transformRecords } from './transform.js';
 import { fireHooks, type ChangeEvent } from './hooks.js';
@@ -146,6 +146,83 @@ export interface EnrichResult {
   rateLimited: number;
   total: number;
   duration: string;
+}
+
+/**
+ * Which of these records has phase 2 ALREADY enriched?
+ *
+ * The exact mirror of the `WHERE "<tsField>" IS NULL` query `enrichPhase`
+ * runs below, and it lives here so the two halves of the `_enriched_at`
+ * contract stay in one file.
+ *
+ * It exists because phase 1's memory write is unconditional — it runs for
+ * every record on every page of every run — while phase 2 never revisits a
+ * row whose timestamp is already stamped. So on run 2 the thin list shape
+ * (`{id, snippet, historyId}` for gmail) would REPLACE the enriched payload
+ * in memory (mem-writer sends `replace: true`), and nothing would ever put
+ * the thread bodies back. Phase 1 asks this question first and then leaves
+ * those records alone; see the call site in runner.ts for the rule.
+ *
+ * Returns STRINGIFIED ids so the caller can compare against whatever its
+ * idField resolved to without caring about SQLite's INTEGER/TEXT affinity.
+ *
+ * Every failure mode degrades to an EMPTY set — i.e. to the historical
+ * "write everything" behaviour — because a wrong answer here loses data in
+ * one direction only: writing when we needn't is a no-op refresh, skipping
+ * when we shouldn't leaves a record missing from memory. Deliberately
+ * empty for: table not created yet (first page of the first run), the
+ * timestamp column not added yet (phase 2 ALTERs it in on demand, so its
+ * absence is the normal never-enriched state), an idField with no matching
+ * SQLite column (a dotted idField — the flat SQLite mirror can't represent
+ * one, so we can't answer and must not guess), and any SQL error at all.
+ */
+export function findEnrichedIds(
+  db: Database.Database,
+  model: string,
+  idField: string,
+  config: EnrichConfig,
+  records: Array<Record<string, unknown>>,
+  tableCreated: boolean,
+): Set<string> {
+  const enriched = new Set<string>();
+  if (!tableCreated || records.length === 0) return enriched;
+
+  const tsField = config.timestampField ?? '_enriched_at';
+  const safeTable = model.replace(/[^a-zA-Z0-9_]/g, '_');
+  const safeIdField = idField.replace(/"/g, '""');
+  const safeTsField = tsField.replace(/"/g, '""');
+
+  try {
+    const cols = (db.prepare(`PRAGMA table_info("${safeTable}")`).all() as Array<{ name: string }>)
+      .map(c => c.name);
+    if (!cols.includes(tsField) || !cols.includes(idField)) return enriched;
+
+    // `records` uses the flat top-level key, matching how `upsertRecords` and
+    // `classifyRecords` address the SQLite mirror's id column.
+    const ids = records
+      .map(r => r[idField])
+      .filter((id): id is string | number => typeof id === 'string' || typeof id === 'number');
+    if (ids.length === 0) return enriched;
+
+    // Chunk the IN clause to stay under SQLite's variable limit, same as
+    // classifyRecords.
+    const CHUNK = 500;
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const chunk = ids.slice(i, i + CHUNK);
+      const placeholders = chunk.map(() => '?').join(',');
+      const rows = db.prepare(
+        `SELECT "${safeIdField}" AS id FROM "${safeTable}" ` +
+        `WHERE "${safeTsField}" IS NOT NULL AND "${safeIdField}" IN (${placeholders})`
+      ).all(...chunk) as Array<{ id: string | number }>;
+      for (const row of rows) enriched.add(String(row.id));
+    }
+  } catch {
+    // Corrupt mirror, renamed column, whatever — never crash a sync over an
+    // optimisation. Fall back to writing every record, as we always did.
+    return new Set();
+  }
+
+  return enriched;
 }
 
 /**
@@ -327,9 +404,13 @@ export async function enrichPhase(
         stripExcludedFields(merged, ctx.exclude);
       }
       if (ctx.identityKey) {
-        const raw = getByDotPath(merged, ctx.identityKey);
-        if (raw !== null && raw !== undefined) {
-          merged._identity = String(raw).toLowerCase().trim();
+        // Same resolver the sync runner and the memory writer use — enrichment
+        // recomputes `_identity` from the merged record, and if it normalized
+        // differently from the list phase the row's identity would flip on
+        // every enrich pass.
+        const identity = resolveEntityIdentity(merged, ctx.identityKey);
+        if (identity?.value) {
+          merged._identity = identity.value;
         }
       }
 

@@ -32,6 +32,8 @@ export interface MemRecord {
   data: Record<string, unknown>;
   tags?: string[];
   keys?: string[];
+  /** Cross-platform identity associations (#128) — see RecordInput.identity_keys. */
+  identity_keys?: string[];
   sources: SourcesMap;
 
   searchable_text?: string | null;
@@ -98,6 +100,24 @@ export interface RecordInput {
   data: Record<string, unknown>;
   tags?: string[];
   keys?: string[];
+  /**
+   * Cross-platform identity associations (#128) — e.g. `email:jane@acme.com`
+   * for each participant. Stored in the separate `identity_keys[]` column,
+   * which (unlike `keys[]`) does NOT drive upsert-merge or key uniqueness, so a
+   * record can carry many without collapsing into other records.
+   *
+   * THREE-STATE on upsert, and the distinction is load-bearing:
+   *   - `undefined` → "no opinion": keep whatever is already stored.
+   *   - `[]`        → "I authoritatively resolved zero": clear the column.
+   *   - non-empty   → replace (under `replace: true`) / union (under `false`).
+   * A caller that cannot see the fields the keys come from — e.g. a sync
+   * profile's list phase, before enrichment has fetched the participant
+   * headers — MUST send `undefined`, not `[]`, or every re-sync erases the
+   * associations a later phase resolved. Backends must therefore preserve the
+   * empty-array-vs-null difference all the way into SQL rather than
+   * normalizing `[]` to NULL.
+   */
+  identity_keys?: string[];
   sources?: SourcesMap;
   searchable_text?: string | null;
   content_hash?: string | null;

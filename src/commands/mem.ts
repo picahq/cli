@@ -28,6 +28,7 @@ import {
   memLinkedCommand,
   memSourcesCommand,
   memFindBySourceCommand,
+  memFindByKeyCommand,
 } from './mem/records.js';
 import { memDoctorCommand } from './mem/doctor.js';
 import { memExportCommand, memImportCommand } from './mem/export.js';
@@ -116,7 +117,7 @@ export function registerMemoryCommands(program: Command): void {
   mem.command('add <type> <data>')
     .description('Add a new memory record (data is JSON)')
     .option('--tags <csv>', 'Comma-separated tags')
-    .option('--keys <csv>', 'Comma-separated keys (prefixed, e.g. email:x@y.com)')
+    .option('--keys <csv>', 'Comma-separated merge keys (`keys[]`, prefixed, e.g. email:x@y.com — unique across active records)')
     .option('--weight <n>', 'Importance 1-10 (default 5)')
     .option('--embed', 'Force embedding for this record')
     .option('--no-embed', 'Skip embedding for this record')
@@ -131,11 +132,15 @@ export function registerMemoryCommands(program: Command): void {
     .description('Update a record (patch is JSON merged into data; regenerates searchable_text)')
     .action(memUpdateCommand);
 
+  // "identity keys" now means the non-merging `identity_keys[]` column (#128),
+  // so this command — which writes `keys[]` — must not claim that phrase. An
+  // agent told these were "identity keys" would attach a participant here and
+  // either hit the 23505 uniqueness trigger or merge the record away.
   mem.command('key <id>')
-    .description('Manage a record\'s identity keys (unique across active records)')
-    .option('--add <csv>', 'Keys to add (comma-separated, e.g. email:x@y.com)')
-    .option('--remove <csv>', 'Keys to remove (comma-separated)')
-    .option('--set <csv>', 'Replace all keys with this comma-separated list')
+    .description('Manage a record\'s merge keys (`keys[]` — unique across active records; these drive upsert-merge). Not participant associations — those live in `identity_keys[]`, written by a sync profile\'s `identityKeys`.')
+    .option('--add <csv>', 'Merge keys to add (comma-separated, e.g. email:x@y.com)')
+    .option('--remove <csv>', 'Merge keys to remove (comma-separated)')
+    .option('--set <csv>', 'Replace all merge keys with this comma-separated list')
     .action((id: string, flags: { add?: string; remove?: string; set?: string }) => memKeyCommand(id, flags));
 
   mem.command('archive <id>')
@@ -199,6 +204,13 @@ export function registerMemoryCommands(program: Command): void {
   mem.command('find-by-source <sourceKey>')
     .description('Look up the record owning "<system>/<model>:<external_id>"')
     .action(memFindBySourceCommand);
+
+  mem.command('find-by-key <key> [secondKey]')
+    .description('Records carrying a key (e.g. email:jane@acme.com) in either `keys[]` or `identity_keys[]`, grouped by type. Two keys = intersection. Keys are matched case-insensitively.')
+    .option('--type <type>', 'Only this record type (e.g. gmail/gmailThreads) — also the way past the 2000-match fetch cap')
+    .option('--limit <n>', 'Max records shown per type (default 10)')
+    .action((key: string, secondKey: string | undefined, flags: { type?: string; limit?: string }) =>
+      memFindByKeyCommand(key, secondKey, flags));
 
   // Sync subverb: mounted as a full alias of `one sync`. Same handlers, same
   // options — only the command path differs. Keeps `one mem sync` feeling

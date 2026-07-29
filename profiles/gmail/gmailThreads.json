@@ -15,6 +15,11 @@
   "defaultLimit": 100,
   "pathVars": { "userId": "me" },
   "queryParams": { "q": "category:primary" },
+  "identityKeys": [
+    { "prefix": "email", "path": "messages[].payload.headers[name=From].value" },
+    { "prefix": "email", "path": "messages[].payload.headers[name=To].value" },
+    { "prefix": "email", "path": "messages[].payload.headers[name=Cc].value" }
+  ],
   "enrich": {
     "actionId": "conn_mod_def::GJ3ok0Eq0R8::AAzgZVLqTg2iBuITKpJLZg",
     "pathVars": { "userId": "me", "id": "{id}" },

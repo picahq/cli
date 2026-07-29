@@ -17,6 +17,10 @@
   "queryParams": {
     "include_action_items": "true"
   },
+  "identityKeys": [
+    { "prefix": "email", "path": "recorded_by.email" },
+    { "prefix": "email", "path": "calendar_invitees[].email" }
+  ],
   "enrich": {
     "actionId": "conn_mod_def::GIpBYFV5Mog::G6aag6ykQ-uD6XCeUUnq7Q",
     "pathVars": {

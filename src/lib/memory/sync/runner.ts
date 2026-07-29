@@ -9,8 +9,8 @@ import { getModelState, updateModelState } from './state.js';
 import { openDatabase, ensureTable, rebuildFtsIndex, evolveSchema, upsertRecords, tableExists, countRecords, deleteRecords, sanitizeTableName } from './db.js';
 import { acquireSyncLock } from './lock.js';
 import { classifyRecords, fireHooks, type ChangeEvent } from './hooks.js';
-import { writePageToMemory } from './mem-writer.js';
-import { enrichPhase, type EnrichResult } from './enrich.js';
+import { writePageToMemory, resolveEntityIdentity } from './mem-writer.js';
+import { enrichPhase, findEnrichedIds, type EnrichResult } from './enrich.js';
 import { transformRecords } from './transform.js';
 import { extractRecords } from './extract.js';
 import { resolveProfileConnectionKey } from './profile.js';
@@ -245,6 +245,11 @@ export async function syncModel(
   let enrichedTotal = 0;
   let enrichSkipped = 0;
   let enrichRateLimited = 0;
+  // Records whose memory row phase 1 left alone because phase 2 had already
+  // enriched them. Diagnostic only — reported on stderr so a user watching a
+  // steady-state gmail sync can see that "0 written to memory" is the healthy
+  // outcome, not a silent failure.
+  let memPreserved = 0;
 
   try {
     if (needsSqlite) db = await openDatabase(platform);
@@ -468,12 +473,16 @@ export async function syncModel(
         }
       }
 
-      // Extract cross-platform identity key if configured
+      // Extract cross-platform identity key if configured. Shares
+      // `resolveEntityIdentity` with the memory writer so the legacy SQLite
+      // `_identity` column holds the exact same normalized value that lands in
+      // the memory row's `keys[]` — the two used to be computed independently
+      // and drifted apart on any value that needed email extraction.
       if (profile.identityKey) {
         for (const record of records as Record<string, unknown>[]) {
-          const raw = getByDotPath(record, profile.identityKey);
-          if (raw !== null && raw !== undefined) {
-            (record as Record<string, unknown>)._identity = String(raw).toLowerCase().trim();
+          const identity = resolveEntityIdentity(record, profile.identityKey);
+          if (identity?.value) {
+            (record as Record<string, unknown>)._identity = identity.value;
           }
         }
       }
@@ -510,9 +519,32 @@ export async function syncModel(
 
       // Primary write: unified memory store. Every sync lands here.
       // Behavior controlled by options.toMemory (--no-memory flips it off).
-      let pageReport: { inserted: number; updated: number; skipped: number } | null = null;
+      let pageReport: { inserted: number; updated: number; skipped: number; preserved: number } | null = null;
       if (options.toMemory !== false) {
         try {
+          // Which of this page's records has phase 2 already enriched?
+          //
+          // Whenever `enrich` is configured we hold the SQLite mirror (see
+          // `needsSqlite` above) and that mirror carries `_enriched_at` per
+          // row — so phase 1 can know, BEFORE it writes, which records phase 2
+          // will consequently NOT revisit. The write below then preserves them
+          // instead of overwriting the enriched payload with the list shape
+          // (mem-writer.ts spells out why that overwrite is unrecoverable).
+          //
+          // The answer is stable for the whole run: nothing stamps
+          // `_enriched_at` until phase 2, which starts only after this
+          // pagination loop has finished. So a row reads as enriched here iff
+          // a PREVIOUS run enriched it — exactly the population phase 2 is
+          // about to pass over. Same SQLite-lookup-before-write shape that
+          // hooks already use for `classifyRecords` above.
+          const alreadyEnrichedIds =
+            profile.enrich && db
+              ? findEnrichedIds(
+                  db, model, profile.idField, profile.enrich,
+                  records as Record<string, unknown>[], tableCreated,
+                )
+              : undefined;
+
           const report = await writePageToMemory(
             profile,
             records as Record<string, unknown>[],
@@ -522,9 +554,11 @@ export async function syncModel(
               // per-run override so you can backfill embeddings on a
               // first-synced-without-embed platform in one shot.
               embedOverride: options.embed,
+              alreadyEnrichedIds,
             },
           );
           pageReport = report;
+          memPreserved += report.preserved;
           for (const key of report.sourceKeysSeen) seenSourceKeys.add(key);
           if (hasHooks && !db) {
             inserts = report.inserts;
@@ -727,6 +761,12 @@ export async function syncModel(
     if (!isAgentMode() && pagesProcessed > 0) {
       process.stderr.write(`Syncing ${platform}/${model}... page ${pagesProcessed} (${totalRecords} records) done\n`);
     }
+    if (!isAgentMode() && memPreserved > 0) {
+      process.stderr.write(
+        `  Kept ${memPreserved} already-enriched record(s) in memory ` +
+        `(the list shape would have replaced the enriched payload).\n`
+      );
+    }
 
     // Phase 2: Enrich unenriched rows (runs after list sync completes).
     // Queries _enriched_at IS NULL so it's inherently resumable — if the
@@ -827,7 +867,14 @@ export async function syncModel(
       ...(reconcileSkipped ? { reconcileSkipped } : {}),
       ...(statusCounts ? { statusCounts } : {}),
       ...(hasHooks ? { hooksInserted, hooksUpdated } : {}),
-      ...(profile.enrich ? { enriched: enrichedTotal, enrichSkipped, enrichRateLimited } : {}),
+      // `memPreserved` counts already-enriched rows this run wrote
+      // non-authoritatively (enriched payload kept, list fields refreshed).
+      // Reported to agents too — the human path only gets a stderr line, and
+      // an agent seeing `recordsSynced: 200, enriched: 0` otherwise has no way
+      // to tell "nothing needed enriching" from "enrich is broken".
+      ...(profile.enrich
+        ? { enriched: enrichedTotal, enrichSkipped, enrichRateLimited, ...(memPreserved > 0 ? { memPreserved } : {}) }
+        : {}),
     };
 
   } catch (err) {
