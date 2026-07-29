@@ -155,6 +155,7 @@ class LazyPostgresBackend implements MemBackend {
   async addSource(...a: Parameters<MemBackend['addSource']>): ReturnType<MemBackend['addSource']> { return (await this.ensure()).addSource(...a); }
   async removeSource(...a: Parameters<MemBackend['removeSource']>): ReturnType<MemBackend['removeSource']> { return (await this.ensure()).removeSource(...a); }
   async findBySource(...a: Parameters<MemBackend['findBySource']>): ReturnType<MemBackend['findBySource']> { return (await this.ensure()).findBySource(...a); }
+  async findByKeys(...a: Parameters<MemBackend['findByKeys']>): ReturnType<MemBackend['findByKeys']> { return (await this.ensure()).findByKeys(...a); }
   async listSources(...a: Parameters<MemBackend['listSources']>): ReturnType<MemBackend['listSources']> { return (await this.ensure()).listSources(...a); }
 
   async getSyncState(...a: Parameters<MemBackend['getSyncState']>): ReturnType<MemBackend['getSyncState']> { return (await this.ensure()).getSyncState(...a); }

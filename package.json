@@ -1,6 +1,6 @@
 {
   "name": "@withone/cli",
-  "version": "1.50.0",
+  "version": "1.51.0",
   "description": "CLI for managing One",
   "type": "module",
   "files": [
@@ -44,6 +44,7 @@
     "@types/node": "^22.13.1",
     "@types/pg": "^8.20.0",
     "tsup": "^8.3.6",
+    "tsx": "^4.23.1",
     "typescript": "^5.7.3"
   },
   "repository": {

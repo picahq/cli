@@ -6,6 +6,7 @@ import { getNextPageParams } from './pagination.js';
 import type { SyncProfile } from './types.js';
 import { extractRecords, isRootPath } from './extract.js';
 import { resolveProfileConnectionKey } from './profile.js';
+import { collectIdentityKeys, resolveEntityIdentity } from './mem-writer.js';
 
 export interface SyncTestCheck {
   name: string;
@@ -30,10 +31,85 @@ export interface SyncTestReport {
   paginationPreview?: Record<string, unknown>;
   /** Fields that sync test auto-fixed from the real response (e.g. resultsPath). */
   autoFixed?: Record<string, string>;
+  /**
+   * Resolved cross-platform identity keys across the sampled records (#128):
+   * how many keys each sampled record produced, and a few example values. Only
+   * present when the profile declares `identityKey` and/or `identityKeys`.
+   */
+  identityKeysPreview?: {
+    perRecord: number[];
+    sampleKeys: string[];
+    /**
+     * Sample values where the SINGULAR `identityKey` resolved to more than one
+     * candidate. Such a record gets NO entity key at all — a singular key means
+     * "this record IS this entity", so a fan-out has no safe answer (picking
+     * the first would merge two different people's records together). Surfaced
+     * here because the alternative is a profile that silently stops merging.
+     */
+    entityFanOut?: { count: number; sampleValues: string[] };
+    /**
+     * True when the profile enriches and its participant paths therefore
+     * cannot resolve on list-shape samples. Distinguishes "your paths are
+     * wrong" from "these resolve one phase later".
+     */
+    resolvesAfterEnrich?: boolean;
+  };
 }
 
 /** How many records --show-searchable averages over when reporting hit rates. */
 export const SEARCHABLE_SAMPLE_SIZE = 5;
+
+/**
+ * Preview the cross-platform identity keys (#128) a profile resolves, so an
+ * author can see what a real sync would write without running one. Returns
+ * undefined when the profile declares no identity config at all.
+ *
+ * Beyond the counts, this surfaces the two ways the resolution can look wrong
+ * to a human but be correct (or vice versa):
+ *   - `entityFanOut` — a SINGULAR `identityKey` that resolved to several
+ *     candidates. Those records get NO merge key, because "this record IS this
+ *     entity" has no safe answer when the path yields two entities. Silent
+ *     otherwise: the profile syncs fine and just stops merging forever.
+ *   - `resolvesAfterEnrich` — the profile enriches, so its participant paths
+ *     read fields absent from these list-shape samples. Zero keys here is
+ *     expected, and telling the author to "check the paths" would be wrong.
+ *
+ * Exported (rather than inlined into testSyncProfile) so both branches can be
+ * tested without standing up an API client.
+ */
+export function buildIdentityKeysPreview(
+  samples: Record<string, unknown>[],
+  profile: Pick<SyncProfile, 'identityKey' | 'identityKeys' | 'enrich'>,
+): SyncTestReport['identityKeysPreview'] {
+  if (!profile.identityKey && !(profile.identityKeys && profile.identityKeys.length > 0)) return undefined;
+
+  const perRecord: number[] = [];
+  const sampleKeys = new Set<string>();
+  const fanOutValues = new Set<string>();
+  let fanOutCount = 0;
+
+  for (const rec of samples) {
+    const keys = collectIdentityKeys(rec, profile);
+    perRecord.push(keys.length);
+    for (const k of keys) {
+      if (sampleKeys.size < 8) sampleKeys.add(k);
+    }
+    const identity = resolveEntityIdentity(rec, profile.identityKey);
+    if (identity && identity.values.length > 1) {
+      fanOutCount++;
+      for (const v of identity.values) {
+        if (fanOutValues.size < 4) fanOutValues.add(`${identity.prefix}:${v}`);
+      }
+    }
+  }
+
+  return {
+    perRecord,
+    sampleKeys: [...sampleKeys],
+    ...(fanOutCount > 0 ? { entityFanOut: { count: fanOutCount, sampleValues: [...fanOutValues] } } : {}),
+    ...(profile.enrich && (profile.identityKeys?.length ?? 0) > 0 ? { resolvesAfterEnrich: true } : {}),
+  };
+}
 
 function detectColumnType(value: unknown): string {
   if (value === null || value === undefined) return 'TEXT';
@@ -319,6 +395,9 @@ export async function testSyncProfile(api: OneApi, profile: SyncProfile): Promis
   }));
   report.sample = first;
   report.samples = (records as Record<string, unknown>[]).slice(0, SEARCHABLE_SAMPLE_SIZE);
+
+  report.identityKeysPreview = buildIdentityKeysPreview(report.samples, profile);
+
   report.ok = checks.every(c => c.ok);
 
   return report;

@@ -13,5 +13,9 @@
   },
   "pathVars": { "calendarId": "primary" },
   "defaultLimit": 250,
-  "limitParam": "maxResults"
+  "limitParam": "maxResults",
+  "identityKeys": [
+    { "prefix": "email", "path": "organizer.email" },
+    { "prefix": "email", "path": "attendees[].email" }
+  ]
 }

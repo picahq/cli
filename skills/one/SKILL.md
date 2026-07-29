@@ -189,10 +189,17 @@ one --agent mem search "deadline"                       # hybrid if key set, els
 one --agent mem list note --limit 20
 one --agent mem link <from-id> <to-id> relates_to --bi
 
-# Identity keys (first-class column, NOT data). Unique across ACTIVE records;
-# archiving a record frees its keys. `mem update '{"keys":[...]}'` is rejected.
-one --agent mem key <id> --add email:x@y.com            # add/--remove/--set
-one --agent mem find-by-source email:x@y.com            # prefers the active owner
+# Merge keys — the `keys[]` column (first-class, NOT data). Unique across ACTIVE
+# records; archiving a record frees its keys. `mem update '{"keys":[...]}'` is rejected.
+one --agent mem key <id> --add email:x@y.com            # add/--remove/--set — EDITS keys[]
+one --agent mem find-by-source attio/attioPeople:abc-1  # ONE record (prefers the active owner)
+
+# Identity keys — cross-platform lookup. READ-ONLY query, does not edit anything.
+# Spans BOTH `keys[]` (record IS the entity) and `identity_keys[]` (record INVOLVES
+# the entity: Gmail thread From/To/Cc, calendar attendees — never merges).
+one --agent mem find-by-key email:jane@acme.com                # every record involving this person
+one --agent mem find-by-key email:jane@acme.com --type gmail/gmailThreads
+one --agent mem find-by-key email:a@x.com email:b@y.com        # intersection — records with BOTH
 
 # Backfill searchable_text (no embedding provider needed) — fixes NULL/noisy text
 one --agent mem reindex --searchable --type attio/attioPeople
@@ -201,6 +208,33 @@ one --agent mem reindex --searchable --type attio/attioPeople
 one --agent mem status                                  # backend, provider, _upgrade hint
 one --agent mem doctor                                  # full health report
 ```
+
+**Don't confuse `mem key` with `mem find-by-key`.** `mem key` WRITES the merge column (`keys[]`) on one record — adding a key another active record already owns is an error, and `--set` replaces the whole array. `mem find-by-key` only READS, across both key columns. If you want "show me everything about this person", you always want `find-by-key`.
+
+`find-by-key` agent output is grouped by record type:
+
+```json
+{
+  "keys": ["email:jane@acme.com"],
+  "total": 13,
+  "truncated": false,
+  "fetchCap": 2000,
+  "perTypeLimit": 10,
+  "byType": {
+    "attio/attioPeople": { "count": 1,  "items": [ {"id": "...", "type": "...", "data": {}, "keys": ["attio/attioPeople:J1", "email:jane@acme.com"], "updated_at": "..."} ] },
+    "gmail/gmailThreads": { "count": 12, "items": [] }
+  }
+}
+```
+
+`items` are whole mem records. `keys` and `identity_keys` are OMITTED, not `[]`, when the record has none — the contact above matched on `keys[]` and so carries no `identity_keys` field at all. Always read them as `(item.identity_keys ?? [])`.
+
+Read it in this order:
+
+1. **`truncated`** — if `true`, more than `fetchCap` (2000) records matched. `total` and every `count` are then floors, and because rows come back ordered by type, whole types sorting after the cut are MISSING from `byType` entirely. Re-run with `--type <type>` to get an accurate answer; do not report the counts as-is.
+2. **`total` / `count`** — ungrouped and per-type match counts (accurate when `truncated` is `false`).
+3. **`items`** — whole mem records, same fields as `mem get`, capped at `perTypeLimit` (`--limit`, default 10). `count > items.length` just means display truncation — raise `--limit`.
+4. **`keys`** — the key form that actually matched. Lookups are lowercased/trimmed first (matching how sync writes them), with a one-shot verbatim retry for hand-written mixed-case keys, so `email:Jane@Acme.com` finds `email:jane@acme.com`.
 
 ### Adding OpenAI for semantic search
 
@@ -277,7 +311,16 @@ Without declared paths, the default walker concatenates every string in the reco
 
 **Connections are late-bound** — profiles use `"connection": { "platform": "<name>" }`, not literal `connectionKey` strings. The key is resolved at sync time, so `one add <platform>` (re-auth) doesn't break the profile. For multi-account platforms, add `"tag": "<connection-tag>"` to disambiguate, and create the tagged connection with `one add <platform> --tag <name>`. Don't hardcode connection keys in profiles.
 
-**Advanced features** (enrich, transform, exclude, identityKey, hooks, --full-refresh, alternative backends, embedding tuning): run `one guide memory` or `one guide sync` for the full reference.
+**Cross-platform identity on a profile.** Two separate fields, and picking the wrong one silently mangles data:
+
+- `"identityKey": "properties.email"` — singular. "This record IS this entity." One dot-path; the value lands in `keys[]` and MERGES records for the same entity across platforms (HubSpot + Attio for one person collapse into a single record).
+- `"identityKeys": [{"prefix": "email", "path": "attendees[].email"}]` — plural. "This record INVOLVES these people." Paths support `[]` wildcards and a `[name=From]` equality filter (Gmail headers). Values land in the separate `identity_keys[]` column, which does NOT merge — a 20-attendee event stays one event, not 20 contacts. Use this for anything with N participants.
+
+Both are queryable with `one --agent mem find-by-key <prefix>:<value>`.
+
+**Enriching profiles** (`gmail/gmailThreads`, `fathom/meetings`) sync in two phases: a list pass, then a detail pass that fetches full bodies/transcripts. Two things follow. Enrichment happens **once per record** — phase 2 only visits rows it has never enriched, and `--full-refresh` does *not* reset that, so re-running a sync will not refresh detail content (delete `.one/sync/data/<platform>.db` to force it). And the list pass never overwrites an enriched record: `data` merges rather than replaces, and `searchable_text` / `identity_keys[]` are left alone. `sync run` reports these as `memPreserved`. So on an enriching profile, a record whose upstream *detail* changed will look stale until the mirror is cleared — that is expected, not a sync failure.
+
+**Advanced features** (enrich, transform, exclude, hooks, --full-refresh, alternative backends, embedding tuning): run `one guide memory` or `one guide sync` for the full reference.
 
 ## Beyond Single Actions
 

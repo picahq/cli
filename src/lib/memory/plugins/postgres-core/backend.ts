@@ -69,6 +69,7 @@ interface RecordRow {
   data: Record<string, unknown>;
   tags: string[] | null;
   keys: string[] | null;
+  identity_keys: string[] | null;
   sources: SourcesMap;
   searchable_text: string | null;
   embedding: unknown;
@@ -102,6 +103,7 @@ function toRecord(row: RecordRow): MemRecord {
     data: row.data,
     tags: row.tags ?? undefined,
     keys: row.keys ?? undefined,
+    identity_keys: row.identity_keys ?? undefined,
     sources: row.sources ?? {},
     searchable_text: row.searchable_text,
     embedded_at: row.embedded_at,
@@ -149,8 +151,34 @@ export class CoreBackend implements MemBackend {
     // mismatch (fresh DB, or an upgrade that bumped SCHEMA_VERSION) falls
     // through to the locked setup exactly once, then this check short-
     // circuits forever after.
+    //
+    // But the version stamp alone is not trustworthy enough to gate DDL on:
+    // it's a hand-maintained literal, so a PR that forgets to bump it — or
+    // two PRs that independently pick the same number, which is exactly what
+    // happened with 2.2.0 (see schema.ts) — makes every already-stamped store
+    // skip the new DDL forever and fail at query time instead. So the fast
+    // path also requires the schema to actually LOOK current, using the
+    // newest additive column as a sentinel — repoint the sentinel at the new
+    // column whenever another additive migration lands in TABLES_SQL. Still
+    // one query, not two: the version and the sentinel probe are fetched
+    // together, so the hot path costs no more than it did before.
+    //
+    // pg_attribute + to_regclass rather than information_schema.columns
+    // because it resolves through search_path exactly like the unqualified
+    // `mem_records` every other statement here uses, and it's a catalog
+    // lookup rather than a view over several joins.
     try {
-      if ((await this.getSchemaVersion()) === SCHEMA_VERSION) return;
+      const probe = await this.client.query<{ version: string | null; has_sentinel: boolean }>(
+        `SELECT (SELECT value FROM mem_meta WHERE key = 'version') AS version,
+                EXISTS (
+                  SELECT 1 FROM pg_attribute
+                   WHERE attrelid = to_regclass('mem_records')
+                     AND attname = 'identity_keys'
+                     AND NOT attisdropped
+                ) AS has_sentinel`,
+      );
+      const probed = probe.rows[0];
+      if (probed?.version === SCHEMA_VERSION && probed.has_sentinel) return;
     } catch {
       // mem_meta doesn't exist yet (fresh DB) — fall through to full setup.
     }
@@ -211,14 +239,14 @@ export class CoreBackend implements MemBackend {
     const embedding = vectorLiteral(row.embedding ?? null);
     const sql = this.caps.vectorSearch
       ? `INSERT INTO mem_records
-          (type, data, tags, keys, sources, searchable_text, content_hash, weight,
+          (type, data, tags, keys, identity_keys, sources, searchable_text, content_hash, weight,
            embedding, embedded_at, embedding_model)
-         VALUES ($1, $2::jsonb, $3::text[], $4::text[], $5::jsonb, $6, $7, $8,
-                 $9::vector, CASE WHEN $9 IS NOT NULL THEN NOW() ELSE NULL END, $10)
+         VALUES ($1, $2::jsonb, $3::text[], $4::text[], $5::text[], $6::jsonb, $7, $8, $9,
+                 $10::vector, CASE WHEN $10 IS NOT NULL THEN NOW() ELSE NULL END, $11)
          RETURNING *`
       : `INSERT INTO mem_records
-          (type, data, tags, keys, sources, searchable_text, content_hash, weight)
-         VALUES ($1, $2::jsonb, $3::text[], $4::text[], $5::jsonb, $6, $7, $8)
+          (type, data, tags, keys, identity_keys, sources, searchable_text, content_hash, weight)
+         VALUES ($1, $2::jsonb, $3::text[], $4::text[], $5::text[], $6::jsonb, $7, $8, $9)
          RETURNING *`;
     const params = this.caps.vectorSearch
       ? [
@@ -226,6 +254,7 @@ export class CoreBackend implements MemBackend {
           JSON.stringify(row.data),
           row.tags ?? null,
           row.keys ?? null,
+          row.identity_keys ?? null,
           JSON.stringify(row.sources ?? {}),
           row.searchable_text ?? null,
           row.content_hash ?? null,
@@ -238,6 +267,7 @@ export class CoreBackend implements MemBackend {
           JSON.stringify(row.data),
           row.tags ?? null,
           row.keys ?? null,
+          row.identity_keys ?? null,
           JSON.stringify(row.sources ?? {}),
           row.searchable_text ?? null,
           row.content_hash ?? null,
@@ -254,7 +284,7 @@ export class CoreBackend implements MemBackend {
     const res = await this.client.query<{ id: string; action: 'inserted' | 'updated' }>(
       `SELECT id, action FROM mem_upsert_by_keys(
           $1::text, $2::jsonb, $3::text[], $4::text[], $5::jsonb, $6::text, $7::text,
-          $8::integer, $9::text, $10::text, $11::boolean
+          $8::integer, $9::text, $10::text, $11::boolean, $12::text[]
        )`,
       [
         row.type,
@@ -268,6 +298,7 @@ export class CoreBackend implements MemBackend {
         embedding,
         embeddingModel,
         opts.replace ?? false,
+        row.identity_keys ?? null,
       ],
     );
     const { id, action } = res.rows[0];
@@ -787,6 +818,56 @@ export class CoreBackend implements MemBackend {
       [sourceKey],
     );
     return res.rows[0] ? toRecord(res.rows[0]) : null;
+  }
+
+  async findByKeys(
+    keys: string[],
+    opts: { type?: string; status?: 'active' | 'archived' | 'all'; limit?: number } = {},
+  ): Promise<MemRecord[]> {
+    if (!keys.length) return [];
+    // A match means the record carries ALL given keys across EITHER column —
+    // `keys[]` (entity/source keys) or `identity_keys[]` (participant
+    // associations, #128). One key → every record carrying it; many → the
+    // intersection. Params only — no string interpolation.
+    const params: unknown[] = [keys];
+    const where: string[] = [
+      // Index-usable prefilter. The exact predicate below concatenates two
+      // columns, which is an expression neither GIN index can answer — on its
+      // own it plans as a Filter over a full scan, making
+      // idx_records_identity_keys pure write cost. Overlap (`&&`) on the bare
+      // columns IS index-usable and is a valid necessary condition here:
+      // containment of a NON-EMPTY $1 implies every element is present, so at
+      // least one element must overlap one of the two columns ($1 is guarded
+      // non-empty by the early return above). The planner ORs the two bitmap
+      // index scans, then the exact recheck drops rows that only partially
+      // match.
+      //
+      // The columns MUST stay bare. Wrapping either in COALESCE turns it back
+      // into an expression over a non-indexed value and the plan collapses to
+      // a full scan again (measured) — do not "tidy" this into COALESCE for
+      // symmetry with the line below. NULL && anything is NULL → not true,
+      // which is exactly right: a record with no keys can't contain any.
+      `(keys && $1::text[] OR identity_keys && $1::text[])`,
+      `(COALESCE(keys, '{}'::text[]) || COALESCE(identity_keys, '{}'::text[])) @> $1::text[]`,
+    ];
+    const status = opts.status ?? 'active';
+    if (status !== 'all') {
+      params.push(status);
+      where.push(`status = $${params.length}`);
+    }
+    if (opts.type) {
+      params.push(opts.type);
+      where.push(`type = $${params.length}`);
+    }
+    params.push(Math.min(opts.limit ?? 2000, 5000));
+    const res = await this.client.query<RecordRow>(
+      `SELECT * FROM mem_records
+        WHERE ${where.join(' AND ')}
+        ORDER BY type ASC, updated_at DESC NULLS LAST
+        LIMIT $${params.length}`,
+      params,
+    );
+    return res.rows.map(toRecord);
   }
 
   async listSources(recordId: string): Promise<SourcesMap> {

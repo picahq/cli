@@ -33,7 +33,11 @@ describe('PGlite plugin — live integration', () => {
 
   it('reports the schema version after ensureSchema', async () => {
     const v = await backend.getSchemaVersion();
-    assert.equal(v, '2.2.0');
+    // Deliberately a literal, not an import of SCHEMA_VERSION — that would be
+    // tautological. This is the canary that forces a conscious decision every
+    // time the schema version moves (a silent 2.2.0 collision between two
+    // branches is exactly how the identity_keys migration got skipped once).
+    assert.equal(v, '2.3.1');
   });
 
   it('advertises capabilities the CoreBackend relies on', () => {
@@ -366,5 +370,142 @@ describe('PGlite plugin — live integration', () => {
     assert.ok(s.recordCount > 0);
     assert.ok(s.activeCount >= 0);
     assert.equal(s.recordCount, s.activeCount + s.archivedCount);
+  });
+
+  // #128/#131: identity_keys[] is a SEPARATE column that must NOT drive the
+  // upsert overlap-merge. This is the regression guard for the bug that
+  // motivated the redesign — participant emails in keys[] collapsed
+  // multi-participant records into each other / into contacts.
+  it('identity_keys do NOT merge records that share one (the #128 fix)', async () => {
+    const attio = await backend.upsertByKeys({
+      type: 'attio/people',
+      data: { name: 'Jane' },
+      keys: ['attio/people:JANE'],
+      identity_keys: ['email:jane@acme.com'],
+      sources: { 'attio/people:JANE': { last_synced_at: new Date().toISOString() } },
+    });
+    const thread = await backend.upsertByKeys({
+      type: 'gmail/gmailThreads',
+      data: { subject: 'hello' },
+      keys: ['gmail/gmailThreads:T1'],
+      identity_keys: ['email:jane@acme.com', 'email:moe@withone.ai'],
+      sources: { 'gmail/gmailThreads:T1': { last_synced_at: new Date().toISOString() } },
+    });
+    assert.notEqual(thread.record.id, attio.record.id, 'thread must NOT merge into the contact');
+    assert.equal(thread.record.type, 'gmail/gmailThreads', 'thread keeps its own type');
+    assert.deepEqual((thread.record.identity_keys ?? []).sort(), ['email:jane@acme.com', 'email:moe@withone.ai'].sort());
+  });
+
+  it('findByKeys joins records across types by a shared identity key (#131)', async () => {
+    const key = 'email:link@acme.com';
+    await backend.upsertByKeys({ type: 'attio/people', data: { name: 'Link Person' }, keys: ['attio/people:LP'], identity_keys: [key], sources: { 'attio/people:LP': { last_synced_at: new Date().toISOString() } } });
+    await backend.upsertByKeys({ type: 'gmail/gmailThreads', data: { subject: 'one' }, keys: ['gmail/gmailThreads:LT1'], identity_keys: [key], sources: { 'gmail/gmailThreads:LT1': { last_synced_at: new Date().toISOString() } } });
+    await backend.upsertByKeys({ type: 'gmail/gmailThreads', data: { subject: 'two' }, keys: ['gmail/gmailThreads:LT2'], identity_keys: [key], sources: { 'gmail/gmailThreads:LT2': { last_synced_at: new Date().toISOString() } } });
+
+    const found = await backend.findByKeys([key]);
+    assert.equal(found.length, 3, 'three records share the identity key');
+    const types = new Set(found.map(r => r.type));
+    assert.ok(types.has('attio/people') && types.has('gmail/gmailThreads'));
+
+    // --type filter
+    const onlyThreads = await backend.findByKeys([key], { type: 'gmail/gmailThreads' });
+    assert.equal(onlyThreads.length, 2);
+  });
+
+  it('findByKeys with two keys returns the intersection (#131)', async () => {
+    await backend.upsertByKeys({ type: 'gmail/gmailThreads', data: { subject: 'jane+bob' }, keys: ['gmail/gmailThreads:IX1'], identity_keys: ['email:jane@acme.com', 'email:bob@acme.com'], sources: { 'gmail/gmailThreads:IX1': { last_synced_at: new Date().toISOString() } } });
+    await backend.upsertByKeys({ type: 'gmail/gmailThreads', data: { subject: 'jane only' }, keys: ['gmail/gmailThreads:IX2'], identity_keys: ['email:jane@acme.com'], sources: { 'gmail/gmailThreads:IX2': { last_synced_at: new Date().toISOString() } } });
+
+    const both = await backend.findByKeys(['email:jane@acme.com', 'email:bob@acme.com']);
+    assert.ok(both.every(r => (r.identity_keys ?? []).includes('email:bob@acme.com')), 'only records with BOTH keys');
+    assert.ok(both.some(r => r.data.subject === 'jane+bob'));
+    assert.ok(!both.some(r => r.data.subject === 'jane only'));
+  });
+
+  it('findByKeys also matches entity keys in keys[] (union of both columns)', async () => {
+    // A contact whose own email is the singular identityKey lands in keys[].
+    await backend.upsertByKeys({ type: 'attio/people', data: { name: 'Entity Keyed' }, keys: ['attio/people:EK', 'email:entity@acme.com'], sources: { 'attio/people:EK': { last_synced_at: new Date().toISOString() } } });
+    const found = await backend.findByKeys(['email:entity@acme.com']);
+    assert.ok(found.some(r => r.data.name === 'Entity Keyed'), 'find-by-key spans keys[] and identity_keys[]');
+  });
+
+  it('two ACTIVE records may share an identity key — the uniqueness trigger skips the column', async () => {
+    // The exemption stated in schema.ts, asserted directly rather than
+    // inferred from the merge test. keys[] is unique across active records;
+    // identity_keys[] deliberately is not, because N people are on a thread
+    // and every one of them is on other threads too.
+    const shared = 'email:shared-participant@acme.com';
+    await backend.insert({ type: 'gmail/gmailThreads', data: { subject: 'one' }, keys: ['gmail/gmailThreads:UQ1'], identity_keys: [shared] });
+    await backend.insert({ type: 'gmail/gmailThreads', data: { subject: 'two' }, keys: ['gmail/gmailThreads:UQ2'], identity_keys: [shared] });
+    await backend.insert({ type: 'google-calendar/events', data: { summary: 'sync' }, keys: ['google-calendar/events:UQ3'], identity_keys: [shared] });
+    assert.equal((await backend.findByKeys([shared])).length, 3, 'all three coexist');
+
+    // Contrast: the same value in keys[] on a second ACTIVE record is rejected.
+    await backend.insert({ type: 'person', data: { name: 'Owner' }, keys: ['email:owned@acme.com'] });
+    await assert.rejects(
+      backend.insert({ type: 'person', data: { name: 'Squatter' }, keys: ['email:owned@acme.com'] }),
+      /already exist/i,
+      'keys[] is still the unique column',
+    );
+  });
+
+  // The three-state identity_keys contract under `replace: true`. The writer's
+  // only way to say "keep what's stored" is SQL NULL, so NULL must NOT clear —
+  // sync's unconditional list-phase write sends it on every page of every run,
+  // and clearing on NULL wiped the column on the second sync of every enrich
+  // profile. `'{}'` stays the clear signal so a removed attendee disappears.
+  it('replace + NULL identity_keys KEEPS, replace + [] CLEARS', async () => {
+    const seed = {
+      type: 'google-calendar/events',
+      keys: ['google-calendar/events:TS1'],
+      sources: { 'google-calendar/events:TS1': { last_synced_at: new Date().toISOString() } },
+    };
+    const first = await backend.upsertByKeys(
+      { ...seed, data: { summary: 'standup' }, identity_keys: ['email:a@acme.com', 'email:b@acme.com'] },
+      { replace: true },
+    );
+    assert.deepEqual((first.record.identity_keys ?? []).sort(), ['email:a@acme.com', 'email:b@acme.com']);
+
+    // undefined → SQL NULL → "no opinion". Data still replaces; the column doesn't.
+    const kept = await backend.upsertByKeys(
+      { ...seed, data: { summary: 'standup (renamed)' }, identity_keys: undefined },
+      { replace: true },
+    );
+    assert.equal(kept.record.data.summary, 'standup (renamed)', 'replace still replaces data');
+    assert.deepEqual((kept.record.identity_keys ?? []).sort(), ['email:a@acme.com', 'email:b@acme.com'], 'NULL must keep');
+
+    // A shorter non-empty array replaces wholesale — a removed attendee goes.
+    const shrunk = await backend.upsertByKeys(
+      { ...seed, data: { summary: 'standup' }, identity_keys: ['email:a@acme.com'] },
+      { replace: true },
+    );
+    assert.deepEqual(shrunk.record.identity_keys, ['email:a@acme.com'], 'replace does not union');
+
+    // [] → authoritative zero → clear.
+    const cleared = await backend.upsertByKeys(
+      { ...seed, data: { summary: 'standup' }, identity_keys: [] },
+      { replace: true },
+    );
+    assert.deepEqual(cleared.record.identity_keys ?? [], [], '[] must clear');
+  });
+
+  it('merge mode (replace: false) unions identity_keys and NULL keeps', async () => {
+    // `mem add` / `mem update` are interactive and additive — an omitted
+    // column must never subtract. Notably `mem migrate` upserts with no
+    // identity_keys at all, so this is what stops it eating them.
+    const seed = {
+      type: 'fathom/meetings',
+      keys: ['fathom/meetings:MG1'],
+      sources: { 'fathom/meetings:MG1': { last_synced_at: new Date().toISOString() } },
+    };
+    await backend.upsertByKeys({ ...seed, data: { title: 'kickoff' }, identity_keys: ['email:host@acme.com'] });
+    const unioned = await backend.upsertByKeys({ ...seed, data: {}, identity_keys: ['email:guest@acme.com'] });
+    assert.deepEqual(
+      (unioned.record.identity_keys ?? []).sort(),
+      ['email:guest@acme.com', 'email:host@acme.com'],
+      'merge unions rather than replaces',
+    );
+    const untouched = await backend.upsertByKeys({ ...seed, data: { note: 'x' } });
+    assert.deepEqual((untouched.record.identity_keys ?? []).sort(), ['email:guest@acme.com', 'email:host@acme.com']);
   });
 });

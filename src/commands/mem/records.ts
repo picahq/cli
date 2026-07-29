@@ -4,10 +4,12 @@
  * link, unlink, linked.
  */
 
+import pc from 'picocolors';
 import * as output from '../../lib/output.js';
 import { getBackend, addRecord, updateRecord } from '../../lib/memory/runtime.js';
 import { embed } from '../../lib/memory/embedding.js';
 import { getMemoryConfigOrDefault } from '../../lib/memory/index.js';
+import type { MemRecord } from '../../lib/memory/types.js';
 import { okJson, parseCsv, parseJsonArg, parsePositiveInt, printList, printRecord, requireMemoryInit, semanticSearchUpgradeHint, semanticSearchUpgradeLine } from './util.js';
 
 interface AddFlags {
@@ -51,8 +53,18 @@ export async function memUpdateCommand(id: string, patchRaw: string): Promise<vo
   // The patch is merged into `data`. `keys` is a first-class column, not a
   // data field — steer callers to `one mem key` instead of silently
   // burying `{"keys":[...]}` under data.keys where it does nothing.
-  if (patch && typeof patch === 'object' && !Array.isArray(patch) && 'keys' in patch) {
-    output.error('`keys` is not a data field. Use `one mem key <id> --set <csv>` (or --add/--remove) to change a record\'s keys.');
+  const isPatchObject = !!patch && typeof patch === 'object' && !Array.isArray(patch);
+  if (isPatchObject && 'keys' in patch) {
+    output.error('`keys` is not a data field. Use `one mem key <id> --set <csv>` (or --add/--remove) to change a record\'s merge keys.');
+  }
+  // Same trap one column over: `identity_keys` (#128) is a column too, so a
+  // patch naming it would land in data.identity_keys and do nothing — while
+  // looking like it worked. Unlike `keys` there's no CLI writer to point at:
+  // associations are derived on sync from the profile's plural `identityKeys`,
+  // so say that instead of offering a command that would write the wrong
+  // column (`mem key` writes the merging `keys[]`).
+  if (isPatchObject && ('identity_keys' in patch || 'identityKeys' in patch)) {
+    output.error('`identity_keys` is not a data field. Participant associations are derived on sync from the profile\'s `identityKeys` — edit the sync profile and re-run `one sync run`, then query with `one mem find-by-key <key>`.');
   }
   // Route through updateRecord so searchable_text + content_hash are
   // regenerated from the merged data (backend.update alone leaves them
@@ -70,9 +82,16 @@ interface KeyFlags {
 
 /**
  * Manage the `keys` column on an existing record — the first-class,
- * uniqueness-checked way to change identity keys after creation. Without
- * this, keys could only be set at insert time (`mem add --keys`), and
+ * uniqueness-checked way to change a record's MERGE keys after creation.
+ * Without this, keys could only be set at insert time (`mem add --keys`), and
  * `mem update '{"keys":[...]}'` silently wrote them into `data` instead.
+ *
+ * This is `keys[]` only. It is deliberately NOT a way to attach participant
+ * associations: `keys[]` is unique across active records and drives
+ * upsert-merge, so adding `email:jane@acme.com` to a thread here either fails
+ * 23505 against Jane's contact record or collapses the thread into it on the
+ * next sync. Participant associations belong in `identity_keys[]`, which the
+ * sync writer fills from a profile's plural `identityKeys` (#128).
  */
 export async function memKeyCommand(id: string, flags: KeyFlags): Promise<void> {
   requireMemoryInit();
@@ -104,7 +123,7 @@ export async function memKeyCommand(id: string, flags: KeyFlags): Promise<void> 
   if (outcome.status === 'conflict') {
     output.error(
       `Key "${outcome.key}" is already owned by active record ${outcome.recordId} (type ${outcome.recordType}). ` +
-      `Keys must be unique across active records — archive or re-key that record first.`,
+      `Merge keys must be unique across active records — archive or re-key that record first.`,
     );
   }
   printRecord((outcome as { record: unknown }).record as Record<string, unknown>);
@@ -316,4 +335,158 @@ export async function memFindBySourceCommand(sourceKey: string): Promise<void> {
   const record = await backend.findBySource(sourceKey);
   if (!record) output.error(`No record owns source "${sourceKey}"`);
   printRecord(record as unknown as Record<string, unknown>);
+}
+
+interface FindByKeyFlags {
+  type?: string;
+  limit?: string;
+}
+
+/** Best-effort human label for a record (the first present common title-ish field). */
+function summarizeRecord(r: MemRecord): string {
+  const d = r.data ?? {};
+  for (const field of ['title', 'subject', 'name', 'full_name', 'display_name', 'summary', 'headline', 'email']) {
+    const v = (d as Record<string, unknown>)[field];
+    if (typeof v === 'string' && v.trim()) return v.trim().slice(0, 80);
+  }
+  // No title-ish field. The caller always prints the full id after the
+  // label, so don't repeat a truncated one here — say plainly there's
+  // nothing to show.
+  return pc.dim('(untitled)');
+}
+
+/** Compact "2d ago" style relative time. */
+function relativeTime(iso?: string): string {
+  if (!iso) return '';
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return '';
+  const s = Math.max(0, Math.floor((Date.now() - then) / 1000));
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60); if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60); if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24); if (d < 30) return `${d}d ago`;
+  const mo = Math.floor(d / 30); if (mo < 12) return `${mo}mo ago`;
+  return `${Math.floor(mo / 12)}y ago`;
+}
+
+/**
+ * How many matching records we pull back from the backend in one go. This is
+ * NOT `--limit`, which only slices how many rows per type get PRINTED.
+ *
+ * The backend applies `Math.min(opts.limit ?? 2000, 5000)` as a GLOBAL cap
+ * after `ORDER BY type ASC, updated_at DESC` — so leaving it implicit meant a
+ * saturating type silently ate the whole budget and every type sorting after
+ * it disappeared with no signal. That is the normal case now that the built-in
+ * profiles attach an `email:` identity key for every From/To/Cc and every
+ * attendee: on a real mailbox your own address is on nearly every synced
+ * thread, so `gmail/gmailThreads` alone can fill 2000 rows and hide
+ * `google-calendar/events` entirely. We ask for one MORE than we keep so we
+ * can detect the cap and say so, rather than reporting a wrong total.
+ */
+const FIND_BY_KEY_FETCH_CAP = 2000;
+
+/**
+ * Normalize a key the way the writer does before it hits the exact
+ * array-containment match. Identity values are lowercased + trimmed on write
+ * (see `identityValuesFor` in sync/mem-writer.ts) and the profile prefixes are
+ * lowercase, so passing the CLI arg through verbatim made
+ * `find-by-key email:Jane@Acme.com` report "no records linked" while dozens
+ * carried `email:jane@acme.com`. Trimming also absorbs the stray whitespace
+ * shell quoting leaves behind.
+ */
+function normalizeQueryKey(key: string): string {
+  return key.trim().toLowerCase();
+}
+
+/**
+ * `one mem find-by-key <key> [<key2>]` — list every record carrying the given
+ * identity key (e.g. `email:jane@acme.com`), grouped by type. The match spans
+ * BOTH key columns: `keys[]` (entity/merge keys — "this record IS this
+ * entity") and `identity_keys[]` (participant associations, #128 — "this
+ * record INVOLVES this person"). Two keys → the intersection (records carrying
+ * BOTH). This is the cross-platform-join query surface for #131 (issue proposed
+ * `mem linked`, but that name is already taken by the relation-graph command,
+ * so this mirrors the existing `find-by-source`). Works for any prefix —
+ * `email:`, `domain:`, etc.
+ */
+export async function memFindByKeyCommand(key: string, secondKey: string | undefined, flags: FindByKeyFlags): Promise<void> {
+  requireMemoryInit();
+  const backend = await getBackend();
+  const rawKeys = secondKey ? [key, secondKey] : [key];
+  const keys = rawKeys.map(normalizeQueryKey);
+  const perType = parsePositiveInt(flags.limit, 10, '--limit');
+
+  const fetchPage = async (ks: string[]) => {
+    const rows = await backend.findByKeys(ks, { type: flags.type, limit: FIND_BY_KEY_FETCH_CAP + 1 });
+    return { records: rows.slice(0, FIND_BY_KEY_FETCH_CAP), truncated: rows.length > FIND_BY_KEY_FETCH_CAP };
+  };
+
+  let page = await fetchPage(keys);
+  let matchedKeys = keys;
+  // Sync writes normalized keys, but records keyed by hand (`mem add --keys`,
+  // `mem key --add`) are stored verbatim and can carry mixed case. If the
+  // normalized lookup found nothing, retry once with exactly what was typed
+  // before declaring "no records" — costs one extra query only on a miss.
+  if (page.records.length === 0 && keys.some((k, i) => k !== rawKeys[i])) {
+    const verbatim = await fetchPage(rawKeys);
+    if (verbatim.records.length > 0) {
+      page = verbatim;
+      matchedKeys = rawKeys;
+    }
+  }
+  const { records, truncated } = page;
+
+  // Group by type, preserving the query's type-then-recency ordering.
+  const byType = new Map<string, MemRecord[]>();
+  for (const r of records) {
+    const list = byType.get(r.type) ?? [];
+    list.push(r);
+    byType.set(r.type, list);
+  }
+
+  if (output.isAgentMode()) {
+    const grouped: Record<string, { count: number; items: MemRecord[] }> = {};
+    for (const [type, list] of byType) {
+      grouped[type] = { count: list.length, items: list.slice(0, perType) };
+    }
+    // `total` is what we actually fetched. When `truncated` is true there are
+    // MORE matches than this and the type breakdown is incomplete — agents
+    // must re-run with `--type` rather than trust the counts.
+    output.json({
+      keys: matchedKeys,
+      total: records.length,
+      truncated,
+      fetchCap: FIND_BY_KEY_FETCH_CAP,
+      perTypeLimit: perType,
+      byType: grouped,
+    });
+    return;
+  }
+
+  const label = matchedKeys.map(k => pc.cyan(k)).join(pc.dim(' + '));
+  if (records.length === 0) {
+    console.log(`\n  No records linked to ${label}.\n`);
+    return;
+  }
+
+  console.log();
+  console.log(`  ${label} ${pc.dim('—')} ${records.length}${truncated ? '+' : ''} record${records.length === 1 ? '' : 's'} across ${byType.size} type${byType.size === 1 ? '' : 's'}`);
+  console.log();
+  const typeWidth = Math.min(30, Math.max(...[...byType.keys()].map(t => t.length)));
+  for (const [type, list] of byType) {
+    console.log(`  ${pc.bold(type.padEnd(typeWidth))}  ${pc.dim(`${list.length} record${list.length === 1 ? '' : 's'}`)}`);
+    for (const r of list.slice(0, perType)) {
+      // Full id, not a prefix — `one mem get` needs the whole thing, so a
+      // truncated id would make every line un-actionable.
+      console.log(`    ${pc.dim('·')} ${summarizeRecord(r)}  ${pc.dim(relativeTime(r.updated_at))}  ${pc.dim(r.id)}`);
+    }
+    if (list.length > perType) {
+      console.log(`    ${pc.dim(`… and ${list.length - perType} more (raise --limit)`)}`);
+    }
+  }
+  if (truncated) {
+    console.log();
+    console.log(`  ${pc.yellow('⚠')} Stopped at ${FIND_BY_KEY_FETCH_CAP} matches — there are more, and types sorting after the last one shown are missing entirely. Re-run with --type <type> to see them.`);
+  }
+  console.log();
 }
