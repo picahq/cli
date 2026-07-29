@@ -274,6 +274,7 @@ export const FLOW_SCHEMA: FlowSchemaDescriptor = {
         command:   { type: 'string', required: true, description: 'Shell command to execute (supports selectors)' },
         timeout:   { type: 'number', required: false, description: 'Timeout in ms (default: 30000)' },
         parseJson: { type: 'boolean', required: false, description: 'Parse stdout as JSON (default: false). When true, $.steps.<id>.output is the parsed object/array; when false, it is the trimmed stdout string.' },
+        parseEnvelope: { type: 'boolean', required: false, description: "Unwrap a `claude --print --output-format json` envelope: extract .result, strip code fences + preamble, parse the inner JSON as $.steps.<id>.output. Use this (instead of parseJson) for claude --print steps. Fails the step if the unwrapped payload isn't valid JSON." },
         cwd:       { type: 'string', required: false, description: 'Working directory (supports selectors)' },
         env:       { type: 'object', required: false, description: 'Additional environment variables' },
       },
@@ -281,7 +282,7 @@ export const FLOW_SCHEMA: FlowSchemaDescriptor = {
         id: 'analyze', name: 'Analyze with Claude', type: 'bash',
         bash: {
           command: "cat /tmp/data.json | claude --print 'Analyze this data' --output-format json",
-          timeout: 180000, parseJson: true,
+          timeout: 180000, parseEnvelope: true,
         },
       },
     },

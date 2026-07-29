@@ -84,7 +84,7 @@ one --agent flow list                                 # List all workflows
 - Code steps can reference an external \`.mjs\` module under the flow's \`lib/\` folder (stdin JSON in, stdout JSON out) — keeps JS out of JSON strings and makes flows shareable
 - 12 step types: action, transform, code, condition, loop, parallel, file-read, file-write, while, flow, paginate, bash
 - Data wiring via selectors: \`$.input.param\`, \`$.steps.stepId.response\`, \`$.loop.item\`
-- AI analysis via bash steps: \`claude --print\` with \`parseJson: true\`
+- AI analysis via bash steps: \`claude --print --output-format json\` with \`parseEnvelope: true\` (unwraps the CLI envelope + fences + preamble into clean parsed JSON; use instead of \`parseJson\` for claude steps)
 - Use \`--allow-bash\` to enable bash steps, \`--mock\` for dry-run with realistic mock responses (uses example data from action schemas)
 - Use \`--skip-validation\` to bypass input validation on action steps
 - Use \`--output-file <path>\` to stream the full result to a file instead of stdout — for large results that would otherwise be truncated or hit the JSON string-size limit; stdout (and \`--agent\` output) then carries an \`outputFile\` pointer instead of inline \`steps\`
