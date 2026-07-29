@@ -496,15 +496,18 @@ one --agent mem get <id> --links
 # Update (shallow merge into data; regenerates searchable_text from the merged data)
 one --agent mem update <id> '{"status":"done"}'
 
-# Manage identity keys AFTER creation (keys are a first-class column, NOT data).
-# Unique across ACTIVE records — a clear error names the record that owns a taken key.
+# Manage MERGE KEYS after creation — the \`keys[]\` column (a first-class column,
+# NOT data). Unique across ACTIVE records — a clear error names the record that
+# owns a taken key. This is the column that collapses two records into one.
 one --agent mem key <id> --add email:new@x.com
 one --agent mem key <id> --remove email:old@x.com
-one --agent mem key <id> --set 'email:a@x.com,phone:+1555'   # replace all keys
+one --agent mem key <id> --set 'email:a@x.com,phone:+1555'   # replace ALL merge keys
 # NOTE: passing keys to 'mem update' is rejected — keys are not a data field.
+# NOTE: 'mem key' WRITES keys[]. To READ across records, use 'mem find-by-key'
+# (see Identity keys below) — different command, different column coverage.
 
-# Archive / unarchive. Archiving FREES a record's keys: an archived record no
-# longer blocks a new active record from reusing the same key (uniqueness is
+# Archive / unarchive. Archiving FREES a record's merge keys: an archived record
+# no longer blocks a new active record from reusing the same key (uniqueness is
 # scoped to active records).
 one --agent mem archive <id> --reason superseded
 
@@ -545,6 +548,55 @@ Synced rows carry \`sources\` entries keyed by \`<platform>/<model>:<external_id
 one --agent mem sources <id>                          # list source entries
 one --agent mem find-by-source attio/attioPeople:abc-123
 \`\`\`
+
+\`find-by-source\` answers "which ONE record owns this external id" — a single record, preferring the active owner. For "everything about this person", use \`find-by-key\` below.
+
+## Identity keys (cross-platform join)
+
+Two different columns carry prefixed keys like \`email:jane@acme.com\`, and the difference is the whole point:
+
+- **\`keys[]\` — merge keys.** "This record IS this entity." Unique across active records, and \`sync\` merges any incoming record that overlaps an existing one. Written by \`mem add --keys\`, \`mem key\`, and a profile's singular \`identityKey\`.
+- **\`identity_keys[]\` — association keys (#128).** "This record INVOLVES these people." Deliberately exempt from both the uniqueness constraint and the overlap-merge, so a Gmail thread with 12 participants stays one thread instead of collapsing into a contact. Written by a profile's plural \`identityKeys\` (see \`one guide sync\`).
+
+\`mem find-by-key\` queries BOTH columns at once, so one call surfaces the CRM record, the email threads, the calendar events, and the meeting notes for the same person:
+
+\`\`\`bash
+one --agent mem find-by-key email:jane@acme.com                # every record carrying the key
+one --agent mem find-by-key email:jane@acme.com --type gmail/gmailThreads   # one record type
+one --agent mem find-by-key email:a@x.com email:b@y.com        # intersection — records with BOTH
+one --agent mem find-by-key email:jane@acme.com --limit 25     # show more per type (default 10)
+\`\`\`
+
+Any prefix works (\`email:\`, \`domain:\`, \`phone:\`, even a raw source key) — matching is plain array containment over the two columns combined, so a two-key query still matches when one key sits in \`keys[]\` and the other in \`identity_keys[]\`. Only ACTIVE records are returned. Lookup keys are lowercased/trimmed to match how sync writes them, with a verbatim retry for hand-written mixed-case keys, so \`email:Jane@Acme.com\` and \`email:jane@acme.com\` find the same records.
+
+Agent output is grouped by record type:
+
+\`\`\`json
+{
+  "keys": ["email:jane@acme.com"],
+  "total": 13,
+  "truncated": false,
+  "fetchCap": 2000,
+  "perTypeLimit": 10,
+  "byType": {
+    "attio/attioPeople": { "count": 1, "items": [ { "id": "...", "type": "...", "data": {}, "keys": ["attio/attioPeople:J1", "email:jane@acme.com"] } ] },
+    "gmail/gmailThreads": { "count": 12, "items": [] }
+  }
+}
+\`\`\`
+
+\`items\` are whole mem records. \`keys\` and \`identity_keys\` are **omitted, not \`[]\`**, when the record has none — the contact above matched on \`keys[]\` and carries no \`identity_keys\` field at all. Read them as \`(item.identity_keys ?? [])\`.
+
+There are TWO independent truncations, and conflating them gives wrong answers:
+
+- **\`--limit\` (default 10, echoed as \`perTypeLimit\`)** is display only. It slices each \`items\` array; \`total\` and \`count\` stay full match counts. \`count > items.length\` just means "raise \`--limit\` to list the rest".
+- **\`truncated: true\`** means the query hit the \`fetchCap\` (2000 matches) before it ran out of records. Now \`total\` and every \`count\` are floors, and because rows arrive ordered by type, any type sorting after the cut is absent from \`byType\` altogether. One high-volume type — your own address on every synced Gmail thread, say — can consume the whole budget. Re-run with \`--type <type>\` to get an accurate answer for the type you care about; the interactive (non-\`--agent\`) output prints a \`⚠\` and a \`2000+\` style count in the same situation.
+
+\`items\` entries are whole mem records, same fields as \`mem get\`, so no follow-up \`mem get\` is needed.
+
+\`keys\` echoes the key form that actually matched, which is the normalized one unless the verbatim retry won.
+
+Do not confuse \`mem key\` with \`mem find-by-key\`: \`mem key\` WRITES \`keys[]\` on a single record (\`--set\` replaces the array outright and can trigger a merge), while \`find-by-key\` is a read-only query across every record.
 
 ## Sync into memory
 
@@ -837,6 +889,8 @@ The transform can be any command: \`jq\`, \`python3\`, a bash script, or \`one f
 
 Transform, exclude, identityKey, and hooks all fire in **both** phases. In Phase 1 they run on the raw list page; in Phase 2 they run again on the merged (list + enriched) record so that transforms can extract columns from fields that only appear after enrichment. Phase 2 fires \`onUpdate\`/\`onChange\` for every row it writes — \`onInsert\` is Phase-1-only because the row already exists in SQL by the time enrichment runs.
 
+**Exception — plural \`identityKeys\` on an enriching profile.** When a profile declares \`enrich\`, Phase 1 deliberately writes *no opinion* about \`identity_keys[]\` (it leaves whatever is stored untouched) and only Phase 2 sets them. Phase 1 sees the list shape, where participant paths like \`messages[].payload.headers[name=From].value\` don't exist yet — if it wrote its empty result, every re-sync would erase the participants Phase 2 had resolved. Two consequences worth knowing: a row whose enrichment is skipped or rate-limited keeps \`identity_keys\` \`NULL\` until it enriches, and a participant removed upstream is only cleared once that row re-enriches.
+
 ## Cross-Platform Identity
 
 Two ways to tag a record with a cross-platform identifier (e.g. email), depending on whether the record IS an entity or INVOLVES many:
@@ -845,6 +899,7 @@ Two ways to tag a record with a cross-platform identifier (e.g. email), dependin
 
 \`\`\`json
 {"platform": "hubspot", "model": "contacts", "identityKey": "properties.email"}
+{"platform": "stripe",  "model": "customers", "identityKey": "email"}
 {"platform": "attio",   "model": "attioPeople", "identityKey": "email_addresses[0].email_address"}
 \`\`\`
 
@@ -865,11 +920,16 @@ Query everything sharing an identity key, grouped by type:
 one --agent mem find-by-key email:jane@acme.com               # all records carrying this key
 one --agent mem find-by-key email:jane@acme.com --type gmail/gmailThreads
 one --agent mem find-by-key email:jane@acme.com email:bob@acme.com   # intersection (both keys)
+one --agent mem find-by-key email:jane@acme.com --limit 25    # show more records per type
 # Look up the single record owning a source key:
 one --agent mem find-by-source hubspot/contacts:<id>
+# Or filter ONE model on the underlying field via the dotted --where path. Note
+# this is the raw data path, NOT the identity key — for the hubspot profile above
+# that's 'properties.email', the same path its identityKey extracts from.
+one --agent sync query hubspot/contacts --where 'properties.email=jane@acme.com'
 \`\`\`
 
-\`find-by-key\` spans BOTH columns — entity keys in \`keys[]\` and association keys in \`identity_keys[]\`.
+\`find-by-key\` spans BOTH columns — entity keys in \`keys[]\` and association keys in \`identity_keys[]\`. \`--limit\` (default 10) caps only how many records are listed per type; the per-type \`count\` and overall \`total\` are still full match counts, so \`count\` exceeding the listed items is the signal to raise it. A separate \`truncated\` flag reports the very different case where the 2000-match fetch cap was hit and whole types are missing — see \`one guide memory\` for the full response shape.
 
 \`sync sql\` was retired in the unified memory cutover — a raw-SQL surface can't safely span the embedded Postgres, remote Postgres, and third-party backends without leaking specifics. Use \`mem search\` / \`sync search\` / \`sync query\` with dotted \`--where\` paths instead.
 

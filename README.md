@@ -364,9 +364,16 @@ one mem update <id> '{"status":"done"}'              # merges into data; refresh
 one mem search "design review"                       # hybrid FTS + semantic (if key set)
 one mem list note --limit 20
 
-# Identity keys are a first-class column (unique across ACTIVE records; archiving
-# frees them). Manage them after creation with `mem key` — NOT via `mem update`.
+# Merge keys (`keys[]`) are a first-class column (unique across ACTIVE records;
+# archiving frees them). Manage them after creation with `mem key` — NOT `mem update`.
 one mem key <id> --add email:x@y.com                 # also --remove / --set <csv>
+
+# Find every record tied to a person/company, grouped by type. Spans BOTH columns:
+# `keys[]` (this record IS the entity — drives merge) and `identity_keys[]` (this
+# record INVOLVES the entity — Gmail thread participants, calendar attendees; never merges).
+one mem find-by-key email:jane@acme.com              # every record carrying the key
+one mem find-by-key email:jane@acme.com --type gmail/gmailThreads
+one mem find-by-key email:jane@acme.com email:bob@acme.com   # intersection — records with BOTH
 
 # Backfill searchable_text for rows that landed NULL or with UUID-noise-heavy text
 # (drops ids/timestamps, leads with name/title/email). No embedding provider needed.
@@ -389,7 +396,9 @@ one mem status                                       # backend, provider, _upgra
 one mem doctor                                       # 7-check health report
 ```
 
-Key surfaces: `add`, `get`, `update`, `archive`, `list`, `search` (`--deep` forces semantic), `context`, `link`/`linked`/`unlink`, `sources`, `find-by-source`, `export`, `import`, `migrate`, `vacuum`, `reindex`. Run `one guide memory` for the full reference.
+Key surfaces: `add`, `get`, `update`, `archive`, `list`, `search` (`--deep` forces semantic), `context`, `link`/`linked`/`unlink`, `key`, `sources`, `find-by-source`, `find-by-key`, `export`, `import`, `migrate`, `vacuum`, `reindex`. Run `one guide memory` for the full reference.
+
+`find-by-key` is the cross-platform join: keys are matched **case-insensitively** (they are lowercased on write, and the query is lowercased to match), `--type` narrows to one record type, and `--limit` (default 10) caps how many records are *shown per type* while the reported per-type `count` and overall `total` stay full match counts. Above 2000 matches the response flags `truncated` and the counts become floors — re-run with `--type` for an exact answer. Populate `identity_keys[]` from a sync profile's `identityKeys` field (see `one guide sync`), which ships pre-wired for `gmail/gmailThreads`, `google-calendar/events`, and `fathom/meetings`.
 
 ### `one sync` (and `one mem sync` alias)
 

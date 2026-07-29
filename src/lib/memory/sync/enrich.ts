@@ -4,7 +4,7 @@ import { resolveActionDetails } from '../../action-details.js';
 import { isAgentMode } from '../../output.js';
 import type { EnrichConfig, SyncProfile } from './types.js';
 import type { ActionDetails } from '../../types.js';
-import { writePageToMemory } from './mem-writer.js';
+import { writePageToMemory, resolveEntityIdentity } from './mem-writer.js';
 import type Database from 'better-sqlite3';
 import { transformRecords } from './transform.js';
 import { fireHooks, type ChangeEvent } from './hooks.js';
@@ -327,9 +327,13 @@ export async function enrichPhase(
         stripExcludedFields(merged, ctx.exclude);
       }
       if (ctx.identityKey) {
-        const raw = getByDotPath(merged, ctx.identityKey);
-        if (raw !== null && raw !== undefined) {
-          merged._identity = String(raw).toLowerCase().trim();
+        // Same resolver the sync runner and the memory writer use — enrichment
+        // recomputes `_identity` from the merged record, and if it normalized
+        // differently from the list phase the row's identity would flip on
+        // every enrich pass.
+        const identity = resolveEntityIdentity(merged, ctx.identityKey);
+        if (identity?.value) {
+          merged._identity = identity.value;
         }
       }
 

@@ -9,7 +9,7 @@ import { getModelState, updateModelState } from './state.js';
 import { openDatabase, ensureTable, rebuildFtsIndex, evolveSchema, upsertRecords, tableExists, countRecords, deleteRecords, sanitizeTableName } from './db.js';
 import { acquireSyncLock } from './lock.js';
 import { classifyRecords, fireHooks, type ChangeEvent } from './hooks.js';
-import { writePageToMemory } from './mem-writer.js';
+import { writePageToMemory, resolveEntityIdentity } from './mem-writer.js';
 import { enrichPhase, type EnrichResult } from './enrich.js';
 import { transformRecords } from './transform.js';
 import { extractRecords } from './extract.js';
@@ -468,12 +468,16 @@ export async function syncModel(
         }
       }
 
-      // Extract cross-platform identity key if configured
+      // Extract cross-platform identity key if configured. Shares
+      // `resolveEntityIdentity` with the memory writer so the legacy SQLite
+      // `_identity` column holds the exact same normalized value that lands in
+      // the memory row's `keys[]` — the two used to be computed independently
+      // and drifted apart on any value that needed email extraction.
       if (profile.identityKey) {
         for (const record of records as Record<string, unknown>[]) {
-          const raw = getByDotPath(record, profile.identityKey);
-          if (raw !== null && raw !== undefined) {
-            (record as Record<string, unknown>)._identity = String(raw).toLowerCase().trim();
+          const identity = resolveEntityIdentity(record, profile.identityKey);
+          if (identity?.value) {
+            (record as Record<string, unknown>)._identity = identity.value;
           }
         }
       }

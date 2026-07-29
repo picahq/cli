@@ -1,7 +1,13 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { collectIdentityKeys } from './mem-writer.js';
+import {
+  collectIdentityKeys,
+  collectEntityKeys,
+  collectAssociationKeys,
+  resolveEntityIdentity,
+} from './mem-writer.js';
 import { loadBuiltinProfile } from './builtin-profiles.js';
+import { buildIdentityKeysPreview } from './test.js';
 import type { SyncProfile } from './types.js';
 
 // #128: identityKeys (plural) — multiple cross-platform identity keys per
@@ -211,5 +217,199 @@ describe('collectIdentityKeys — singular + plural combined (#128)', () => {
       identityKeys: [{ prefix: 'email', path: 'to[].email' }],
     } as IdProfile);
     assert.deepEqual(keys, ['email:me@x.com', 'email:you@x.com']);
+  });
+});
+
+/**
+ * `collectIdentityKeys` above is the UNION helper — it exists for `sync test`
+ * previews, and nothing in the write path calls it. The writer uses
+ * `collectEntityKeys` (→ `keys[]`) and `collectAssociationKeys` (→
+ * `identity_keys[]`) and the SPLIT between them is the #128 fix. Test them
+ * directly, or a writer that shoves everything back into `keys[]` still looks
+ * green here.
+ */
+describe('collectEntityKeys / collectAssociationKeys — the two columns are separate (#128)', () => {
+  const rec = {
+    id: 'T1',
+    email: 'owner@acme.com',
+    participants: [{ email: 'a@x.com' }, { email: 'b@x.com' }],
+  };
+  const both = {
+    identityKey: 'email',
+    identityKeys: [{ prefix: 'email', path: 'participants[].email' }],
+  } as IdProfile;
+
+  it('the singular key is an ENTITY key and never appears in the association set', () => {
+    assert.deepEqual(collectEntityKeys(rec, both), ['email:owner@acme.com']);
+    assert.deepEqual(collectAssociationKeys(rec, both), ['email:a@x.com', 'email:b@x.com']);
+  });
+
+  it('the plural keys are ASSOCIATIONS and never leak into the entity set', () => {
+    // A thread-shaped profile: participants only, no entity identity of its own.
+    const threadish = { identityKeys: both.identityKeys } as IdProfile;
+    assert.deepEqual(collectEntityKeys(rec, threadish), [], 'no singular key → no entity key');
+    assert.equal(collectAssociationKeys(rec, threadish).length, 2);
+  });
+
+  it('an association prefix is normalized, and an unusable one is dropped entirely', () => {
+    // A namespace is compared as literal text by find-by-key and the uniqueness
+    // trigger, so `"Email"` must land on `email:`…
+    assert.deepEqual(
+      collectAssociationKeys({ e: 'A@x.com' }, { identityKeys: [{ prefix: ' Email ', path: 'e' }] } as IdProfile),
+      ['email:a@x.com'],
+    );
+    // …and a prefix containing the `:` separator (or a space) would make the
+    // key unparseable, so the entry is dropped rather than written as garbage.
+    assert.deepEqual(
+      collectAssociationKeys({ e: 'a@x.com' }, { identityKeys: [{ prefix: 'we:ird', path: 'e' }] } as IdProfile),
+      [],
+    );
+  });
+});
+
+/**
+ * `keys[]` is the MERGE + uniqueness column, so the singular `identityKey` may
+ * contribute AT MOST ONE key. A path that fans out would hand one record
+ * several entity identities; combined with sync's `replace: true` that either
+ * overwrites an unrelated entity's row wholesale or trips 23505. Ambiguous
+ * must therefore resolve to nothing at all — not to a first-match guess.
+ */
+describe('singular identityKey fan-out guard — at most one merge key (#128)', () => {
+  it('a comma-list value produces NO entity key (ambiguous, not first-match)', () => {
+    const rec = { email: 'a@x.com, Bob <b@y.com>' };
+    assert.deepEqual(collectEntityKeys(rec, { identityKey: 'email' } as IdProfile), []);
+    // The candidates are still exposed so `sync test` can tell the profile
+    // author exactly why their key vanished.
+    const identity = resolveEntityIdentity(rec, 'email');
+    assert.deepEqual(identity!.values, ['a@x.com', 'b@y.com']);
+    assert.equal(identity!.value, null);
+    assert.equal(identity!.key, null);
+  });
+
+  it('a [] wildcard path produces NO entity key even though it resolves', () => {
+    const rec = { emails: [{ address: 'a@x.com' }, { address: 'b@x.com' }] };
+    assert.deepEqual(collectEntityKeys(rec, { identityKey: 'emails[].address' } as IdProfile), []);
+    // Pinning the index makes it unambiguous again — the documented fix.
+    assert.deepEqual(collectEntityKeys(rec, { identityKey: 'emails[0].address' } as IdProfile), ['email:a@x.com']);
+  });
+
+  it('a fan-out that collapses to ONE distinct value is still fine', () => {
+    // Duplicates are deduped before the ambiguity check, so a repeated address
+    // is not punished.
+    const rec = { emails: [{ address: 'Same@x.com' }, { address: 'same@X.com' }] };
+    assert.deepEqual(collectEntityKeys(rec, { identityKey: 'emails[].address' } as IdProfile), ['email:same@x.com']);
+  });
+
+  it('non-email prefixes fan out too, and are guarded the same way', () => {
+    const rec = { domains: ['acme.com', 'acme.io'] };
+    assert.deepEqual(collectEntityKeys(rec, { identityKey: 'domains[]' } as IdProfile), []);
+    assert.deepEqual(collectEntityKeys({ domains: ['acme.com'] }, { identityKey: 'domains[]' } as IdProfile), ['domain:acme.com']);
+  });
+
+  it('the shipped entity profiles each produce exactly ONE merge key', () => {
+    // These three are the profiles whose records ARE entities (a person, a
+    // company, a customer). Their `keys[]` contribution must stay singular no
+    // matter what the payload looks like, or a sync merges two real people.
+    const cases: Array<{ platform: string; model: string; record: Record<string, unknown>; expected: string }> = [
+      {
+        platform: 'attio', model: 'attioPeople',
+        record: {
+          values: {
+            email_addresses: [
+              { email_address: 'Jane@Acme.com' },
+              // A second address must NOT create a second merge key — the
+              // profile pins [0] precisely to avoid the fan-out above.
+              { email_address: 'jane.smith@acme.com' },
+            ],
+          },
+        },
+        expected: 'email:jane@acme.com',
+      },
+      {
+        platform: 'attio', model: 'attioCompanies',
+        record: { values: { domains: [{ domain: 'Acme.com' }, { domain: 'acme.io' }] } },
+        expected: 'domain:acme.com',
+      },
+      {
+        platform: 'stripe', model: 'customers',
+        record: { email: 'Cust@Acme.com' },
+        expected: 'email:cust@acme.com',
+      },
+    ];
+
+    for (const c of cases) {
+      const profile = loadBuiltinProfile(c.platform, c.model) as unknown as SyncProfile;
+      assert.ok(profile, `${c.platform}/${c.model} profile loads`);
+      assert.ok(profile.identityKey, `${c.platform}/${c.model} declares a singular identityKey`);
+      const keys = collectEntityKeys(c.record, profile);
+      assert.deepEqual(keys, [c.expected], `${c.platform}/${c.model} must yield exactly one merge key`);
+      // And none of them declares plural identityKeys — an entity profile has
+      // no participants, so nothing should land in identity_keys[].
+      assert.deepEqual(collectAssociationKeys(c.record, profile), [], `${c.platform}/${c.model} has no associations`);
+    }
+  });
+
+  it('the shipped PARTICIPANT profiles contribute nothing to keys[]', () => {
+    // The mirror image: gmail threads / calendar events / fathom meetings are
+    // not entities, so they must add zero merge keys and leave `keys[]` as just
+    // the source key. If one of these ever grew a singular identityKey, every
+    // record sharing that value would collapse — the #128 bug all over again.
+    for (const [platform, model] of [['gmail', 'gmailThreads'], ['google-calendar', 'events'], ['fathom', 'meetings']]) {
+      const profile = loadBuiltinProfile(platform, model) as unknown as SyncProfile;
+      assert.ok(profile, `${platform}/${model} profile loads`);
+      assert.equal(profile.identityKey, undefined, `${platform}/${model} must NOT declare a singular identityKey`);
+      assert.ok(profile.identityKeys?.length, `${platform}/${model} declares plural identityKeys`);
+    }
+  });
+});
+
+describe('sync test preview surfaces the two silent-looking cases (#128)', () => {
+  it('flags a singular identityKey that fans out, with the values it saw', () => {
+    const preview = buildIdentityKeysPreview(
+      [
+        { email: 'jane@acme.com' },
+        { email: 'a@x.com, b@y.com' },
+        { email: 'Solo@Acme.com' },
+      ],
+      { identityKey: 'email' } as SyncProfile,
+    );
+    assert.ok(preview);
+    // Only the comma-list record fans out; the other two resolve cleanly.
+    assert.equal(preview!.entityFanOut?.count, 1);
+    assert.deepEqual(preview!.entityFanOut?.sampleValues, ['email:a@x.com', 'email:b@y.com']);
+    // And that record contributed no key at all — the guard, seen from outside.
+    assert.deepEqual(preview!.perRecord, [1, 0, 1]);
+  });
+
+  it('does not flag a fan-out that collapses to one distinct value', () => {
+    const preview = buildIdentityKeysPreview(
+      [{ email: 'jane@acme.com, Jane@ACME.com' }],
+      { identityKey: 'email' } as SyncProfile,
+    );
+    assert.equal(preview!.entityFanOut, undefined);
+    assert.deepEqual(preview!.perRecord, [1]);
+  });
+
+  it('marks an enriching profile so zero keys is not reported as a broken path', () => {
+    const gmail = loadBuiltinProfile('gmail', 'gmailThreads') as unknown as SyncProfile;
+    // The list shape: what threads.list actually returns, before enrichment.
+    const preview = buildIdentityKeysPreview(
+      [{ id: 'T1', snippet: 'hello', historyId: '99' }],
+      gmail,
+    );
+    assert.deepEqual(preview!.perRecord, [0]);
+    assert.equal(preview!.resolvesAfterEnrich, true);
+  });
+
+  it('leaves resolvesAfterEnrich unset for a non-enriching participant profile', () => {
+    const gcal = loadBuiltinProfile('google-calendar', 'events') as unknown as SyncProfile;
+    assert.equal(gcal.enrich, undefined);
+    const preview = buildIdentityKeysPreview([{ organizer: { email: 'me@acme.com' } }], gcal);
+    assert.equal(preview!.resolvesAfterEnrich, undefined);
+    assert.deepEqual(preview!.perRecord, [1]);
+  });
+
+  it('returns undefined when the profile declares no identity config', () => {
+    assert.equal(buildIdentityKeysPreview([{ email: 'a@b.com' }], {} as SyncProfile), undefined);
   });
 });

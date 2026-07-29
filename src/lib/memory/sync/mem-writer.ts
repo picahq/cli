@@ -172,6 +172,17 @@ export async function writePageToMemory(
   // profile. No override → profile's choice → config default.
   const embedFlag = opts.embedOverride ?? deriveEmbedFlag(profile);
   const searchablePaths = getSearchablePaths(profile);
+  // Does this profile have anything to say about identity_keys at all? A
+  // profile without `identityKeys` must send NULL (= "no opinion"), never `[]`
+  // (= "clear"), or a sync of an unrelated model that happens to merge into the
+  // same record would wipe association keys written by another profile's sync
+  // or restored by `mem import`.
+  const declaresIdentityKeys = (profile.identityKeys?.length ?? 0) > 0;
+  // Enrich stamps this field on the merged record before writing it back
+  // (enrich.ts sets `merged[tsField] = now`), so its presence is how the
+  // writer tells the enriched shape from the list shape. See the
+  // `preEnrichShape` comment below for why that distinction matters.
+  const enrichTimestampField = profile.enrich?.timestampField ?? '_enriched_at';
 
   for (const record of records) {
     report.attempted++;
@@ -198,7 +209,28 @@ export async function writePageToMemory(
     // a SEPARATE column that never triggers merge, so a Gmail thread carrying
     // many participant emails stays its own record. See schema.ts.
     const keys = [sourceKey, ...collectEntityKeys(record, profile)];
-    const identityKeys = collectAssociationKeys(record, profile);
+
+    // Three-state contract for identity_keys, mirrored by mem_upsert_by_keys
+    // (schema.ts) — under `replace: true`, NULL keeps and non-NULL replaces:
+    //   undefined → "I have no opinion, keep what's stored"
+    //   []        → "I authoritatively resolved zero participants, clear it"
+    //   [a, b]    → "these exactly"
+    //
+    // The pre-enrich shape is the whole reason the first state exists. A
+    // profile like gmail/gmailThreads resolves its identity keys out of
+    // fields that only enrichment fetches (`messages[].payload.headers[...]`)
+    // while `threads.list` returns `{id, snippet, historyId}`. Phase 1 runs
+    // unconditionally on every page of every run (runner.ts), so if it
+    // reported `[]` here it would clear the column — and phase 2 could not
+    // put it back, because enrich only visits rows with `_enriched_at IS
+    // NULL`. Result: keys present after the first sync, gone after the
+    // second. So while an enrich profile's record is still the list shape we
+    // stay silent and let the enriched write be the authority.
+    const preEnrichShape = !!profile.enrich && record[enrichTimestampField] == null;
+    const identityKeys =
+      !declaresIdentityKeys || preEnrichShape
+        ? undefined
+        : collectAssociationKeys(record, profile);
 
     // Strip sync-internal bookkeeping from the payload
     const data = { ...record };
@@ -219,7 +251,7 @@ export async function writePageToMemory(
           type,
           data,
           keys,
-          identity_keys: identityKeys.length ? identityKeys : undefined,
+          identity_keys: identityKeys,
           searchable_text,
           sources: {
             [sourceKey]: {
@@ -256,7 +288,17 @@ function deriveEmbedFlag(profile: SyncProfile): boolean {
   return false;
 }
 
-function deriveIdentityPrefix(dotPath: string): string {
+/**
+ * Prefix heuristic for the SINGULAR `identityKey` — the path name decides the
+ * namespace. Order matters and must not change: `email` is checked first, so
+ * `emailDomain` derives `email:` (as it has since the feature shipped).
+ * Re-prioritising would silently re-namespace every existing profile's keys
+ * and break the merge they already perform.
+ *
+ * Exported so `sync test` / migrate never re-implement it (they used to, and
+ * the copies drifted).
+ */
+export function deriveIdentityPrefix(dotPath: string): string {
   const lower = dotPath.toLowerCase();
   if (lower.includes('email')) return 'email';
   if (lower.includes('phone')) return 'phone';
@@ -274,12 +316,28 @@ const EMAIL_RE = /[A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
  * value (so display-name headers and comma-lists work, and already-clean
  * emails pass through unchanged). For every other prefix we lowercase/trim the
  * whole scalar value. Objects/arrays/empties yield nothing.
+ *
+ * `fallbackToScalar` makes email extraction ADDITIVE rather than replacing:
+ * when the regex finds no address we fall back to the plain lowercase/trim
+ * scalar. Only the singular `identityKey` sets it, and it has to — the prefix
+ * is derived from the path name, so `identityKey: "emailDomain"` (`acme.com`),
+ * `"email_id"` (`abc123`), or a non-RFC address (`josé@acme.com`,
+ * `jane@localhost`) all get the `email` prefix while carrying no matchable
+ * address. Without the fallback those profiles would silently stop emitting
+ * the entity key they have always emitted. The plural `identityKeys` path
+ * deliberately does NOT fall back: a `To:` header with no address must
+ * contribute nothing rather than dump the whole header into `identity_keys[]`.
  */
-function identityValuesFor(prefix: string, raw: unknown): string[] {
+function identityValuesFor(
+  prefix: string,
+  raw: unknown,
+  opts: { fallbackToScalar?: boolean } = {},
+): string[] {
   if (raw === null || raw === undefined || typeof raw === 'object') return [];
   const s = String(raw);
   if (prefix === 'email') {
-    return (s.match(EMAIL_RE) ?? []).map(e => e.toLowerCase());
+    const found = (s.match(EMAIL_RE) ?? []).map(e => e.toLowerCase());
+    if (found.length > 0 || !opts.fallbackToScalar) return found;
   }
   const v = s.toLowerCase().trim();
   return v ? [v] : [];
@@ -336,7 +394,15 @@ function resolveIdentityPath(root: unknown, path: string): unknown[] {
     for (const cur of frontier) {
       if (cur === null || cur === undefined) continue;
       if (tok.type === 'field') {
-        if (typeof cur === 'object' && !Array.isArray(cur)) next.push((cur as Record<string, unknown>)[tok.name]);
+        // A numeric segment reached with a dot (`ids.0`, `contact.emails.0.address`)
+        // indexes into an array — `getByDotPath` has always done this, and this
+        // resolver must stay a strict superset of it or profiles written against
+        // the old dot-only syntax silently stop producing keys.
+        if (Array.isArray(cur)) {
+          if (/^\d+$/.test(tok.name)) next.push(cur[Number(tok.name)]);
+        } else if (typeof cur === 'object') {
+          next.push((cur as Record<string, unknown>)[tok.name]);
+        }
       } else if (tok.type === 'index') {
         if (Array.isArray(cur)) next.push(cur[tok.i]);
       } else if (tok.type === 'wild') {
@@ -367,6 +433,18 @@ function keysForEntry(record: Record<string, unknown>, prefix: string, path: str
   return out;
 }
 
+/**
+ * A prefix is a key namespace, so it has to be literal: `find-by-key` and the
+ * uniqueness trigger both compare `prefix:value` as plain text. Lowercase +
+ * trim so `"Email"` and `" email "` land on the documented `email:` namespace,
+ * and reject anything that isn't `[a-z0-9_]` (spaces / colons would make the
+ * key unparseable, since `:` is the prefix separator).
+ */
+function normalizePrefix(prefix: string): string | null {
+  const p = prefix.trim().toLowerCase();
+  return /^[a-z0-9_]+$/.test(p) ? p : null;
+}
+
 function dedupe(keys: string[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -379,17 +457,71 @@ function dedupe(keys: string[]): string[] {
 }
 
 /**
+ * The ONE place the singular `identityKey` is turned into an identity. Every
+ * caller that used to inline `String(getByDotPath(rec, identityKey)).toLowerCase().trim()`
+ * (sync runner's `_identity`, enrich's `_identity`, `mem migrate`'s identity
+ * pre-pass) goes through this, otherwise the same record gets `email:jane@acme.com` from
+ * one code path and `email:jane smith <jane@acme.com>` from another and the
+ * two never merge.
+ *
+ * `value` / `key` are only set when the path resolves to EXACTLY ONE candidate.
+ * That guard is the whole point of the type: `keys[]` is the merge + uniqueness
+ * column, so a path that fans out (a comma-list of addresses, an `emails[].v`
+ * wildcard) would hand one record several entity identities. With sync's
+ * `replace: true` that either overwrites another entity's row wholesale or
+ * trips `unique_violation`. Ambiguous → emit nothing and let the profile
+ * author fix the path (`values` is exposed so `sync test` can say so loudly).
+ */
+export interface EntityIdentity {
+  /** Namespace derived from the path (`email` / `phone` / `domain` / `id`). */
+  prefix: string;
+  /** Every distinct normalized candidate the path resolved to. */
+  values: string[];
+  /** The single normalized value, or null when the path is empty/ambiguous. */
+  value: string | null;
+  /** `prefix:value` for `keys[]`, or null when the path is empty/ambiguous. */
+  key: string | null;
+}
+
+export function resolveEntityIdentity(
+  record: Record<string, unknown>,
+  identityKey: string | undefined,
+): EntityIdentity | null {
+  if (!identityKey) return null;
+  const prefix = deriveIdentityPrefix(identityKey);
+  const values = dedupe(
+    resolveIdentityPath(record, identityKey)
+      .flatMap(raw => identityValuesFor(prefix, raw, { fallbackToScalar: true })),
+  );
+  const value = values.length === 1 ? values[0] : null;
+  return { prefix, values, value, key: value ? `${prefix}:${value}` : null };
+}
+
+/**
+ * Normalize a single already-resolved raw identity value the same way
+ * `resolveEntityIdentity` would. For callers that read the value out-of-band
+ * (e.g. `mem migrate`'s SQL pre-pass, which extracts the identity with a JSONB
+ * expression instead of walking the record) and must land on the identical
+ * string or the merge lookup misses.
+ */
+export function normalizeEntityIdentityValue(identityKey: string, raw: unknown): string | null {
+  const values = dedupe(identityValuesFor(deriveIdentityPrefix(identityKey), raw, { fallbackToScalar: true }));
+  return values.length === 1 ? values[0] : null;
+}
+
+/**
  * ENTITY keys — from a profile's singular `identityKey`. These mean "this
  * record IS this entity" and go into `keys[]`, where the store uses them to
  * merge cross-platform records for the same entity (Attio + HubSpot for the
- * same person). Scalar/dot-path resolve, `email`-aware extraction. Deduped.
+ * same person). AT MOST ONE key: see `EntityIdentity` for why a fan-out path
+ * must yield zero rather than several (or a first-match guess).
  */
 export function collectEntityKeys(
   record: Record<string, unknown>,
   profile: Pick<SyncProfile, 'identityKey'>,
 ): string[] {
-  if (!profile.identityKey) return [];
-  return dedupe(keysForEntry(record, deriveIdentityPrefix(profile.identityKey), profile.identityKey));
+  const identity = resolveEntityIdentity(record, profile.identityKey);
+  return identity?.key ? [identity.key] : [];
 }
 
 /**
@@ -399,7 +531,9 @@ export function collectEntityKeys(
  * merge/uniqueness — so a many-participant record keeps its own identity.
  * Each entry's `path` supports `[]` wildcard + `[name=From]` filter fan-out;
  * `email`-prefixed values are email-extracted (handles `"Jane <j@x.com>"` and
- * comma-lists). Deduped, first-seen order preserved.
+ * comma-lists). Prefixes are normalized (`"Email"` → `email`) and validated,
+ * so an entry can't strand its keys in a namespace `mem find-by-key email:…`
+ * will never look in. Deduped, first-seen order preserved.
  */
 export function collectAssociationKeys(
   record: Record<string, unknown>,
@@ -408,7 +542,9 @@ export function collectAssociationKeys(
   const out: string[] = [];
   for (const entry of profile.identityKeys ?? []) {
     if (!entry || !entry.path || !entry.prefix) continue;
-    out.push(...keysForEntry(record, entry.prefix, entry.path));
+    const prefix = normalizePrefix(entry.prefix);
+    if (!prefix) continue; // unusable namespace — drop the entry rather than write garbage keys
+    out.push(...keysForEntry(record, prefix, entry.path));
   }
   return dedupe(out);
 }

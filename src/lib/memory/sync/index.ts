@@ -479,17 +479,36 @@ async function syncTestCommand(
   }
 
   if (report.identityKeysPreview) {
-    const { perRecord, sampleKeys } = report.identityKeysPreview;
+    const { perRecord, sampleKeys, entityFanOut, resolvesAfterEnrich } = report.identityKeysPreview;
     const total = perRecord.reduce((a, b) => a + b, 0);
     const min = perRecord.length ? Math.min(...perRecord) : 0;
     const max = perRecord.length ? Math.max(...perRecord) : 0;
     const mark = total === 0 ? pc.yellow('~') : pc.green('✓');
-    console.log(`\n  ${pc.bold('Identity keys')} ${pc.dim(`(cross-platform — #128)`)}`);
+    // "Merge + identity keys", not "Identity keys": the count below is
+    // collectIdentityKeys = entity keys (singular `identityKey` → keys[]) UNION
+    // association keys (plural `identityKeys` → identity_keys[]). Calling it
+    // "identity keys" would claim everything counted lands in the non-merging
+    // column, which is the one confusion this feature has to avoid.
+    console.log(`\n  ${pc.bold('Merge + identity keys')} ${pc.dim(`(cross-platform — #128)`)}`);
     console.log(`    ${mark} ${perRecord.length} sample${perRecord.length === 1 ? '' : 's'}, ${min}–${max} key${max === 1 ? '' : 's'} per record`);
     if (sampleKeys.length > 0) {
       console.log(`    ${pc.dim('e.g.')} ${sampleKeys.slice(0, 8).map(k => pc.cyan(k)).join(', ')}`);
+    } else if (resolvesAfterEnrich) {
+      // Not a misconfiguration: this profile's participant paths read fields
+      // that only the enrich call fetches, so the list-shape samples shown
+      // here genuinely can't resolve them. Saying "check your paths" would
+      // send the author chasing a bug that isn't there.
+      console.log(`    ${pc.dim('note:')} 0 on these list-shape samples — this profile enriches, and its identityKeys paths resolve in the enrich phase.`);
     } else {
       console.log(`    ${pc.yellow('note:')} no identity keys resolved on these samples — check the identityKey/identityKeys paths.`);
+    }
+    if (entityFanOut) {
+      // Loud, because the failure is otherwise invisible: the profile syncs
+      // fine, it just quietly stops merging across platforms forever.
+      console.log(`    ${pc.yellow('warn:')} identityKey resolved to MULTIPLE values on ${entityFanOut.count} of ${perRecord.length} samples — those records get NO merge key.`);
+      console.log(`          ${pc.dim('saw:')} ${entityFanOut.sampleValues.map(v => pc.cyan(v)).join(', ')}`);
+      console.log(`          ${pc.dim('A singular identityKey means "this record IS this entity", so a fan-out has no safe answer.')}`);
+      console.log(`          ${pc.dim('Point it at a single-valued path, or move it to identityKeys[] for participant associations.')}`);
     }
   }
 
