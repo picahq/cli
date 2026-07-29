@@ -94,6 +94,14 @@ export async function memImportCommand(file: string): Promise<void> {
       data: record.data,
       tags: record.tags,
       keys,
+      // Carry `identity_keys` through (#128). Export writes the whole row, so
+      // the JSONL has them; omitting them here only looked harmless because
+      // re-importing over a store that still holds the record takes the union
+      // branch in mem_upsert_by_keys and preserves what's already there. On the
+      // INSERT path — restore into a wiped store, or a backend swap
+      // (pglite → postgres), which is exactly what export|import is for —
+      // dropping them here loses every participant association permanently.
+      identity_keys: record.identity_keys,
       sources: record.sources,
       searchable_text: record.searchable_text ?? null,
       content_hash: record.content_hash ?? null,

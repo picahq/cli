@@ -3,10 +3,12 @@
  * unified memory store.
  *
  * Idempotent: uses upsertByKeys keyed by `<platform>/<model>:<row-id>` so
- * re-runs over the same files produce zero new writes. Optional identity
- * dedup (--identity) promotes a profile's `identityKey` into a second,
- * cross-source key so Gmail/Attio/Fathom rows about the same person merge
- * into one record.
+ * re-runs over the same files produce zero new writes. An identity pre-pass
+ * (unconditional — there is no flag) promotes a profile's singular
+ * `identityKey` into a second, cross-source merge key so Gmail/Attio/Fathom
+ * rows about the same person merge into one record. It shares
+ * `resolveEntityIdentity` with the sync writer so both paths derive byte-
+ * identical keys; migrate never writes the non-merging `identity_keys[]`.
  *
  * Does not delete legacy files. Pass --cleanup after verifying the import
  * to remove them.
@@ -23,6 +25,7 @@ import { loadBuiltinProfile, getProfilesDir } from '../../lib/memory/sync/builti
 import { openDatabase, listSyncedPlatforms, listTables, countRecords } from '../../lib/memory/sync/db.js';
 import { okJson, requireMemoryInit } from './util.js';
 import { getByDotPath } from '../../lib/dot-path.js';
+import { resolveEntityIdentity, normalizeEntityIdentityValue } from '../../lib/memory/sync/mem-writer.js';
 
 interface MigrateFlags {
   platform?: string;
@@ -226,10 +229,16 @@ export async function memMigrateCommand(flags: MigrateFlags): Promise<void> {
           const keys = [sourceKey];
           let identityValueNorm: string | null = null;
           if (identityKey) {
-            const idValue = getByDotPath(hydrated, identityKey);
-            if (idValue !== undefined && idValue !== null && idValue !== '' && typeof idValue !== 'object') {
-              identityValueNorm = String(idValue).toLowerCase().trim();
-              keys.push(`${deriveIdentityPrefix(identityKey)}:${identityValueNorm}`);
+            // Shared with `sync run` (mem-writer) — migrate used to derive the
+            // prefix and normalize the value with its own copy of the rule, so
+            // a migrated row landed `email:jane smith <jane@acme.com>` while a
+            // later sync of the same person landed `email:jane@acme.com` and
+            // the two never merged. Also yields null on a fan-out path instead
+            // of writing several merge keys for one record.
+            const identity = resolveEntityIdentity(hydrated, identityKey);
+            if (identity?.key) {
+              identityValueNorm = identity.value;
+              keys.push(identity.key);
             }
           }
           // Identity-merge: if an existing row matched this identity in the
@@ -467,7 +476,10 @@ export async function buildIdentityMap(
     for (const row of res.rows) {
       const ident = row.ident;
       if (ident === null || ident === undefined || typeof ident !== 'string') continue;
-      const norm = ident.toLowerCase().trim();
+      // Normalize exactly like the key we're about to push for the incoming
+      // row (email extraction included) — the map is looked up by that value,
+      // so any divergence here turns every merge into a silent duplicate.
+      const norm = normalizeEntityIdentityValue(identityKey, ident);
       if (!norm) continue;
       // First write wins — if two existing rows somehow share the same
       // identity value, merge only into the first and leave the second
@@ -587,13 +599,4 @@ function resolveBuiltinProfilePath(platform: string, model: string): string | nu
   if (!dir) return null;
   const candidate = path.join(dir, platform, `${model}.json`);
   return fs.existsSync(candidate) ? candidate : null;
-}
-
-function deriveIdentityPrefix(path: string): string {
-  // Default heuristic: email-shaped paths get "email:", otherwise "id:".
-  const lower = path.toLowerCase();
-  if (lower.includes('email')) return 'email';
-  if (lower.includes('phone')) return 'phone';
-  if (lower.includes('domain')) return 'domain';
-  return 'id';
 }

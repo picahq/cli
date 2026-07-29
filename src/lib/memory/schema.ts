@@ -12,7 +12,18 @@
  * See docs/plans/unified-memory.md §4 for design rationale.
  */
 
-export const SCHEMA_VERSION = '2.2.0';
+// 2.3.0 (not 2.2.0): main's #171 already shipped 2.2.0 for the active-scoped
+// uniqueness schema, and this branch independently bumped 2.1.0 -> 2.2.0 for
+// identity_keys. Both sides wrote the same literal, so the merge produced no
+// conflict — and `ensureSchema`'s version fast-path below would then skip the
+// identity_keys DDL entirely on any store already stamped 2.2.0 by v1.49/1.50.
+//
+// 2.3.1: `mem_upsert_by_keys`'s BODY changed (NULL p_identity_keys now keeps
+// the stored value instead of clearing it). ensureSchema's sentinel probe only
+// checks that the identity_keys COLUMN exists, which a stale function body
+// passes — so the version is the only thing that re-runs FUNCTIONS_SQL. Bump
+// this on any function-body change, not just on column changes.
+export const SCHEMA_VERSION = '2.3.1';
 
 // `pg_trgm` was in the original mem schema but nothing in the unified query
 // layer uses it; dropped to keep optional-extension backends happy. Can be
@@ -42,6 +53,14 @@ CREATE TABLE IF NOT EXISTS mem_records (
     data JSONB NOT NULL,
     tags TEXT[],
     keys TEXT[],
+    -- Cross-platform identity keys (#128): queryable associations like
+    -- email:jane@acme.com for every participant of a record. UNLIKE keys[],
+    -- these are NOT merge identifiers — they are exempt from the
+    -- key-uniqueness trigger and the upsert overlap-merge, so a Gmail thread
+    -- carrying many participant emails stays its own record instead of
+    -- collapsing into a contact (or into every other thread that shares a
+    -- participant). Queried by "mem find-by-key".
+    identity_keys TEXT[],
 
     sources JSONB NOT NULL DEFAULT '{}',
 
@@ -90,6 +109,12 @@ CREATE TABLE IF NOT EXISTS mem_meta (
     value TEXT NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Additive migration for stores created before identity_keys existed (#128).
+-- Safe to re-run; existing rows get identity_keys populated lazily on their
+-- next sync. CREATE TABLE IF NOT EXISTS above won't add columns to a table
+-- that already exists, so the ALTER is required for upgrades.
+ALTER TABLE mem_records ADD COLUMN IF NOT EXISTS identity_keys TEXT[];
 `;
 
 /**
@@ -110,6 +135,7 @@ export const INDEXES_SQL = `
 CREATE INDEX IF NOT EXISTS idx_records_type         ON mem_records(type);
 CREATE INDEX IF NOT EXISTS idx_records_status       ON mem_records(status);
 CREATE INDEX IF NOT EXISTS idx_records_keys         ON mem_records USING GIN(keys);
+CREATE INDEX IF NOT EXISTS idx_records_identity_keys ON mem_records USING GIN(identity_keys);
 CREATE INDEX IF NOT EXISTS idx_records_tags         ON mem_records USING GIN(tags);
 CREATE INDEX IF NOT EXISTS idx_records_data         ON mem_records USING GIN(data jsonb_path_ops);
 CREATE INDEX IF NOT EXISTS idx_records_sources      ON mem_records USING GIN(sources jsonb_path_ops);
@@ -140,6 +166,25 @@ END $$;
 `;
 
 export const FUNCTIONS_SQL = `
+-- Drop the pre-#128 11-argument mem_upsert_by_keys (no p_identity_keys).
+--
+-- CREATE OR REPLACE cannot change a function's argument list — adding
+-- \`p_identity_keys TEXT[] DEFAULT NULL\` defines a SECOND function rather
+-- than replacing the old one. An upgraded store would then hold both
+-- overloads in pg_proc, and because the 12-arg version's trailing param is
+-- defaultable, an 11-arg call matches BOTH and fails with 42725
+-- "function mem_upsert_by_keys(...) is not unique". Verified on PGlite.
+--
+-- The explicit argument list makes this unambiguous (no 42725 on the DROP
+-- itself) and leaves the 12-arg version untouched, so re-running the block
+-- is a no-op. Only needed here, not in VECTOR_FUNCTIONS_SQL: the vector
+-- variant is a same-signature CREATE OR REPLACE that always runs AFTER this
+-- block (ensureSchema and getFullSchemaSQL both order core functions before
+-- vector functions), so by the time it runs the stale 11-arg entry — whether
+-- it was last written by the core or the vector block — is already gone.
+DROP FUNCTION IF EXISTS mem_upsert_by_keys(
+  TEXT, JSONB, TEXT[], TEXT[], JSONB, TEXT, TEXT, INTEGER, TEXT, TEXT, BOOLEAN);
+
 -- Enforce uniqueness of the "keys" array across ACTIVE records only.
 --
 -- Scoping to active is deliberate: an archived record must not squat on a
@@ -262,7 +307,8 @@ CREATE OR REPLACE FUNCTION mem_upsert_by_keys(
     p_weight INTEGER DEFAULT NULL,
     p_embedding TEXT DEFAULT NULL,
     p_embedding_model TEXT DEFAULT NULL,
-    p_replace BOOLEAN DEFAULT FALSE
+    p_replace BOOLEAN DEFAULT FALSE,
+    p_identity_keys TEXT[] DEFAULT NULL
 ) RETURNS TABLE (id UUID, action TEXT) LANGUAGE plpgsql AS $$
 DECLARE
     existing_id UUID;
@@ -297,6 +343,23 @@ BEGIN
                 ELSE (SELECT ARRAY(SELECT DISTINCT unnest FROM unnest(COALESCE(r.tags, '{}') || COALESCE(p_tags, '{}'))))
             END,
             keys = (SELECT ARRAY(SELECT DISTINCT unnest FROM unnest(COALESCE(r.keys, '{}') || COALESCE(p_keys, '{}')))),
+            -- identity_keys: replace on a replace-sync, otherwise union (never
+            -- drop an association). NOT part of the overlap-merge above.
+            -- Three states, and NULL is NOT the same as '{}' here:
+            --   NULL  → caller has no opinion (profile declares no
+            --           identityKeys, or the record is still the pre-enrich
+            --           shape whose participant fields haven't been fetched
+            --           yet) → KEEP what's stored. Clearing on NULL made
+            --           every sync after the first wipe the column, because
+            --           the unconditional list-phase write resolves nothing
+            --           and enrich only revisits _enriched_at IS NULL rows.
+            --   '{}'  → caller authoritatively resolved zero participants
+            --           → clear, so a removed attendee really disappears.
+            --   {a,b} → replace with exactly these.
+            identity_keys = CASE
+                WHEN p_replace THEN COALESCE(p_identity_keys, r.identity_keys)
+                ELSE (SELECT ARRAY(SELECT DISTINCT unnest FROM unnest(COALESCE(r.identity_keys, '{}') || COALESCE(p_identity_keys, '{}'))))
+            END,
             sources = r.sources || COALESCE(p_sources, '{}'::jsonb),
             searchable_text = CASE
                 WHEN p_replace THEN p_searchable_text
@@ -315,12 +378,13 @@ BEGIN
         result_action := 'updated';
     ELSE
         INSERT INTO mem_records (
-            type, data, tags, keys, sources, searchable_text, content_hash, weight
+            type, data, tags, keys, identity_keys, sources, searchable_text, content_hash, weight
         ) VALUES (
             p_type,
             p_data,
             p_tags,
             p_keys,
+            p_identity_keys,
             COALESCE(p_sources, '{}'::jsonb),
             p_searchable_text,
             p_content_hash,
@@ -342,6 +406,10 @@ $$;
  * signature, embedding-aware body. p_embedding is TEXT in both
  * variants (callers send '[0.1,0.2,...]' literals); the cast to
  * vector happens inside this body via `::vector`.
+ *
+ * If you ever change this signature, change FUNCTIONS_SQL's signature and
+ * its DROP FUNCTION line in the same commit — the two must stay identical or
+ * Postgres ends up with two overloads and every call becomes ambiguous.
  */
 export const VECTOR_FUNCTIONS_SQL = `
 CREATE OR REPLACE FUNCTION mem_upsert_by_keys(
@@ -355,7 +423,8 @@ CREATE OR REPLACE FUNCTION mem_upsert_by_keys(
     p_weight INTEGER DEFAULT NULL,
     p_embedding TEXT DEFAULT NULL,
     p_embedding_model TEXT DEFAULT NULL,
-    p_replace BOOLEAN DEFAULT FALSE
+    p_replace BOOLEAN DEFAULT FALSE,
+    p_identity_keys TEXT[] DEFAULT NULL
 ) RETURNS TABLE (id UUID, action TEXT) LANGUAGE plpgsql AS $$
 DECLARE
     existing_id UUID;
@@ -384,6 +453,13 @@ BEGIN
                 ELSE (SELECT ARRAY(SELECT DISTINCT unnest FROM unnest(COALESCE(r.tags, '{}') || COALESCE(p_tags, '{}'))))
             END,
             keys = (SELECT ARRAY(SELECT DISTINCT unnest FROM unnest(COALESCE(r.keys, '{}') || COALESCE(p_keys, '{}')))),
+            -- identity_keys: replace on replace-sync, else union. Not part of
+            -- the overlap-merge. NULL keeps, '{}' clears, non-empty replaces —
+            -- see the no-vector variant for why NULL must not clear.
+            identity_keys = CASE
+                WHEN p_replace THEN COALESCE(p_identity_keys, r.identity_keys)
+                ELSE (SELECT ARRAY(SELECT DISTINCT unnest FROM unnest(COALESCE(r.identity_keys, '{}') || COALESCE(p_identity_keys, '{}'))))
+            END,
             sources = r.sources || COALESCE(p_sources, '{}'::jsonb),
             searchable_text = CASE
                 WHEN p_replace THEN p_searchable_text
@@ -405,13 +481,14 @@ BEGIN
         result_action := 'updated';
     ELSE
         INSERT INTO mem_records (
-            type, data, tags, keys, sources, searchable_text, content_hash,
+            type, data, tags, keys, identity_keys, sources, searchable_text, content_hash,
             weight, embedding, embedded_at, embedding_model
         ) VALUES (
             p_type,
             p_data,
             p_tags,
             p_keys,
+            p_identity_keys,
             COALESCE(p_sources, '{}'::jsonb),
             p_searchable_text,
             p_content_hash,

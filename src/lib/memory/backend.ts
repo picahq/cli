@@ -85,6 +85,13 @@ export interface UpsertOptions {
    * memories but wrong for synced rows where memory should track the
    * source exactly. Sync callers pass `replace: true`; interactive
    * callers (mem add, mem update) leave it off.
+   *
+   * `replace` governs `data`, `tags`, `searchable_text` and `identity_keys`.
+   * It does NOT govern `keys[]`, which always unions — dropping a merge key
+   * would orphan the record from the source that wrote it. And even under
+   * `replace: true`, a NULL/undefined `identity_keys` KEEPS the stored value
+   * rather than clearing it; only an explicit `[]` clears. See
+   * `RecordInput.identity_keys` for why that three-state contract exists.
    */
   replace?: boolean;
 }
@@ -137,6 +144,24 @@ export interface MemBackend {
   addSource(recordId: string, ref: SourceRefInput): Promise<void>;
   removeSource(recordId: string, sourceKey: string): Promise<boolean>;
   findBySource(sourceKey: string): Promise<MemRecord | null>;
+  /**
+   * Find every record that carries ALL of the given keys across the UNION of
+   * `keys[]` and `identity_keys[]` (cross-platform identity join, #131).
+   * Implementations MUST match both columns, and a single query may be
+   * satisfied by a mix of the two — a record with `keys=['attio:123']` and
+   * `identity_keys=['email:jane@acme.com']` matches a lookup for both.
+   *
+   * `keys[]` holds the merge identifiers (unique across active records);
+   * `identity_keys[]` holds the non-merging participant associations (#128),
+   * which are deliberately exempt from key uniqueness so an N-participant
+   * record stays its own row.
+   *
+   * One key → every record carrying it; multiple keys → the intersection
+   * (records carrying all of them). Excludes archived records unless `status`
+   * says otherwise. Results are ordered by type, then most-recent. Powers
+   * `one mem find-by-key`.
+   */
+  findByKeys(keys: string[], opts?: { type?: string; status?: 'active' | 'archived' | 'all'; limit?: number }): Promise<MemRecord[]>;
   listSources(recordId: string): Promise<SourcesMap>;
 
   // Sync state
