@@ -511,6 +511,35 @@ export function writeUsageLog(lines: string[]): void {
   } catch { /* best-effort */ }
 }
 
+/**
+ * Atomically claim the whole usage log for flushing: rename it aside, read it,
+ * delete the temp copy, and return its lines. Returns null when there's nothing
+ * to claim OR another process already claimed it (the rename throws ENOENT).
+ *
+ * This is what makes rollups concurrency-safe. Multiple parallel CLI processes
+ * each call this; the OS guarantees only ONE rename of a given file succeeds, so
+ * exactly one flush ever owns a batch — eliminating the duplicate "CLI Usage
+ * Rollup" events that happened when every concurrent process read the same log
+ * and emitted it. Commands logged by other processes meanwhile land in a fresh
+ * log and are claimed on a later flush, so nothing is lost.
+ */
+export function claimUsageLog(): string[] | null {
+  const src = usageLogFile();
+  const tmp = `${src}.claim.${process.pid}.${randomUUID()}`;
+  try {
+    fs.renameSync(src, tmp);
+  } catch {
+    return null; // no log yet, or another process claimed it first
+  }
+  try {
+    return fs.readFileSync(tmp, 'utf-8').split('\n').filter(Boolean).slice(-USAGE_LOG_MAX);
+  } catch {
+    return [];
+  } finally {
+    try { fs.rmSync(tmp, { force: true }); } catch { /* best-effort */ }
+  }
+}
+
 /** First-touch bookkeeping so every user is captured on their first command of the day. */
 export interface UsageState { lastDay?: string; distinctId?: string }
 

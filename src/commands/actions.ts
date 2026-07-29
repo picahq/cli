@@ -486,7 +486,15 @@ export async function actionsExecuteCommand(
     } else {
       console.log();
       console.log(pc.bold('Response:'));
-      console.log(JSON.stringify(result.responseData, null, 2));
+      const rd = result.responseData as { text?: unknown; contentType?: unknown } | null;
+      if (rd && typeof rd === 'object' && typeof rd.text === 'string' && 'contentType' in rd) {
+        // Text body (text/plain, text/html, CSV, …) — print it inline rather
+        // than as an escaped JSON string. (#163)
+        if (rd.contentType) console.log(pc.dim(`(${rd.contentType})`));
+        console.log(rd.text);
+      } else {
+        console.log(JSON.stringify(result.responseData, null, 2));
+      }
     }
   } catch (error) {
     spinner.stop('Execution failed');

@@ -45,7 +45,21 @@ Always follow this sequence when the user wants to do something on a connected p
 one --agent connection list
 ```
 
-Returns connected platforms with their connection keys (needed for execution) and platform names in kebab-case (needed for searching).
+Returns connected platforms with their connection keys (needed for execution), platform names in kebab-case (needed for searching), and an `access` field per connection telling you what you may run there.
+
+**Read `access` before you plan a workflow** — it saves you from discovering a restriction as a 403 halfway through:
+
+| `access` | What it means |
+|----------|---------------|
+| `{"policy": "full"}` | Every action on this connection is available |
+| `{"policy": "methods", "methods": ["GET"]}` | Only actions with these HTTP methods will execute — don't propose writes |
+| `{"policy": "actions", "actions": [...]}` | Only these exact actions may run. Each has `actionId`, `title`, `method` — **use them directly and skip `actions search`** |
+
+Two more fields appear only when relevant:
+- `"knowledgeOnly": true` — `actions execute` is disabled. Read knowledge and write integration code instead of executing.
+- `"unresolvedActionIds": [...]` — allowlisted ids that couldn't be looked up; treat them as unavailable and tell the user.
+
+An empty `actions` array means the allowlist grants nothing on that connection — say so rather than searching for alternatives.
 
 ### 1b. Delete a connection
 
@@ -89,7 +103,7 @@ Options:
 - `--dry-run` — Preview the request without executing
 - `--mock` — Return example response without making an API call (useful for building UI)
 - `--skip-validation` — Skip input validation against the action schema
-- `--output <path>` — Save response to a file (for binary downloads like PDFs, images, documents)
+- `--output <path>` — Save response to a file (for binary downloads like PDFs, images, documents). Text responses (text/plain, HTML, CSV, XML) render inline automatically; `--output` is only needed for genuinely binary payloads.
 - `--no-cache` — Bypass the cached action details and re-fetch them; the fresh details still refresh the cache (execution itself is never cached)
 
 The CLI validates required parameters before executing. Missing params return a structured error with the flag name, parameter name, and description. Pass `--skip-validation` to bypass.
@@ -170,9 +184,18 @@ Underneath, the store has no `platform` column — `type` is the only platform-s
 ```bash
 # User memories
 one --agent mem add note '{"content":"..."}' --tags work --weight 7
+one --agent mem update <id> '{"status":"done"}'         # merges into data; refreshes searchable_text
 one --agent mem search "deadline"                       # hybrid if key set, else FTS
 one --agent mem list note --limit 20
 one --agent mem link <from-id> <to-id> relates_to --bi
+
+# Identity keys (first-class column, NOT data). Unique across ACTIVE records;
+# archiving a record frees its keys. `mem update '{"keys":[...]}'` is rejected.
+one --agent mem key <id> --add email:x@y.com            # add/--remove/--set
+one --agent mem find-by-source email:x@y.com            # prefers the active owner
+
+# Backfill searchable_text (no embedding provider needed) — fixes NULL/noisy text
+one --agent mem reindex --searchable --type attio/attioPeople
 
 # Status + diagnostics
 one --agent mem status                                  # backend, provider, _upgrade hint
@@ -229,6 +252,7 @@ one --agent sync test attio/attioPeople --show-searchable
 
 # Run — memory is always written; pass --no-memory to skip (rare)
 one --agent sync run stripe
+one --agent sync schema stripe/customers         # inspect field paths/types before querying
 one --agent sync query stripe/balanceTransactions --where "status=available" --limit 20
 one --agent sync search "refund"                 # hybrid across all synced platforms
 one --agent sync list stripe                     # progress + freshness
@@ -260,7 +284,7 @@ Without declared paths, the default walker concatenates every string in the reco
 One also supports more advanced patterns. Read the relevant reference file before using these:
 
 - **Webhook Relay** — Receive webhooks from a platform and forward to another (e.g., Stripe event -> Slack message). Read `references/relay.md` in this skill's directory for the full workflow.
-- **Multi-step Workflows** — Chain actions across platforms as JSON workflow files (like n8n/Zapier but file-based). Read `references/flows.md` in this skill's directory for the schema and examples.
+- **Multi-step Workflows** — Chain actions across platforms as JSON workflow files (like n8n/Zapier but file-based). Read `references/flows.md` in this skill's directory for the schema and examples. To debug: `flow execute <key> --dry-run` (resolve interpolations without running), `--stop-after <stepId>` (run up to a step then stop), and `flow inspect <runId>` (a past run's per-step outputs).
 
 ## Adding New Connections
 

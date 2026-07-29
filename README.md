@@ -179,7 +179,7 @@ Opens your browser, you authorize, done. The CLI polls until the connection is l
 
 ### `one list`
 
-List your active connections with their status and connection keys.
+List your active connections with their status, connection keys, and what your access config lets you run on each.
 
 ```bash
 one list
@@ -192,6 +192,37 @@ one list
 ```
 
 You need the connection key (rightmost column) when executing actions.
+
+**Access reporting.** Every connection carries an `access` field describing what the current [access control](#one-config) config permits — so an agent knows its reach up front instead of discovering it as a failure mid-workflow. Three policies:
+
+| Policy | Means | Shown when |
+|--------|-------|-----------|
+| `{"policy": "full"}` | Every action on the connection | Default (admin, no action allowlist) |
+| `{"policy": "methods", "methods": ["GET"]}` | Only actions with those HTTP methods | Permission level is `read` or `write` |
+| `{"policy": "actions", "actions": [{"actionId": "...", "title": "...", "method": "..."}]}` | Only these specific actions | An action allowlist is configured |
+
+An action allowlist wins over the permission level (and is then method-filtered by it). When the policy is `actions`, those actions are exactly what may run — no `actions search` needed.
+
+```jsonc
+// one --agent list
+{
+  "total": 2,
+  "showing": 2,
+  "connections": [
+    {
+      "platform": "gmail",
+      "state": "operational",
+      "key": "live::gmail::default::abc123",
+      "access": { "policy": "methods", "methods": ["GET"] }
+    }
+  ],
+  "accessHint": "Permission level \"read\": only GET actions will execute."
+}
+```
+
+`knowledgeOnly: true` appears when knowledge-only mode is on (execution disabled), and `unresolvedActionIds` lists any allowlisted action ids that could not be looked up. In human output, an `Access` column and a summary note appear only when access is actually scoped.
+
+This mirrors the `access` field on the One MCP server's `list_one_integrations` tool, so both surfaces report access the same way.
 
 ### `one connection delete <connection-key>`
 
@@ -272,7 +303,7 @@ one actions execute stripe <actionId> <connectionKey> \
 | `--dry-run` | Show the request without executing it |
 | `--mock` | Return example response without making an API call |
 | `--skip-validation` | Skip input validation against the action schema |
-| `--output <path>` | Save response to a file (for binary downloads) |
+| `--output <path>` | Save response to a file (for genuine binary downloads — PDFs, images). Text responses (text/plain, HTML, CSV, XML) render inline automatically. |
 | `--no-cache` | Bypass the cached action details and re-fetch them; the fresh details still refresh the cache (execution itself is never cached) |
 
 The CLI validates required parameters (path variables, query params, body fields) against the action schema before executing. Missing params return a clear error with the flag name and description. Pass `--skip-validation` to bypass.
@@ -329,8 +360,17 @@ One ships a local memory store (a real Postgres process bootstrapped on demand v
 ```bash
 # User memories — works immediately on a new install
 one mem add note '{"content":"Design review is Thursday"}' --tags work --weight 7
+one mem update <id> '{"status":"done"}'              # merges into data; refreshes searchable_text
 one mem search "design review"                       # hybrid FTS + semantic (if key set)
 one mem list note --limit 20
+
+# Identity keys are a first-class column (unique across ACTIVE records; archiving
+# frees them). Manage them after creation with `mem key` — NOT via `mem update`.
+one mem key <id> --add email:x@y.com                 # also --remove / --set <csv>
+
+# Backfill searchable_text for rows that landed NULL or with UUID-noise-heavy text
+# (drops ids/timestamps, leads with name/title/email). No embedding provider needed.
+one mem reindex --searchable --type attio/attioPeople
 
 # Listing synced platform rows — type is positional and namespaced as <platform>/<model>;
 # there is NO --platform flag and NO platform column in the schema.
@@ -474,8 +514,16 @@ Execute a workflow by key or file path. Pass inputs with repeatable `-i` flags.
 one flow execute welcome-customer \
   -i customerEmail=jane@example.com
 
-# Dry run - validate and show plan without executing
+# Dry run - resolve every step's interpolations and show what they evaluate to,
+# without executing any step (catches wiring bugs without burning API credits)
 one flow execute welcome-customer --dry-run -i customerEmail=jane@example.com
+
+# Stop after a specific step (isolate where a long flow breaks)
+one flow execute welcome-customer --stop-after fetch-user -i customerEmail=jane@example.com
+
+# Combine: run steps up to a point for real, then dry-resolve the suspect step
+# against the REAL accumulated output (so $.steps.* references resolve too)
+one flow execute welcome-customer --dry-run --stop-after send-email -i customerEmail=jane@example.com
 
 # Verbose - show each step as it runs
 one flow execute welcome-customer -v -i customerEmail=jane@example.com
@@ -488,8 +536,9 @@ Press Ctrl+C during execution to pause - the run can be resumed later with `one 
 | Option | What it does |
 |--------|-------------|
 | `-i, --input <name=value>` | Input parameter (repeatable) |
-| `--dry-run` | Validate and show execution plan without running |
+| `--dry-run` | Resolve each step's interpolations and show what they evaluate to, without executing any step. `$.input.*`/`$.env.*` resolve up front; `$.steps.*` refs are reported as deferred (they're produced at runtime). |
 | `--mock` | With `--dry-run`: execute transforms/code with realistic mock API responses |
+| `--stop-after <stepId>` | Execute steps up to and including `<stepId>`, then stop (later steps are not run). Combined with `--dry-run`, runs earlier steps for real and dry-resolves `<stepId>` against their output without executing it. Inspect what ran with `one flow inspect <runId>`. |
 | `--skip-validation` | Skip input validation against action schemas |
 | `--allow-bash` | Allow bash step execution (disabled by default for security) |
 | `-v, --verbose` | Show full request/response for each step |
@@ -530,6 +579,17 @@ one flow runs                    # all runs
 one flow runs welcome-customer   # runs for a specific workflow
 ```
 
+### `one flow inspect <runId>`
+
+Inspect a past (or in-progress) run's per-step outputs — post-mortem debugging without re-running the flow. Every run persists a state file that records each step's output as it completes (and is preserved on failure), so this shows exactly how far the run got and what each step produced.
+
+```bash
+one flow inspect abc123          # truncates large outputs
+one flow inspect abc123 --full   # full, pretty-printed outputs
+```
+
+Pairs with `--stop-after`: run up to a step, then `one flow inspect <runId>` to see its output.
+
 ### `one config`
 
 Configure access control for the MCP server. Optional - full access is the default.
@@ -546,6 +606,8 @@ one config
 | Knowledge-only mode | Enable/disable execution | Off |
 
 Settings propagate automatically to all installed agent configs.
+
+Run [`one list`](#one-list) to see the effect: each connection reports an `access` field describing exactly what these settings let you run on it.
 
 #### `one config skills status` / `one config skills sync`
 

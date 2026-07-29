@@ -4,7 +4,8 @@ import { OneApi } from '../lib/api.js';
 import * as output from '../lib/output.js';
 import { printTable } from '../lib/table.js';
 import { validateFlow } from '../lib/flow-validator.js';
-import { FlowRunner, loadFlowWithMeta, listFlows, saveFlow, resolveFlowPath, flowRequiresBash } from '../lib/flow-runner.js';
+import { FlowRunner, loadFlowWithMeta, listFlows, saveFlow, resolveFlowPath, flowRequiresBash, walkSteps } from '../lib/flow-runner.js';
+import type { DryResolvedStep, DryResolvedRef } from '../lib/flow-engine.js';
 import type { Flow, FlowEvent, StepResult } from '../lib/flow-types.js';
 import type { PermissionLevel } from '../lib/types.js';
 import fs from 'node:fs';
@@ -42,6 +43,53 @@ export async function writeFlowResultFile(
   ws.end();
   await done;
   return abs;
+}
+
+/** Compact, single-line preview of a resolved value for human-readable output. */
+function previewValue(value: unknown, max = 120): string {
+  if (value === undefined) return '<undefined>';
+  let str: string;
+  try { str = typeof value === 'string' ? JSON.stringify(value) : JSON.stringify(value) ?? String(value); }
+  catch { str = String(value); }
+  if (str === undefined) str = String(value);
+  return str.length > max ? `${str.slice(0, max - 1)}…` : str;
+}
+
+/** Render a single dry-run reference line (selector → resolved/deferred/missing). */
+function renderDryRef(ref: DryResolvedRef): string {
+  if (ref.status === 'resolved') {
+    return `${pc.green('✓')} ${ref.selector} ${pc.dim('→')} ${previewValue(ref.value)}`;
+  }
+  if (ref.status === 'deferred') {
+    return `${pc.dim('○')} ${ref.selector} ${pc.dim('→ pending (produced by a later step)')}`;
+  }
+  return `${pc.yellow('!')} ${ref.selector} ${pc.yellow('→ unresolved — check the input/env name')}`;
+}
+
+/** Render the per-step interpolation resolution from a `--dry-run`. */
+function renderDryResolution(steps: DryResolvedStep[]): void {
+  const isExpr = (t: string) => t === 'transform' || t === 'condition' || t === 'while';
+  for (const s of steps) {
+    const label = s.name ? `${s.stepId} ${pc.dim(`"${s.name}"`)}` : s.stepId;
+    console.log(`  ${pc.cyan('▸')} ${label} ${pc.dim(`(${s.type})`)}`);
+    if (s.error !== undefined) {
+      console.log(`      ${pc.red('error')} ${s.error}`);
+    } else if (isExpr(s.type) && s.deferred) {
+      const deps = s.references.map(r => r.selector).join(', ');
+      console.log(`      ${pc.dim('○ pending — depends on')} ${deps} ${pc.dim('(produced by a later step)')}`);
+    } else if (isExpr(s.type)) {
+      console.log(`      ${pc.dim('=')} ${previewValue(s.resolved)}`);
+    }
+    // Declarative refs (expression steps that are deferred already printed theirs above).
+    if (!(isExpr(s.type) && s.deferred)) {
+      for (const ref of s.references) {
+        console.log(`      ${renderDryRef(ref)}`);
+      }
+    }
+    if (!isExpr(s.type) && s.references.length === 0 && s.error === undefined) {
+      console.log(`      ${pc.dim('(no interpolations)')}`);
+    }
+  }
 }
 
 function getConfig() {
@@ -190,7 +238,7 @@ export async function flowCreateCommand(
 
 export async function flowExecuteCommand(
   keyOrPath: string,
-  options: { input?: string[]; dryRun?: boolean; verbose?: boolean; mock?: boolean; allowBash?: boolean; skipValidation?: boolean; outputFile?: string },
+  options: { input?: string[]; dryRun?: boolean; verbose?: boolean; mock?: boolean; allowBash?: boolean; skipValidation?: boolean; outputFile?: string; stopAfter?: string },
 ): Promise<void> {
   output.intro(pc.bgCyan(pc.black(' One Workflow ')));
 
@@ -247,6 +295,21 @@ export async function flowExecuteCommand(
     output.error(msg);
   }
 
+  // --stop-after: fail fast if the target step id doesn't exist (typo), so we
+  // don't run a long flow only to never hit the stop point. See #97.
+  if (options.stopAfter) {
+    const ids = new Set<string>();
+    walkSteps(flow.steps, s => { ids.add(s.id); });
+    if (!ids.has(options.stopAfter)) {
+      const msg = `--stop-after target "${options.stopAfter}" is not a step in workflow "${flow.key}". Known step ids: ${[...ids].join(', ')}`;
+      if (output.isAgentMode()) {
+        output.json({ error: msg, unknownStopAfter: options.stopAfter, stepIds: [...ids] });
+        process.exit(1);
+      }
+      output.error(msg);
+    }
+  }
+
   const inputs = parseInputs(options.input || []);
   const resolvedInputs = await autoResolveConnectionInputs(flow, inputs, api);
 
@@ -263,7 +326,21 @@ export async function flowExecuteCommand(
   };
   process.on('SIGINT', sigintHandler);
 
+  // Debug-mode captures (#97): the engine streams these as events; we hold the
+  // last-seen payloads to render a focused summary after execution returns.
+  let dryRunSteps: DryResolvedStep[] | undefined;
+  let dryResolveTarget: DryResolvedStep | undefined;
+  let stoppedAfter: string | undefined;
+
   const onEvent = (event: FlowEvent): void => {
+    if (event.event === 'flow:dry-run') {
+      dryRunSteps = event.steps as DryResolvedStep[] | undefined;
+    } else if (event.event === 'step:dry-resolve') {
+      dryResolveTarget = event as unknown as DryResolvedStep;
+    } else if (event.event === 'flow:stopped') {
+      stoppedAfter = event.stoppedAfter as string | undefined;
+    }
+
     if (output.isAgentMode()) {
       output.json(event);
     } else if (options.verbose) {
@@ -291,6 +368,7 @@ export async function flowExecuteCommand(
       verbose: options.verbose,
       allowBash: options.allowBash,
       skipValidation: options.skipValidation,
+      stopAfter: options.stopAfter,
       rootDir,
       onEvent,
     });
@@ -298,7 +376,7 @@ export async function flowExecuteCommand(
     process.off('SIGINT', sigintHandler);
 
     if (!options.verbose && !output.isAgentMode()) {
-      execSpinner.stop('Workflow completed');
+      execSpinner.stop(stoppedAfter ? 'Workflow stopped' : dryRunSteps ? 'Dry run complete' : 'Workflow completed');
     }
 
     // --output-file: write the full result to disk (streamed) instead of
@@ -308,17 +386,38 @@ export async function flowExecuteCommand(
       ? await writeFlowResultFile(options.outputFile, { runId, logFile: logPath, status: 'success' }, context.steps)
       : undefined;
 
+    const finalStatus = stoppedAfter ? 'stopped' : 'success';
+
     if (output.isAgentMode()) {
-      output.json(
-        resultFile
-          ? { event: 'workflow:result', runId, logFile: logPath, status: 'success', outputFile: resultFile }
-          : { event: 'workflow:result', runId, logFile: logPath, status: 'success', steps: context.steps },
-      );
+      const envelope: Record<string, unknown> = {
+        event: 'workflow:result', runId, logFile: logPath, statePath: runner.getStatePath(), status: finalStatus,
+      };
+      if (resultFile) envelope.outputFile = resultFile;
+      else envelope.steps = context.steps;
+      if (options.dryRun) envelope.dryRun = true;
+      if (stoppedAfter) envelope.stoppedAfter = stoppedAfter;
+      output.json(envelope);
       return;
     }
 
     if (resultFile) {
       output.note(`Full result written to ${resultFile}`, 'Output');
+    }
+
+    // Plain --dry-run (no stop point): no steps ran — show the resolved
+    // interpolations per step instead of a misleading "0 succeeded" summary. #97
+    if (dryRunSteps && !stoppedAfter) {
+      console.log();
+      renderDryResolution(dryRunSteps);
+      console.log();
+      const missing = dryRunSteps.reduce((n, s) => n + s.references.filter(r => r.status === 'missing').length, 0);
+      output.note(
+        `Dry run — no steps executed. Resolved ${dryRunSteps.length} step(s)` +
+        (missing > 0 ? `; ${pc.yellow(`${missing} unresolved input/env reference(s)`)}` : '') +
+        `.\n${pc.dim('$.steps.* refs resolve at runtime — re-run with --stop-after=<stepId> to resolve them against real output.')}`,
+        'Dry Run',
+      );
+      return;
     }
 
     // Print results summary
@@ -332,7 +431,20 @@ export async function flowExecuteCommand(
     console.log(`  ${pc.dim(`Run ID: ${runId}`)}`);
     console.log(`  ${pc.dim(`Log: ${logPath}`)}`);
 
-    if (options.dryRun) {
+    // --dry-run --stop-after: the steps before the target ran for real; show
+    // the target's interpolations resolved against that real context. #97
+    if (dryResolveTarget) {
+      console.log();
+      console.log(`  ${pc.dim(`Resolved (not executed) "${dryResolveTarget.stepId}":`)}`);
+      renderDryResolution([dryResolveTarget]);
+    }
+
+    if (stoppedAfter) {
+      output.note(
+        `Stopped after step "${stoppedAfter}". Inspect step outputs with: ${pc.cyan(`one flow inspect ${runId}`)}`,
+        'Stopped',
+      );
+    } else if (options.dryRun) {
       output.note('Dry run — no steps were executed', 'Dry Run');
     }
   } catch (error) {
@@ -561,6 +673,81 @@ export async function flowRunsCommand(flowKey?: string): Promise<void> {
       steps: String(r.completedSteps.length),
     })),
   );
+  console.log();
+}
+
+/**
+ * Inspect a past (or in-progress) run's per-step outputs from its persisted
+ * state file — post-mortem debugging without re-running the flow. The state
+ * file is written incrementally as each step completes and is preserved on
+ * failure, so it captures exactly how far the run got and what each step
+ * produced. See #97.
+ */
+export async function flowInspectCommand(runId: string, options: { full?: boolean } = {}): Promise<void> {
+  output.intro(pc.bgCyan(pc.black(' One Workflow ')));
+
+  const state = FlowRunner.loadRunState(runId);
+  if (!state) {
+    const msg = `No run found for id "${runId}". List runs with: one flow runs`;
+    if (output.isAgentMode()) {
+      output.json({ error: msg, runId });
+      process.exit(1);
+    }
+    output.error(msg);
+    return;
+  }
+
+  const statePath = FlowRunner.statePathFor(state.flowKey, state.runId);
+  const stepEntries = Object.entries(state.context.steps || {});
+
+  if (output.isAgentMode()) {
+    output.json({
+      runId: state.runId,
+      flowKey: state.flowKey,
+      status: state.status,
+      startedAt: state.startedAt,
+      completedAt: state.completedAt,
+      pausedAt: state.pausedAt,
+      currentStepId: state.currentStepId,
+      inputs: state.inputs,
+      steps: state.context.steps,
+      statePath,
+    });
+    return;
+  }
+
+  console.log();
+  console.log(`  ${pc.bold(state.flowKey)} ${pc.dim(`run ${state.runId}`)}  ${colorStatus(state.status)}`);
+  console.log(`  ${pc.dim(`Started: ${state.startedAt}${state.completedAt ? `  ·  Ended: ${state.completedAt}` : ''}`)}`);
+  if (state.currentStepId) console.log(`  ${pc.dim(`Current step: ${state.currentStepId}`)}`);
+  console.log();
+
+  if (stepEntries.length === 0) {
+    output.note('No step outputs recorded yet for this run.', 'Steps');
+  } else {
+    for (const [id, result] of stepEntries) {
+      const icon = result.status === 'success' ? pc.green('✓')
+        : result.status === 'skipped' ? pc.dim('○')
+        : result.status === 'timeout' ? pc.yellow('⧖')
+        : pc.red('✗');
+      const dur = result.durationMs !== undefined ? pc.dim(` ${result.durationMs}ms`) : '';
+      const retries = result.retries ? pc.dim(` (${result.retries} retr${result.retries === 1 ? 'y' : 'ies'})`) : '';
+      console.log(`  ${icon} ${id} ${pc.dim(`[${result.status}]`)}${dur}${retries}`);
+      if (result.error) {
+        console.log(`      ${pc.red('error')} ${result.error}${result.errorCode ? pc.dim(` (${result.errorCode})`) : ''}`);
+      }
+      if (result.output !== undefined) {
+        const json = JSON.stringify(result.output, null, options.full ? 2 : 0) ?? String(result.output);
+        const shown = options.full || json.length <= 240 ? json : `${json.slice(0, 239)}…  ${pc.dim('(--full for all)')}`;
+        const indented = options.full ? shown.split('\n').map(l => `        ${l}`).join('\n') : `      ${pc.dim('output')} ${shown}`;
+        console.log(indented);
+      }
+    }
+  }
+
+  console.log();
+  console.log(`  ${pc.dim(`State: ${statePath}`)}`);
+  console.log(`  ${pc.dim(`Log:   ${path.join('.one/flows/.logs', `${state.flowKey}-${state.runId}.log`)}`)}`);
   console.log();
 }
 

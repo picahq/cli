@@ -11,13 +11,18 @@ import { validateActionInput } from './validate.js';
 import type {
   Flow,
   FlowStep,
+  FlowStepType,
   FlowContext,
   StepResult,
   FlowEvent,
   FlowExecuteOptions,
   FlowActionConfig,
+  FileReadSchema,
+  FileReadFieldSchema,
+  FileReadSchemaLeafType,
 } from './flow-types.js';
 import { getByDotPath, setByDotPath } from './dot-path.js';
+import { getNestedStepsKeys } from './flow-schema.js';
 
 const execAsync = promisify(exec);
 
@@ -46,6 +51,126 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, stepId: string):
   return Promise.race([promise, timeoutPromise]).finally(() => {
     if (timer) clearTimeout(timer);
   }) as Promise<T>;
+}
+
+/**
+ * Thrown when a `file-read` step's parsed output fails its declared
+ * `fileRead.schema`. Carries `errorCode: 'SCHEMA_VALIDATION'` so it rides the
+ * existing onError/retry/fallback machinery (matchable via retryOn/failFastOn).
+ * See cli#80.
+ */
+class FileReadSchemaError extends Error {
+  errorCode = 'SCHEMA_VALIDATION' as const;
+  constructor(stepId: string, violations: string[]) {
+    super(`Step "${stepId}" output failed schema validation: ${violations.join('; ')}`);
+    this.name = 'FileReadSchemaError';
+  }
+}
+
+/** Normalize a field rule (bare type string → descriptor). */
+function asFieldSchema(node: FileReadSchemaLeafType | FileReadFieldSchema): FileReadFieldSchema {
+  return typeof node === 'string' ? { type: node } : node;
+}
+
+function actualType(v: unknown): string {
+  if (v === null) return 'null';
+  if (Array.isArray(v)) return 'array';
+  return typeof v; // 'string' | 'number' | 'boolean' | 'object' | 'undefined'
+}
+
+/** True when `v` matches the leaf type (`unknown` always matches). */
+function matchesLeafType(v: unknown, t: FileReadSchemaLeafType): boolean {
+  switch (t) {
+    case 'unknown': return true;
+    case 'null': return v === null;
+    case 'array': return Array.isArray(v);
+    case 'object': return v !== null && typeof v === 'object' && !Array.isArray(v);
+    default: return typeof v === t; // string | number | boolean
+  }
+}
+
+/** Recursively collect human-readable violations of `value` against a field map. */
+function isPlainObjectValue(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === 'object' && !Array.isArray(v);
+}
+
+function collectFileReadViolations(value: unknown, schema: FileReadSchema, basePath: string, out: string[]): void {
+  // The root (and any `properties` object) is validated key-by-key. A
+  // non-object here is itself a violation — report it clearly rather than
+  // silently passing (e.g. an all-optional schema against a bare array/scalar)
+  // or attributing it to a missing required field. See cli#80 review.
+  if (!isPlainObjectValue(value)) {
+    const where = basePath ? `at "${basePath.replace(/\.$/, '')}"` : 'at the root';
+    out.push(`expected an object ${where} but got ${actualType(value)}`);
+    return;
+  }
+  const obj = value;
+  for (const [field, raw] of Object.entries(schema)) {
+    const rule = asFieldSchema(raw);
+    const path = `${basePath}${field}`;
+    const present = Object.prototype.hasOwnProperty.call(obj, field) && obj[field] !== undefined;
+
+    if (!present) {
+      if (rule.required) out.push(`field "${path}" is required but missing`);
+      continue; // absent optional field — nothing else to check
+    }
+    checkFileReadRule(obj[field], rule, path, out);
+  }
+}
+
+/** Validate a single present value against its field rule. */
+function checkFileReadRule(value: unknown, rule: FileReadFieldSchema, path: string, out: string[]): void {
+  if (rule.type && !matchesLeafType(value, rule.type)) {
+    out.push(`field "${path}" expected ${rule.type} but got ${actualType(value)}`);
+    return; // type wrong — downstream checks would be noise
+  }
+  // Array.isArray guard so a malformed schema reaching runtime (e.g. via
+  // --skip-validation, where the load-time enum-shape check is bypassed)
+  // degrades to a no-op instead of throwing a raw TypeError without errorCode.
+  if (Array.isArray(rule.enum) && !rule.enum.some(e => e === value)) {
+    out.push(`field "${path}" value ${JSON.stringify(value)} is not one of [${rule.enum.map(e => JSON.stringify(e)).join(', ')}]`);
+  }
+  // Array constraints. `items`/`minItems`/`maxItems`/`length` require
+  // `type:'array'` (enforced at load time), so a non-array value is already
+  // caught above; this block is defensive for the --skip-validation path too.
+  const hasArrayConstraint =
+    rule.items !== undefined || rule.minItems !== undefined || rule.maxItems !== undefined || rule.length !== undefined;
+  if (hasArrayConstraint) {
+    if (!Array.isArray(value)) {
+      if (!rule.type) out.push(`field "${path}" expected array but got ${actualType(value)}`);
+    } else {
+      if (rule.length !== undefined && value.length !== rule.length) {
+        out.push(`field "${path}" expected array of length ${rule.length} but got length ${value.length}`);
+      }
+      if (rule.minItems !== undefined && value.length < rule.minItems) {
+        out.push(`field "${path}" expected at least ${rule.minItems} item${rule.minItems === 1 ? '' : 's'} but got ${value.length}`);
+      }
+      if (rule.maxItems !== undefined && value.length > rule.maxItems) {
+        out.push(`field "${path}" expected at most ${rule.maxItems} item${rule.maxItems === 1 ? '' : 's'} but got ${value.length}`);
+      }
+      if (rule.items !== undefined) {
+        const itemRule = asFieldSchema(rule.items);
+        value.forEach((el, i) => checkFileReadRule(el, itemRule, `${path}[${i}]`, out));
+      }
+    }
+  }
+  // `properties` requires `type:'object'` (enforced at load time). Self-enforce
+  // here too so a non-object value yields a clear violation rather than a
+  // silently-skipped nested schema.
+  if (rule.properties) {
+    if (isPlainObjectValue(value)) {
+      collectFileReadViolations(value, rule.properties, `${path}.`, out);
+    } else if (!rule.type) {
+      out.push(`field "${path}" expected object but got ${actualType(value)}`);
+    }
+  }
+}
+
+/** Throw a single FileReadSchemaError enumerating every violation (empty ⇒ ok). */
+export function assertMatchesFileReadSchema(value: unknown, schema: FileReadSchema, stepId: string): void {
+  const violations: string[] = [];
+  collectFileReadViolations(value, schema, '', violations);
+  if (violations.length > 0) throw new FileReadSchemaError(stepId, violations);
 }
 
 /**
@@ -285,6 +410,219 @@ export function evaluateCondition(expr: string, context: FlowContext): boolean {
     if (err instanceof TypeError) return false;
     throw err;
   }
+}
+
+// ── Debug / Inspect (issue #97) ──
+
+/**
+ * Internal control-flow signal thrown to halt a flow cleanly once the
+ * `--stop-after` target has run (or been dry-resolved). It is NOT an error:
+ * `executeSteps` lets it propagate without emitting a `step:error`, and
+ * `executeFlow` catches it and returns the partial context as a clean stop.
+ */
+export class FlowStopSignal extends Error {
+  constructor(public readonly stepId: string) {
+    super(`Flow stopped after step "${stepId}"`);
+    this.name = 'FlowStopSignal';
+  }
+}
+
+export type DryRefStatus = 'resolved' | 'deferred' | 'missing';
+
+export interface DryResolvedRef {
+  /** The `$.`-selector exactly as it appears in the step config. */
+  selector: string;
+  /** What the selector resolves to against the current context (undefined if unresolved). */
+  value: unknown;
+  status: DryRefStatus;
+}
+
+export interface DryResolvedStep {
+  stepId: string;
+  name?: string;
+  type: FlowStepType;
+  /**
+   * Per-selector resolution for declarative steps (action data, paths, etc.).
+   * For a `deferred` expression step, holds the `$.steps.*`/`$.loop.*` entries
+   * it's waiting on.
+   */
+  references: DryResolvedRef[];
+  /** Fully-resolved config (declarative) or the evaluated value (transform/condition/while). */
+  resolved?: unknown;
+  /**
+   * Expression step whose evaluation can't complete yet because it reads the
+   * output of a step (or loop var) that hasn't run — i.e. it WILL resolve at
+   * runtime, it's not a bug. Distinct from `error`, which flags a genuine
+   * problem (syntax error, missing input, missing field on a step that ran).
+   */
+  deferred?: boolean;
+  /** Populated when evaluating an expression step's expression threw for a real reason. */
+  error?: string;
+}
+
+// Matches a `$.`-rooted selector token, e.g. `$.input.email`,
+// `$.steps.fetch.output.items`, `$.steps.list.output[0].id`.
+const DRY_SELECTOR_TOKEN = /\$\.[A-Za-z0-9_$]+(?:[.[][A-Za-z0-9_$*\]]+)*/g;
+
+function extractSelectors(str: string): string[] {
+  return str.match(DRY_SELECTOR_TOKEN) ?? [];
+}
+
+/** Invoke `visit` for every string value inside an arbitrary config value. */
+function walkConfigStrings(value: unknown, visit: (s: string) => void): void {
+  if (typeof value === 'string') {
+    visit(value);
+  } else if (Array.isArray(value)) {
+    for (const v of value) walkConfigStrings(v, visit);
+  } else if (value && typeof value === 'object') {
+    for (const v of Object.values(value)) walkConfigStrings(v, visit);
+  }
+}
+
+function classifyDryRef(selector: string, value: unknown): DryRefStatus {
+  if (value !== undefined) return 'resolved';
+  // `$.steps.*` / `$.loop.*` are populated as the flow runs, so an undefined
+  // value pre-execution just means "not produced yet", not a wiring bug.
+  if (selector.startsWith('$.steps.') || selector.startsWith('$.loop.')) return 'deferred';
+  // `$.input.*` / `$.env.*` are known up front — an undefined value here is the
+  // actionable signal (typo, missing input, wrong field name).
+  return 'missing';
+}
+
+/**
+ * For a JS expression that threw while dry-resolving, find the `$.steps.X` /
+ * `$.loop.X` ENTRIES it reads that don't exist in the context yet. A non-empty
+ * result means the throw is almost certainly "depends on a step that runs
+ * later" (deferred), not a real bug.
+ *
+ * We test the entry root (`$.steps.greet`), not the full selector: if the step
+ * ran but a sub-field is missing (`$.steps.greet.output.typo`), the root
+ * resolves, so it's NOT reported here and the original error stands — that's a
+ * genuine wiring mistake worth surfacing.
+ */
+function expressionDeferredOn(expr: string, context: FlowContext): string[] {
+  const deps = new Set<string>();
+  for (const selector of extractSelectors(expr)) {
+    if (!selector.startsWith('$.steps.') && !selector.startsWith('$.loop.')) continue;
+    const parts = selector.split(/[.[]/); // ['$', 'steps', 'greet', 'output', ...]
+    if (parts.length < 3) continue;
+    const root = `${parts[0]}.${parts[1]}.${parts[2]}`; // '$.steps.greet'
+    if (resolveSelector(root, context) === undefined) deps.add(root);
+  }
+  return [...deps];
+}
+
+/**
+ * The declarative, interpolation-bearing subset of a step's config — the part
+ * worth resolving in a dry run. Excludes nested step arrays (those are visited
+ * as their own steps) and `$`-driven JS expressions (handled by evaluation).
+ */
+function stepInterpolationSource(step: FlowStep): unknown {
+  switch (step.type) {
+    case 'action': {
+      const a = step.action;
+      if (!a) return {};
+      return {
+        platform: a.platform, actionId: a.actionId,
+        connectionKey: a.connectionKey, connection: a.connection,
+        pathVars: a.pathVars, queryParams: a.queryParams, headers: a.headers, data: a.data,
+      };
+    }
+    case 'paginate': {
+      const a = step.paginate?.action;
+      return a
+        ? { platform: a.platform, actionId: a.actionId, connectionKey: a.connectionKey, connection: a.connection, pathVars: a.pathVars, queryParams: a.queryParams, headers: a.headers, data: a.data }
+        : {};
+    }
+    case 'file-read': return { path: step.fileRead?.path };
+    case 'file-write': return { path: step.fileWrite?.path, content: step.fileWrite?.content };
+    case 'loop': return { over: step.loop?.over };
+    case 'flow': return { inputs: step.flow?.inputs };
+    case 'bash': return { command: step.bash?.command, cwd: step.bash?.cwd, env: step.bash?.env };
+    default: return {};
+  }
+}
+
+/**
+ * Resolve a single step's interpolations against the current context WITHOUT
+ * executing it. Declarative steps report a per-selector reference table plus a
+ * fully-substituted config; expression steps (transform/condition/while) report
+ * the evaluated value, or — if evaluation can't complete because it reads a
+ * step/loop value not yet produced — a `deferred` flag, or a real `error`.
+ * Powers `--dry-run` (issue #97).
+ */
+export function dryResolveStep(step: FlowStep, context: FlowContext): DryResolvedStep {
+  const base = { stepId: step.id, name: step.name, type: step.type };
+
+  // Expression steps: evaluating the whole expression is more honest than
+  // tokenizing arbitrary JS (which would misread `.map(...)`/`.length` as paths).
+  const expr =
+    step.type === 'transform' ? step.transform?.expression :
+    step.type === 'condition' ? step.condition?.expression :
+    step.type === 'while' ? step.while?.condition :
+    undefined;
+  if (step.type === 'transform' || step.type === 'condition' || step.type === 'while') {
+    if (!expr) return { ...base, references: [] };
+    try {
+      return { ...base, references: [], resolved: evaluateExpression(expr, context) };
+    } catch (err) {
+      // A TypeError ("Cannot read properties of undefined") usually means the
+      // expression walked into a step output that hasn't been produced yet.
+      // If we can pin it on a not-yet-run $.steps/$.loop entry, report it as
+      // deferred (it'll resolve at runtime) instead of an alarming raw error.
+      // Re-run with --stop-after=<thatStep> to resolve it for real.
+      if (err instanceof TypeError) {
+        const deps = expressionDeferredOn(expr, context);
+        if (deps.length > 0) {
+          return {
+            ...base,
+            references: deps.map(selector => ({ selector, value: undefined, status: 'deferred' as const })),
+            deferred: true,
+          };
+        }
+      }
+      return { ...base, references: [], error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  // Declarative steps: collect every `$.`-selector, resolve and classify each.
+  const src = stepInterpolationSource(step);
+  const references: DryResolvedRef[] = [];
+  const seen = new Set<string>();
+  walkConfigStrings(src, s => {
+    for (const selector of extractSelectors(s)) {
+      if (seen.has(selector)) continue;
+      seen.add(selector);
+      const value = resolveSelector(selector, context);
+      references.push({ selector, value, status: classifyDryRef(selector, value) });
+    }
+  });
+  let resolved: unknown;
+  try { resolved = resolveValue(src, context); } catch { /* leave undefined */ }
+  return { ...base, references, resolved };
+}
+
+/**
+ * Dry-resolve every step in a flow (recursing into nested blocks) against the
+ * given context. Used by the no-stop `--dry-run` plan view, where nothing runs,
+ * so `$.steps.*` / `$.loop.*` refs are reported as `deferred`.
+ */
+export function dryResolveAllSteps(steps: FlowStep[], context: FlowContext): DryResolvedStep[] {
+  const out: DryResolvedStep[] = [];
+  const visit = (list: FlowStep[]): void => {
+    for (const step of list) {
+      out.push(dryResolveStep(step, context));
+      const config = step as unknown as Record<string, unknown>;
+      for (const { configKey, fieldName } of getNestedStepsKeys()) {
+        const block = config[configKey] as Record<string, unknown> | undefined;
+        if (block && Array.isArray(block[fieldName])) {
+          visit(block[fieldName] as FlowStep[]);
+        }
+      }
+    }
+  };
+  visit(steps);
+  return out;
 }
 
 // ── Dot-path Helpers (for pagination) ──
@@ -789,6 +1127,11 @@ function executeFileReadStep(step: FlowStep, context: FlowContext): StepResult {
   const resolvedPath = path.resolve(filePath);
   const content = fs.readFileSync(resolvedPath, 'utf-8');
   const output = config.parseJson ? JSON.parse(stripCodeFences(content)) : content;
+  // Optional runtime shape check on the parsed output (cli#80). Throws a
+  // FileReadSchemaError that the executeSingleStep catch routes through onError.
+  if (config.parseJson && config.schema) {
+    assertMatchesFileReadSchema(output, config.schema, step.id);
+  }
   return { status: 'success', output, response: output };
 }
 
@@ -1202,17 +1545,21 @@ export async function executeSingleStep(
 
   const startTime = Date.now();
   let lastError: Error | undefined;
-  const maxAttempts = (step.onError?.strategy === 'retry' && step.onError.retries) ? step.onError.retries + 1 : 1;
+  // Effective error config: the step's own `onError`, else the flow-level
+  // `defaultOnError` (cli#93). Resolved once and used for every retry/strategy
+  // decision below so a step inherits the flow default unless it overrides.
+  const onError = step.onError ?? context._defaultOnError;
+  const maxAttempts = (onError?.strategy === 'retry' && onError.retries) ? onError.retries + 1 : 1;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       if (attempt > 1) {
-        const delay = computeRetryDelay(step.onError!, attempt);
+        const delay = computeRetryDelay(onError!, attempt);
         options.onEvent?.({
           event: 'step:retry',
           stepId: step.id,
           attempt,
-          maxRetries: step.onError!.retries!,
+          maxRetries: onError!.retries!,
           delayMs: delay,
         });
         await sleep(delay);
@@ -1315,6 +1662,11 @@ export async function executeSingleStep(
       context.steps[step.id] = result;
       return result;
     } catch (err) {
+      // A stop signal raised inside a nested block (loop/parallel/condition/
+      // while/flow) is control flow, not a step failure: never retry it and
+      // never route it through onError — let it unwind to executeFlow. See #97.
+      if (err instanceof FlowStopSignal) throw err;
+
       lastError = err instanceof Error ? err : new Error(String(err));
 
       if (attempt === maxAttempts) {
@@ -1324,9 +1676,9 @@ export async function executeSingleStep(
 
       // Conditional retry (cli#53): if retryOn/failFastOn are set, decide
       // whether THIS particular error should be retried at all.
-      if (step.onError?.strategy === 'retry' &&
-          (step.onError.retryOn || step.onError.failFastOn)) {
-        const decision = shouldRetryError(lastError, step.onError);
+      if (onError?.strategy === 'retry' &&
+          (onError.retryOn || onError.failFastOn)) {
+        const decision = shouldRetryError(lastError, onError);
         if (!decision.retry) {
           options.onEvent?.({
             event: 'step:retry-skip',
@@ -1342,7 +1694,7 @@ export async function executeSingleStep(
 
   // Handle error with strategy
   const errorMessage = lastError?.message || 'Unknown error';
-  const strategy = step.onError?.strategy || 'fail';
+  const strategy = onError?.strategy || 'fail';
   const retriesUsed = Math.max(0, maxAttempts - 1);
   const isTimeout = lastError instanceof StepTimeoutError;
   const errorCode = (lastError as { errorCode?: string } | undefined)?.errorCode;
@@ -1359,7 +1711,7 @@ export async function executeSingleStep(
     return result;
   }
 
-  if (strategy === 'fallback' && step.onError?.fallbackStepId) {
+  if (strategy === 'fallback' && onError?.fallbackStepId) {
     // The fallback step must already be defined in the flow
     // We mark this step as failed and the caller should handle fallback
     const result: StepResult = {
@@ -1389,11 +1741,28 @@ export async function executeSteps(
 ): Promise<StepResult[]> {
   const results: StepResult[] = [];
 
+  // Treat `--dry-run` (without `--mock`) as "resolve, don't execute". With
+  // `--mock` the flow still executes against mocked APIs, so stop-after there
+  // means "stop after the (mock-)executed target", not "dry-resolve it".
+  const isDryResolve = !!options.dryRun && !options.mock;
+
   for (const step of steps) {
     // Skip already-completed steps (for resume)
     if (completedStepIds?.has(step.id)) {
       results.push(context.steps[step.id] || { status: 'success' });
       continue;
+    }
+
+    // --dry-run --stop-after=<target>: steps before the target ran for real;
+    // resolve the target's interpolations against that real context and halt
+    // WITHOUT executing it. See #97.
+    if (isDryResolve && options.stopAfter === step.id) {
+      options.onEvent?.({
+        event: 'step:dry-resolve',
+        ...dryResolveStep(step, context),
+        timestamp: new Date().toISOString(),
+      });
+      throw new FlowStopSignal(step.id);
     }
 
     options.onEvent?.({
@@ -1416,6 +1785,10 @@ export async function executeSteps(
         retries: result.retries,
       });
     } catch (error) {
+      // A stop signal raised by a nested block is control flow, not a failure —
+      // let it bubble without emitting a spurious step:error for the parent.
+      if (error instanceof FlowStopSignal) throw error;
+
       const errorMsg = error instanceof Error ? error.message : String(error);
 
       options.onEvent?.({
@@ -1426,6 +1799,12 @@ export async function executeSteps(
       });
 
       throw error;
+    }
+
+    // --stop-after=<target> (real or mock execution): the target just ran, so
+    // halt before any later step. See #97.
+    if (!isDryResolve && options.stopAfter === step.id) {
+      throw new FlowStopSignal(step.id);
     }
   }
 
@@ -1522,18 +1901,25 @@ export async function executeFlow(
     loop: {},
   };
   context.input = resolvedInputs;
+  // Per-flow error default — steps without their own `onError` inherit this.
+  // Set on the context (not options) so a sub-flow's executeFlow scopes its
+  // own default rather than leaking the parent's. See cli#93.
+  context._defaultOnError = flow.defaultOnError;
 
   const completedStepIds = resumeState
     ? new Set(resumeState.completedSteps)
     : undefined;
 
-  // Feature 7: dry-run without mock — existing behavior
-  if (options.dryRun && !options.mock) {
+  // Feature 7: dry-run without mock — resolve interpolations, don't execute.
+  // When combined with `--stop-after`, we DON'T take this early path: the
+  // steps before the target must run for real so the target resolves against
+  // real upstream output (handled in executeSteps). See #97.
+  if (options.dryRun && !options.mock && !options.stopAfter) {
     options.onEvent?.({
       event: 'flow:dry-run',
       flowKey: flow.key,
       resolvedInputs,
-      steps: flow.steps.map(s => ({ id: s.id, name: s.name, type: s.type })),
+      steps: dryResolveAllSteps(flow.steps, context),
       timestamp: new Date().toISOString(),
     });
     return context;
@@ -1566,6 +1952,25 @@ export async function executeFlow(
       stepsSkipped: skipped,
     });
   } catch (error) {
+    // --stop-after halts via a FlowStopSignal once the target step is done
+    // (or dry-resolved). That's a clean stop, not a failure: report what ran
+    // and return the partial context. See #97.
+    if (error instanceof FlowStopSignal) {
+      const stepEntries = Object.values(context.steps);
+      options.onEvent?.({
+        event: 'flow:stopped',
+        flowKey: flow.key,
+        stoppedAfter: error.stepId,
+        dryRun: !!options.dryRun && !options.mock,
+        durationMs: Date.now() - flowStart,
+        stepsCompleted: stepEntries.filter(s => s.status === 'success').length,
+        stepsFailed: stepEntries.filter(s => s.status === 'failed').length,
+        stepsSkipped: stepEntries.filter(s => s.status === 'skipped').length,
+        timestamp: new Date().toISOString(),
+      });
+      return context;
+    }
+
     const errorMsg = error instanceof Error ? error.message : String(error);
 
     options.onEvent?.({

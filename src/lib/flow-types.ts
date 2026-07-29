@@ -64,9 +64,47 @@ export interface FlowParallelConfig {
   maxConcurrency?: number;
 }
 
+export type FileReadSchemaLeafType =
+  | 'string' | 'number' | 'boolean' | 'object' | 'array' | 'null' | 'unknown';
+
+/**
+ * Per-field rule for a `fileRead.schema`. A field value may be a bare type
+ * string (shorthand for `{ type }`, optional) or this descriptor.
+ */
+export interface FileReadFieldSchema {
+  /** Expected type. `unknown` passes anything; `array`/`object` checked structurally. */
+  type?: FileReadSchemaLeafType;
+  /** Field must be present (not undefined). Default false — matches FlowOutputSchema. */
+  required?: boolean;
+  /** Value must strictly equal one of these. */
+  enum?: (string | number | boolean | null)[];
+  /** Schema applied to each element when `type: 'array'`. */
+  items?: FileReadSchemaLeafType | FileReadFieldSchema;
+  /** Array length lower/upper bounds. */
+  minItems?: number;
+  maxItems?: number;
+  /** Exact array length. */
+  length?: number;
+  /** Nested field schema when `type: 'object'`. */
+  properties?: FileReadSchema;
+}
+
+/** A `fileRead.schema`: field name → leaf type (shorthand) or a field descriptor. */
+export type FileReadSchema = {
+  [field: string]: FileReadSchemaLeafType | FileReadFieldSchema;
+};
+
 export interface FlowFileReadConfig {
   path: string;
   parseJson?: boolean;
+  /**
+   * Optional runtime shape check applied to the PARSED output (only consulted
+   * when `parseJson: true`). Unlike `step.outputSchema` — which is a
+   * documentation/wiring aid the engine never enforces — a mismatch here
+   * THROWS (errorCode `SCHEMA_VALIDATION`) and is handled by the step's
+   * `onError`. Absent ⇒ no check, behaviour unchanged. See cli#80.
+   */
+  schema?: FileReadSchema;
 }
 
 export interface FlowFileWriteConfig {
@@ -221,6 +259,14 @@ export interface Flow {
   version?: string;
   inputs: Record<string, FlowInputDeclaration>;
   steps: FlowStep[];
+  /**
+   * Flow-wide default error strategy. Every step that does not declare its own
+   * `onError` inherits this; a step opts out by setting its own `onError`
+   * (e.g. `{ strategy: "fail" }` to stay fatal in an otherwise continue-on-error
+   * flow). Scoped per-flow — a sub-flow uses its own `defaultOnError`, not the
+   * parent's. See cli#93.
+   */
+  defaultOnError?: FlowStepErrorConfig;
 }
 
 export interface StepResult {
@@ -256,6 +302,13 @@ export interface FlowContext {
    * the run's lifetime is safe.
    */
   _connections?: import('./types.js').Connection[];
+  /**
+   * The running flow's `defaultOnError`, set by `executeFlow` so the step
+   * executor can fall back to it for steps without their own `onError`.
+   * Per-flow scoped — each (sub-)flow's `executeFlow` builds its own context
+   * and sets its own default. See cli#93.
+   */
+  _defaultOnError?: FlowStepErrorConfig;
 }
 
 export interface FlowRunState {
@@ -282,6 +335,14 @@ export interface FlowExecuteOptions {
   verbose?: boolean;
   allowBash?: boolean;
   skipValidation?: boolean;
+  /**
+   * Stop execution after the step with this id completes. Steps that follow it
+   * (at any nesting level) are not run. Useful for isolating where a long flow
+   * breaks without running the whole thing (see #97). Combined with `dryRun`,
+   * the steps before the target run for real and the target is dry-resolved
+   * (its interpolations are reported) but never executed.
+   */
+  stopAfter?: string;
   /** Absolute directory that contains this flow's `flow.json` (or the legacy `.one/flows/` dir). Used to resolve code.module paths. */
   rootDir?: string;
   onEvent?: (event: FlowEvent) => void;

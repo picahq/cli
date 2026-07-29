@@ -65,6 +65,17 @@ export interface UpsertResult {
   action: 'inserted' | 'updated';
 }
 
+/**
+ * Outcome of `backend.updateKeys`. `not_found` when the id doesn't exist;
+ * `conflict` when one of the requested keys is already owned by another
+ * ACTIVE record (reports which key and which record so the caller can
+ * surface an actionable error); `ok` with the updated record otherwise.
+ */
+export type KeyUpdateOutcome =
+  | { status: 'ok'; record: MemRecord }
+  | { status: 'not_found' }
+  | { status: 'conflict'; key: string; recordId: string; recordType: string };
+
 export interface UpsertOptions {
   /**
    * When true, the existing record's `data` is REPLACED by the incoming
@@ -90,6 +101,16 @@ export interface MemBackend {
   upsertByKeys(row: RecordInput, opts?: UpsertOptions): Promise<UpsertResult>;
   getById(id: string, opts?: { withLinks?: boolean }): Promise<MemRecord | MemRecordWithLinks | null>;
   update(id: string, patch: Partial<RecordInput>): Promise<MemRecord | null>;
+  /**
+   * Replace the `keys` array on an existing record, enforcing the same
+   * active-scoped uniqueness rule as insert. Runs the conflict check and
+   * the write atomically (single transaction) so two concurrent key edits
+   * can't both claim the same key. Returns a structured outcome — the
+   * caller (e.g. `one mem key`) turns a `conflict` into a clear error
+   * naming the key and the record that already owns it. `update()` can
+   * also set `keys`, but only this method reports *which* key collided.
+   */
+  updateKeys(id: string, keys: string[]): Promise<KeyUpdateOutcome>;
   remove(id: string): Promise<boolean>;
   archive(id: string, reason?: string): Promise<boolean>;
   unarchive(id: string): Promise<boolean>;
@@ -184,6 +205,34 @@ export interface MemBackend {
    * buffer that `update` requires.
    */
   updateEmbedding(id: string, vector: number[], model: string): Promise<void>;
+
+  /**
+   * Searchable-text backfill scan — returns id/type/data/searchable_text
+   * for records whose searchable_text needs regenerating. Unlike
+   * `listForReindex` this DOES pull `data` (regenerating the text requires
+   * it). When `onlyNull` is true, only rows with a NULL/empty
+   * searchable_text are returned (the common "fix the NULLs" case);
+   * otherwise every row is returned so the caller can detect text that's
+   * stale vs. the current `data`.
+   */
+  listForSearchableBackfill(opts?: {
+    type?: string;
+    onlyNull?: boolean;
+    limit?: number;
+    offset?: number;
+  }): Promise<Array<{
+    id: string;
+    type: string;
+    data: Record<string, unknown>;
+    searchable_text: string | null;
+  }>>;
+
+  /**
+   * Set ONLY the searchable_text column (and clear the now-stale
+   * embedding bookkeeping so a subsequent `mem reindex` re-embeds against
+   * the new text). Used by the `mem reindex --searchable` backfill.
+   */
+  updateSearchableText(id: string, text: string): Promise<void>;
 
   // Hot columns (profile-driven partial expression indexes)
   ensureHotColumn(type: string, jsonPath: string): Promise<void>;

@@ -131,6 +131,50 @@ export async function addRecord(input: RecordInput, opts: AddOptions = {}): Prom
   return backend.insert(prepared);
 }
 
+/**
+ * Update a record's `data` (shallow-merged, matching backend semantics)
+ * and regenerate the derived `searchable_text` + `content_hash` from the
+ * MERGED data — unless the caller passes an explicit `searchable_text`.
+ *
+ * Fixes the stale-searchable_text bug: `backend.update` on its own keeps
+ * the old searchable_text, so `mem update` used to leave FTS pointing at
+ * pre-edit content (and agent-authored records that were progressively
+ * enriched via update never became findable on their new fields).
+ *
+ * Embedding refresh is left to `mem reindex`, but it self-heals: when the
+ * regenerated text differs, `backend.update` nulls the row's embedding
+ * bookkeeping so the next reindex re-embeds it (no expensive API call on
+ * the edit itself). Note this uses `defaultSearchableText` even for synced
+ * types whose profile declares a custom `memory.searchable` block — the
+ * next sync run rewrites it from the profile paths, so it self-heals there
+ * too; interactive edits to synced rows are rare anyway.
+ */
+export async function updateRecord(
+  id: string,
+  patch: Partial<RecordInput>,
+): Promise<MemRecord | null> {
+  const backend = await getBackend();
+  const existing = (await backend.getById(id)) as MemRecord | null;
+  if (!existing) return null;
+
+  const mergedData = patch.data ? { ...existing.data, ...patch.data } : existing.data;
+
+  // Only regenerate when data actually moves (or the caller supplied text).
+  // A metadata-only patch (weight, tags) leaves searchable_text/hash alone.
+  const dataChanged = patch.data !== undefined;
+  const searchable_text =
+    patch.searchable_text ?? (dataChanged ? defaultSearchableText(mergedData) : existing.searchable_text ?? undefined);
+  const content_hash =
+    patch.content_hash ?? (dataChanged ? contentHash(mergedData) : existing.content_hash ?? undefined);
+
+  return backend.update(id, {
+    ...patch,
+    data: mergedData,
+    searchable_text,
+    content_hash,
+  });
+}
+
 export async function upsertRecord(input: RecordInput, opts: AddOptions = {}): Promise<UpsertResult> {
   const backend = await getBackend();
   const { searchable_text, content_hash, embedding, embedding_model } = await prepareRecord(input, opts, 'sync');

@@ -1,12 +1,13 @@
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
 import { getApiKey, getApiBase, getAccessControlFromAllSources, ensureWhoAmI, getEnvFromApiKey } from '../lib/config.js';
-import { OneApi, TimeoutError } from '../lib/api.js';
+import { OneApi, TimeoutError, isMethodAllowed, PERMISSION_METHODS } from '../lib/api.js';
+import { resolveAllowedActions, computeConnectionAccess, formatAccess } from '../lib/access.js';
 import { openConnectionPage, getConnectionUrl, type ConnectionUrlParams } from '../lib/browser.js';
 import { findPlatform, findSimilarPlatforms } from '../lib/platforms.js';
 import { printTable } from '../lib/table.js';
 import * as output from '../lib/output.js';
-import type { Connection } from '../lib/types.js';
+import type { Connection, ConnectionAccess, PermissionLevel } from '../lib/types.js';
 
 export async function connectionAddCommand(platformArg?: string, options?: { tag?: string }): Promise<void> {
   if (output.isAgentMode()) {
@@ -177,10 +178,25 @@ export async function connectionListCommand(options?: { search?: string; limit?:
 
     // Filter by access control settings
     const ac = getAccessControlFromAllSources();
+    const permissions: PermissionLevel = ac.permissions || 'admin';
     const allowedKeys = ac.connectionKeys || ['*'];
+    const actionIds = ac.actionIds || ['*'];
+    const knowledgeOnly = ac.knowledgeAgent || false;
     const accessFiltered = allowedKeys.includes('*')
       ? allConnections
       : allConnections.filter(conn => allowedKeys.includes(conn.key));
+
+    // Resolve what the access config actually permits, so the listing answers
+    // "what can I run here" without a follow-up search. No network cost unless
+    // an action allowlist is configured.
+    const resolvedActions = await resolveAllowedActions(api, actionIds);
+    const unresolvedActionIds = actionIds.includes('*')
+      ? []
+      : actionIds.filter(id => !resolvedActions.some(a => a.actionId === id));
+    const grantedActions = resolvedActions.filter(a => isMethodAllowed(a.method, permissions));
+    const accessFor = (platform: string): ConnectionAccess =>
+      computeConnectionAccess(platform, permissions, actionIds, grantedActions);
+    const hintText = accessHint(permissions, actionIds, knowledgeOnly);
 
     // Filter by search query if provided
     const searchQuery = options?.search?.toLowerCase();
@@ -204,7 +220,11 @@ export async function connectionListCommand(options?: { search?: string; limit?:
           key: conn.key,
           ...(conn.name && { name: conn.name }),
           ...(conn.tags?.length && { tags: conn.tags }),
+          access: accessFor(conn.platform),
         })),
+        ...(knowledgeOnly && { knowledgeOnly: true }),
+        ...(unresolvedActionIds.length > 0 && { unresolvedActionIds }),
+        ...(hintText && { accessHint: hintText }),
         ...(limited.length < filtered.length && {
           hint: `Showing ${limited.length} of ${filtered.length} connections. Use --search <query> to filter by platform or --limit <n> to see more.`,
         }),
@@ -241,9 +261,13 @@ export async function connectionListCommand(options?: { search?: string; limit?:
       state: conn.state,
       key: conn.key,
       tags: conn.tags?.length ? conn.tags.join(', ') : '',
+      access: formatAccess(accessFor(conn.platform)),
     }));
 
     const hasTags = rows.some(r => r.tags);
+    // Only worth a column when access is actually scoped — an all-"full"
+    // column is noise.
+    const hasScopedAccess = rows.some(r => r.access !== 'full');
 
     printTable(
       [
@@ -252,11 +276,23 @@ export async function connectionListCommand(options?: { search?: string; limit?:
         { key: 'state', label: 'Status' },
         { key: 'key', label: 'Connection Key', color: pc.dim },
         ...(hasTags ? [{ key: 'tags', label: 'Tags', color: pc.dim }] : []),
+        ...(hasScopedAccess ? [{ key: 'access', label: 'Access', color: pc.yellow }] : []),
       ],
       rows
     );
 
     console.log();
+
+    if (hintText) {
+      const lines = [hintText];
+      if (unresolvedActionIds.length > 0) {
+        lines.push(
+          `Could not resolve ${unresolvedActionIds.length} allowlisted action id(s): ${unresolvedActionIds.join(', ')}`
+        );
+      }
+      p.note(`${wrapText(lines.join('\n'))}\n\nChange it with: ${pc.cyan('one config')}`, 'Access');
+    }
+
     if (displayed.length < filtered.length) {
       p.note(
         `Showing ${displayed.length} of ${filtered.length}. Increase --limit or run without it to see all.`,
@@ -350,6 +386,56 @@ export async function connectionDeleteCommand(
     deleteSpinner.stop('Failed to delete connection');
     output.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
+}
+
+/**
+ * One-line explanation of a restricted access config, told from the caller's
+ * point of view ("you can only..."). Returns null when nothing is restricted —
+ * an unrestricted config needs no explanation.
+ */
+function accessHint(
+  permissions: PermissionLevel,
+  actionIds: string[],
+  knowledgeOnly: boolean
+): string | null {
+  const parts: string[] = [];
+
+  if (!actionIds.includes('*')) {
+    parts.push(
+      "Action-scoped: each connection's `access.actions` are the only actions you may run — " +
+      'use them directly, no `actions search` needed.'
+    );
+  } else if (permissions !== 'admin') {
+    const methods = PERMISSION_METHODS[permissions]?.join(', ') ?? '';
+    parts.push(`Permission level "${permissions}": only ${methods} actions will execute.`);
+  }
+
+  if (knowledgeOnly) {
+    parts.push('Knowledge-only mode: `actions execute` is disabled — read knowledge and write code instead.');
+  }
+
+  return parts.length > 0 ? parts.join(' ') : null;
+}
+
+/** Hard-wrap prose so a long hint doesn't stretch the note box past the terminal. */
+function wrapText(text: string, width = 72): string {
+  return text
+    .split('\n')
+    .map(paragraph => {
+      const lines: string[] = [];
+      let line = '';
+      for (const word of paragraph.split(/\s+/)) {
+        if (line && line.length + 1 + word.length > width) {
+          lines.push(line);
+          line = word;
+        } else {
+          line = line ? `${line} ${word}` : word;
+        }
+      }
+      if (line) lines.push(line);
+      return lines.join('\n');
+    })
+    .join('\n');
 }
 
 function getStatusIndicator(state: Connection['state']): string {

@@ -43,7 +43,7 @@ Search for actions, read their docs, and execute them. This is the core workflow
 
 **Quick start:**
 \`\`\`bash
-one --agent connection list                                    # See connected platforms
+one --agent connection list                                    # See connected platforms + your access on each
 one --agent connection delete <connection-key>                 # Remove a connection
 one --agent actions search <platform> "<query>" -t execute     # Find an action
 one --agent actions knowledge <platform> <actionId>            # Read docs (REQUIRED)
@@ -58,7 +58,7 @@ one --agent actions execute <platform> <actionId> <key> -d '{}'  # Execute it
 - \`--dry-run\` — Preview request without executing
 - \`--mock\` — Return example response without making an API call (useful for building UI against a response shape)
 - \`--skip-validation\` — Skip input validation against the action schema
-- \`--output <path>\` — Save response to a file (for binary downloads like PDFs, images, documents)
+- \`--output <path>\` — Save response to a file (for binary downloads like PDFs, images, documents). Text responses (text/plain, HTML, CSV, XML) render inline automatically — \`--output\` is only needed for genuinely binary payloads.
 - \`--no-cache\` — Bypass the cached action details and re-fetch them; the fresh details still refresh the cache (execution itself is never cached)
 
 The CLI validates required parameters against the action schema before executing. If you're missing a required path variable, query param, or body field, you'll get a clear error listing what's missing and which flag to use. Pass \`--skip-validation\` to bypass.
@@ -73,6 +73,9 @@ Chain actions across platforms as JSON workflow files with conditions, loops, pa
 one --agent flow create <key> --definition '<json>'   # Create a workflow
 one --agent flow validate <key>                       # Validate it
 one --agent flow execute <key> -i param=value         # Execute it
+one --agent flow execute <key> --dry-run -i ...       # Resolve interpolations, run nothing
+one --agent flow execute <key> --stop-after <stepId>  # Run up to a step, then stop
+one --agent flow inspect <runId>                      # Per-step outputs of a past run
 one --agent flow list                                 # List all workflows
 \`\`\`
 
@@ -86,6 +89,7 @@ one --agent flow list                                 # List all workflows
 - Use \`--skip-validation\` to bypass input validation on action steps
 - Use \`--output-file <path>\` to stream the full result to a file instead of stdout — for large results that would otherwise be truncated or hit the JSON string-size limit; stdout (and \`--agent\` output) then carries an \`outputFile\` pointer instead of inline \`steps\`
 - Step-level \`if\`/\`unless\` (and \`while\`/\`condition\` steps) are null-safe: a condition referencing a skipped or not-yet-run step's output (e.g. \`$.steps.maybeSkipped.output.x\`) evaluates to \`false\` instead of crashing the flow
+- Debugging: \`--dry-run\` resolves each step's interpolations and shows what they evaluate to without executing (\`$.steps.*\` refs are reported as deferred); \`--stop-after <stepId>\` runs up to a step then stops; \`--dry-run --stop-after <stepId>\` runs earlier steps for real then dry-resolves the target against their output; \`flow inspect <runId>\` shows a past run's per-step outputs (post-mortem, no re-run; \`--full\` for untruncated)
 
 ### 3. Relay — Webhook event forwarding between platforms
 Receive webhooks from platforms (Stripe, GitHub, Airtable, Attio, Google Calendar) and forward event data to any connected platform using passthrough actions with Handlebars templates. No middleware, no code.
@@ -128,6 +132,7 @@ Request specific sections:
 - Always use the **exact action ID** from search results — don't guess
 - Always read **knowledge** before executing any action
 - Connection keys come from \`one connection list\` — don't hardcode them
+- \`connection list\` also reports an \`access\` field per connection (\`full\` / \`methods\` / \`actions\`) — read it before planning so you don't propose an action the access config will reject
 - Skills stay in lockstep with the CLI version automatically — every command checks a \`.one-cli-version\` marker in the canonical skill dir and refreshes the files if the CLI has been upgraded. Check manually with \`one config skills status\`; force a resync with \`one config skills sync\`
 `;
 
@@ -143,7 +148,17 @@ Always follow this sequence. Never skip the knowledge step.
 one --agent connection list
 \`\`\`
 
-Returns platforms, status, connection keys, and tags.
+Returns platforms, status, connection keys, tags, and an \`access\` field per connection describing what the current access config lets you run there:
+
+| \`access\` | Meaning |
+|----------|---------|
+| \`{"policy": "full"}\` | Every action on the connection |
+| \`{"policy": "methods", "methods": ["GET"]}\` | Only actions with these HTTP methods will execute |
+| \`{"policy": "actions", "actions": [{"actionId", "title", "method"}]}\` | Only these exact actions — use them directly, skip \`actions search\` |
+
+Also present when relevant: \`knowledgeOnly: true\` (execution disabled — read knowledge and write code instead), \`unresolvedActionIds\` (allowlisted ids that could not be looked up), and \`accessHint\` (a one-line summary of the restriction).
+
+Read \`access\` before planning — it prevents proposing an action the config will reject. Change it with \`one config\`.
 
 ### 1b. Delete a Connection
 
@@ -187,7 +202,7 @@ one --agent actions execute <platform> <actionId> <connectionKey> [options]
 - \`--dry-run\` — Preview without executing
 - \`--mock\` — Return example response without making an API call
 - \`--skip-validation\` — Skip input validation against the action schema
-- \`--output <path>\` — Save response to a file (for binary downloads like PDFs, images, documents)
+- \`--output <path>\` — Save response to a file (for binary downloads like PDFs, images, documents). Text responses (text/plain, HTML, CSV, XML) render inline automatically — \`--output\` is only needed for genuinely binary payloads.
 - \`--no-cache\` — Bypass the cached action details and re-fetch them; the fresh details still refresh the cache (execution itself is never cached)
 
 Execute reuses the action details cached by \`actions knowledge\` (method, path, schema), so in the standard search → knowledge → execute flow it makes a single API call — the action being executed. The live response is never cached. In \`--agent\` mode the response includes \`"_preflight": {"cache": "hit"|"miss"}\` showing whether the lookup was served from disk.
@@ -478,10 +493,19 @@ one --agent mem add note '{"content":"..."}' --tags work,urgent --weight 8 --key
 # Get (optionally with links)
 one --agent mem get <id> --links
 
-# Update (shallow merge into data)
+# Update (shallow merge into data; regenerates searchable_text from the merged data)
 one --agent mem update <id> '{"status":"done"}'
 
-# Archive / unarchive
+# Manage identity keys AFTER creation (keys are a first-class column, NOT data).
+# Unique across ACTIVE records — a clear error names the record that owns a taken key.
+one --agent mem key <id> --add email:new@x.com
+one --agent mem key <id> --remove email:old@x.com
+one --agent mem key <id> --set 'email:a@x.com,phone:+1555'   # replace all keys
+# NOTE: passing keys to 'mem update' is rejected — keys are not a data field.
+
+# Archive / unarchive. Archiving FREES a record's keys: an archived record no
+# longer blocks a new active record from reusing the same key (uniqueness is
+# scoped to active records).
 one --agent mem archive <id> --reason superseded
 
 # List by type — type is positional. Synced rows are namespaced as <platform>/<model>.
@@ -547,7 +571,11 @@ one --agent mem status          # backend, provider, _upgrade hint
 one --agent mem doctor          # 7-check health report
 one --agent mem vacuum          # backend maintenance (VACUUM ANALYZE)
 one --agent mem reindex         # re-embed records under current model
+one --agent mem reindex --searchable              # backfill searchable_text where NULL
+one --agent mem reindex --searchable --type attio/attioPeople --all   # also rewrite stale text
 \`\`\`
+
+\`mem reindex --searchable\` regenerates \`searchable_text\` from each record's own \`data\` (no embedding provider needed). It fixes rows that landed with NULL searchable_text and, thanks to the cleaned-up text builder, drops UUID/timestamp noise and leads with name/title/email fields so FTS ranks on what humans search. Regenerated rows are re-queued for embedding on the next \`mem reindex\`.
 
 ## Admin
 
@@ -652,6 +680,7 @@ one --agent sync run stripe
 one --agent mem sync run stripe                    # identical (alias)
 
 # 5. Query + search (read from memory)
+one --agent sync schema stripe/customers                            # inspect field paths/types first
 one --agent sync query stripe/balanceTransactions --where "status=available" --limit 20
 one --agent sync query stripe/customers --where 'address.city=SF'   # dotted --where paths
 one --agent sync search "refund" --platform stripe                  # hybrid FTS + semantic
@@ -892,6 +921,7 @@ Every \`sync X\` command is also exposed as \`mem sync X\` — same handlers, sa
 | \`sync suggest-searchable <plat>/<model>\` | Rank candidate \`memory.searchable\` paths by signal density; emits paste-ready config |
 | \`sync run <platform>\` | Sync data (\`--full-refresh\`, \`--since\`, \`--dry-run\`, \`--no-memory\`) |
 | \`sync query <plat>/<model>\` | Query memory with \`--where\` (dotted paths), \`--after/before\` |
+| \`sync schema <plat>/<model>\` | Inspect the JSON structure of synced records (field paths, types, examples) — run before writing \`--where\` / query paths |
 | \`sync search "<query>"\` | Hybrid FTS + semantic across all synced data |
 | \`sync list [platform]\` | Show profiles, record counts, freshness |
 | \`sync schedule add/list/status/remove/repair\` | Manage cron schedules |
