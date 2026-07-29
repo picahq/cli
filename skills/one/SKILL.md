@@ -318,6 +318,8 @@ Without declared paths, the default walker concatenates every string in the reco
 
 Both are queryable with `one --agent mem find-by-key <prefix>:<value>`.
 
+**Enriching profiles** (`gmail/gmailThreads`, `fathom/meetings`) sync in two phases: a list pass, then a detail pass that fetches full bodies/transcripts. Two things follow. Enrichment happens **once per record** — phase 2 only visits rows it has never enriched, and `--full-refresh` does *not* reset that, so re-running a sync will not refresh detail content (delete `.one/sync/data/<platform>.db` to force it). And the list pass never overwrites an enriched record: `data` merges rather than replaces, and `searchable_text` / `identity_keys[]` are left alone. `sync run` reports these as `memPreserved`. So on an enriching profile, a record whose upstream *detail* changed will look stale until the mirror is cleared — that is expected, not a sync failure.
+
 **Advanced features** (enrich, transform, exclude, hooks, --full-refresh, alternative backends, embedding tuning): run `one guide memory` or `one guide sync` for the full reference.
 
 ## Beyond Single Actions

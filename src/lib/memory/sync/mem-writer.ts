@@ -21,6 +21,16 @@ export interface MemWriteReport {
   updated: number;
   skipped: number;
   /**
+   * Records left untouched because phase 2 had already enriched them and the
+   * caller asked us not to degrade them (`alreadyEnrichedIds`). Deliberately
+   * NOT folded into `skipped`: `skipped` means "the writer REJECTED this row"
+   * and drives the runner's "most rows were rejected — likely a broken
+   * idField" warning. Every run after the first of a healthy enrich profile
+   * preserves 100% of its page, which would otherwise fire that warning on
+   * every single sync.
+   */
+  preserved: number;
+  /**
    * Source keys (`<platform>/<model>:<id>`) that landed during this page.
    * Used by `--full-refresh` to reconcile against memory records whose
    * source didn't appear this run (those get archived).
@@ -154,13 +164,24 @@ export function getSearchablePaths(profile: SyncProfile): string[] | undefined {
 export async function writePageToMemory(
   profile: SyncProfile,
   records: Array<Record<string, unknown>>,
-  opts: { capturePerAction?: boolean; embedOverride?: boolean } = {},
+  opts: {
+    capturePerAction?: boolean;
+    embedOverride?: boolean;
+    /**
+     * Ids (stringified) that phase 2 has ALREADY enriched, as read from the
+     * SQLite mirror by `findEnrichedIds`. Only the phase-1 (list-shape) write
+     * passes this; phase 2's own write-back never does, because it IS the
+     * authority. See the guard in the loop for the rule it encodes.
+     */
+    alreadyEnrichedIds?: ReadonlySet<string>;
+  } = {},
 ): Promise<MemWriteReport> {
   const report: MemWriteReport = {
     attempted: 0,
     inserted: 0,
     updated: 0,
     skipped: 0,
+    preserved: 0,
     sourceKeysSeen: [],
     inserts: [],
     updates: [],
@@ -204,6 +225,52 @@ export async function writePageToMemory(
     }
 
     const sourceKey = `${type}:${String(externalId)}`;
+
+    // A PRE-ENRICH WRITE MAY CREATE AND REFRESH, BUT IT MUST NEVER DEGRADE.
+    //
+    // We're holding the thin list shape (gmail: `{id, snippet, historyId}`)
+    // while this record has already been through phase 2, so the stored row is
+    // the merged, strictly-richer payload — full thread bodies, meeting
+    // transcripts. An authoritative write would REPLACE that with the list
+    // shape, and phase 2 would never repair it: enrich only visits rows
+    // `WHERE "<tsField>" IS NULL`, and this row's is stamped. Enriched after
+    // run 1, thin forever after run 2.
+    //
+    // So the write still happens — it is just NON-AUTHORITATIVE:
+    //   replace: false        → `data` MERGES (`r.data || p_data`), so the
+    //                           enriched fields survive while list fields
+    //                           (snippet, historyId, labels) still refresh.
+    //   preserveDerived: true → `searchable_text` / `content_hash` go as NULL
+    //                           so `COALESCE(p_…, r.…)` keeps the enriched FTS
+    //                           text instead of a thin summary of `{id,
+    //                           snippet}`. Without this the merge alone is not
+    //                           enough — `upsertRecord` always derives a text
+    //                           when the caller supplies none.
+    //   identity_keys         → already `undefined` via `preEnrichShape` below.
+    //
+    // Writing rather than SKIPPING is deliberate, and the difference is not
+    // cosmetic. Skipping looks safer but strands the record: the upsert is
+    // also the store's self-heal primitive (it flips `status` back to
+    // 'active', see schema.ts) and the only path that re-creates a row whose
+    // memory record was lost while the SQLite mirror survived — the mirror is
+    // cwd-relative and the store is under $HOME, so they drift apart for
+    // ordinary reasons (backend switch, corruption recovery, `mem archive`).
+    // With a skip, phase 1 declines to write and phase 2 declines to revisit,
+    // and the record is unreachable forever. Writing also keeps `--embed`,
+    // profile edits (`keys[]`, `tags`), and `sources.last_synced_at` working
+    // on enriched rows.
+    //
+    // The one thing we give up: a field that vanishes from the LIST shape
+    // upstream no longer vanishes here, because merges cannot delete. That is
+    // the right trade for an enrich profile, where the stored record is a
+    // merge of both shapes by construction and phase 2 is the authority on
+    // what the record contains.
+    //
+    // Records NOT yet enriched fall through and are written exactly as before,
+    // so they exist, are searchable, and get upgraded by phase 2.
+    const alreadyEnriched = opts.alreadyEnrichedIds?.has(String(externalId)) ?? false;
+    if (alreadyEnriched) report.preserved++;
+
     // keys[] = entity/merge identifiers (source key + singular identityKey).
     // identity_keys[] = participant associations (plural identityKeys, #128) —
     // a SEPARATE column that never triggers merge, so a Gmail thread carrying
@@ -266,7 +333,13 @@ export async function writePageToMemory(
         // number removed, Gmail thread archived) it must also vanish
         // from memory. The default merge behaviour is correct for
         // interactive `mem add` / `mem update`, wrong for sync.
-        { embed: embedFlag, replace: true },
+        //
+        // ...unless this row is already enriched, in which case we are the
+        // thin half of the record and must not speak for the whole of it.
+        // See the "NEVER DEGRADE" comment above.
+        alreadyEnriched
+          ? { embed: embedFlag, replace: false, preserveDerived: true }
+          : { embed: embedFlag, replace: true },
       );
       report.sourceKeysSeen.push(sourceKey);
       if (res.action === 'inserted') {

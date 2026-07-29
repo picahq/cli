@@ -421,6 +421,10 @@ one sync test stripe/balanceTransactions --show-searchable
 # Run — every row lands in memory (SQLite also written for enrich-phase compat)
 one sync run stripe --since 90d
 one mem sync run stripe                              # identical (alias)
+# Profiles with `enrich` run a second detail pass. It enriches each record ONCE;
+# the list pass thereafter merges rather than replaces, so the enriched payload
+# survives (reported as `memPreserved`). `--full-refresh` does not re-enrich —
+# delete .one/sync/data/<platform>.db to force that.
 
 # Query + search (reads from memory)
 one sync query stripe/balanceTransactions --where "status=available" --limit 20

@@ -109,6 +109,23 @@ export interface AddOptions {
    * memory; interactive callers leave it off so patches accumulate.
    */
   replace?: boolean;
+  /**
+   * Suppress the DERIVED `searchable_text` / `content_hash`, sending NULL so
+   * the store's `COALESCE(p_…, r.…)` keeps whatever is already there.
+   *
+   * For a caller that can only see part of a record. Sync's phase-1 list write
+   * is the case this exists for: it holds `{id, snippet}` while the stored row
+   * holds the enriched thread body, so deriving text from what it can see
+   * would overwrite the good FTS content with a thin summary. Without this
+   * flag there is no way to opt out — `prepareRecord` always derives.
+   *
+   * Only meaningful with `replace: false`; under replace the store takes the
+   * incoming value verbatim, NULL included. On a fresh INSERT there is nothing
+   * to preserve, so the row lands with NULL searchable_text until the
+   * authoritative writer fills it in (`mem admin reindex --searchable`
+   * backfills if that never happens).
+   */
+  preserveDerived?: boolean;
 }
 
 /**
@@ -179,10 +196,14 @@ export async function upsertRecord(input: RecordInput, opts: AddOptions = {}): P
   const backend = await getBackend();
   const { searchable_text, content_hash, embedding, embedding_model } = await prepareRecord(input, opts, 'sync');
 
+  // `preserveDerived` sends NULL for the two derived columns so the store's
+  // COALESCE keeps the richer value it already holds. The embedding is still
+  // computed and passed: it is derived from the text this caller CAN see, and
+  // an embedding is never worse than no embedding. See AddOptions.
   const prepared: RecordInput & { embedding?: number[] | null; embedding_model?: string | null } = {
     ...input,
-    searchable_text: input.searchable_text ?? searchable_text,
-    content_hash: input.content_hash ?? content_hash,
+    searchable_text: opts.preserveDerived ? undefined : (input.searchable_text ?? searchable_text),
+    content_hash: opts.preserveDerived ? undefined : (input.content_hash ?? content_hash),
     embedding,
     embedding_model,
   };

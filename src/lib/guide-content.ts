@@ -891,6 +891,23 @@ Transform, exclude, identityKey, and hooks all fire in **both** phases. In Phase
 
 **Exception — plural \`identityKeys\` on an enriching profile.** When a profile declares \`enrich\`, Phase 1 deliberately writes *no opinion* about \`identity_keys[]\` (it leaves whatever is stored untouched) and only Phase 2 sets them. Phase 1 sees the list shape, where participant paths like \`messages[].payload.headers[name=From].value\` don't exist yet — if it wrote its empty result, every re-sync would erase the participants Phase 2 had resolved. Two consequences worth knowing: a row whose enrichment is skipped or rate-limited keeps \`identity_keys\` \`NULL\` until it enriches, and a participant removed upstream is only cleared once that row re-enriches.
 
+### Phase 1 never degrades an already-enriched record
+
+Phase 2 only visits rows \`WHERE _enriched_at IS NULL\`, so it never revisits a row it has already enriched. That makes Phase 1's write dangerous on every run after the first: it holds only the thin list shape, and an authoritative write would replace the enriched payload with it — permanently, since Phase 2 won't come back to repair it.
+
+So for a row the mirror reports as already enriched, Phase 1 writes **non-authoritatively**:
+
+| | Already-enriched row | Not yet enriched |
+|---|---|---|
+| \`data\` | merged — enrich-only fields survive, list fields still refresh | replaced |
+| \`searchable_text\` / \`content_hash\` | kept (thin text can't overwrite the enriched text) | recomputed |
+| \`identity_keys[]\` | kept | written |
+| \`keys[]\`, \`tags\`, \`sources.last_synced_at\`, embeddings | updated normally | updated normally |
+
+The write still happens, so \`--embed\`, profile edits, and the store's un-archive self-heal all keep working on enriched rows. The one thing given up: a field that disappears from the *list* shape upstream no longer disappears from an enriched record, because a merge cannot delete. \`sync run\` reports the count as \`memPreserved\`.
+
+**Known gap:** \`--full-refresh\` does **not** clear \`_enriched_at\`, so it does not re-enrich — and there is currently no way to re-enrich a record whose upstream detail content changed after its first enrichment. Delete the mirror (\`.one/sync/data/<platform>.db\`) to force a full re-enrich.
+
 ## Cross-Platform Identity
 
 Two ways to tag a record with a cross-platform identifier (e.g. email), depending on whether the record IS an entity or INVOLVES many:
