@@ -12,7 +12,12 @@
  * See docs/plans/unified-memory.md §4 for design rationale.
  */
 
-export const SCHEMA_VERSION = '2.2.0';
+// 2.3.0 (not 2.2.0): main's #171 already shipped 2.2.0 for the active-scoped
+// uniqueness schema, and this branch independently bumped 2.1.0 -> 2.2.0 for
+// identity_keys. Both sides wrote the same literal, so the merge produced no
+// conflict — and `ensureSchema`'s version fast-path below would then skip the
+// identity_keys DDL entirely on any store already stamped 2.2.0 by v1.49/1.50.
+export const SCHEMA_VERSION = '2.3.0';
 
 // `pg_trgm` was in the original mem schema but nothing in the unified query
 // layer uses it; dropped to keep optional-extension backends happy. Can be
@@ -155,19 +160,31 @@ END $$;
 `;
 
 export const FUNCTIONS_SQL = `
--- Enforce global uniqueness of the "keys" array across records.
+-- Enforce uniqueness of the "keys" array across ACTIVE records only.
+--
+-- Scoping to active is deliberate: an archived record must not squat on a
+-- key forever. If it did, re-adding the same identity (e.g. a person who
+-- was archived and re-surfaced) would hard-fail with 23505 and the key
+-- could never be reclaimed. So:
+--   - Only ACTIVE incoming rows are checked (an archived NEW row can hold
+--     any keys, including ones a live record also holds — provenance).
+--   - Conflicts are only raised against other ACTIVE records.
+-- Array-overlap uniqueness can't be expressed as a partial UNIQUE index
+-- (btree can't index "arrays overlap"), so the invariant lives here in a
+-- trigger. find-by-source, key lookups, and mem_upsert_by_keys all
+-- prefer active rows to match this scoping (see below).
 CREATE OR REPLACE FUNCTION mem_enforce_key_uniqueness()
 RETURNS TRIGGER LANGUAGE plpgsql AS $$
 DECLARE
     conflicting_id UUID;
 BEGIN
-    IF NEW.keys IS NULL THEN RETURN NEW; END IF;
+    IF NEW.keys IS NULL OR NEW.status <> 'active' THEN RETURN NEW; END IF;
     SELECT id INTO conflicting_id
     FROM mem_records
-    WHERE keys && NEW.keys AND id != NEW.id
+    WHERE keys && NEW.keys AND id != NEW.id AND status = 'active'
     LIMIT 1;
     IF conflicting_id IS NOT NULL THEN
-        RAISE EXCEPTION 'Key conflict: one or more keys in % already exist on record %',
+        RAISE EXCEPTION 'Key conflict: one or more keys in % already exist on active record %',
             NEW.keys, conflicting_id USING ERRCODE = 'unique_violation';
     END IF;
     RETURN NEW;
@@ -275,14 +292,15 @@ DECLARE
 BEGIN
     -- Deterministic pick when more than one row's keys[] overlap p_keys
     -- (e.g. the incoming row identity-merges with an old Attio-id row AND
-    -- a newer email-keyed row from a separate sync). Newest-updated wins;
-    -- ties broken by id. Without ORDER BY, PG returns whichever row the
-    -- planner happens to surface first, leaving the loser persisted with
-    -- overlapping keys and breaking the keys-are-unique invariant.
+    -- a newer email-keyed row from a separate sync). Active rows win over
+    -- archived (key uniqueness is scoped to active, so an archived dupe may
+    -- coexist — never merge into it when a live owner exists); then newest-
+    -- updated; ties broken by id. Without ORDER BY, PG returns whichever
+    -- row the planner surfaces first, breaking the keys-are-unique invariant.
     SELECT r.id INTO existing_id
     FROM mem_records r
     WHERE r.keys && p_keys
-    ORDER BY r.updated_at DESC NULLS LAST, r.id ASC
+    ORDER BY (r.status = 'active') DESC, r.updated_at DESC NULLS LAST, r.id ASC
     LIMIT 1;
 
     IF existing_id IS NOT NULL THEN
@@ -376,12 +394,12 @@ DECLARE
 BEGIN
     v_embedding := CASE WHEN p_embedding IS NOT NULL THEN p_embedding::vector ELSE NULL END;
 
-    -- See no-vector variant for ORDER BY rationale (deterministic pick
-    -- when multiple rows' keys overlap p_keys).
+    -- See no-vector variant for ORDER BY rationale (active-preferred,
+    -- deterministic pick when multiple rows' keys overlap p_keys).
     SELECT r.id INTO existing_id
     FROM mem_records r
     WHERE r.keys && p_keys
-    ORDER BY r.updated_at DESC NULLS LAST, r.id ASC
+    ORDER BY (r.status = 'active') DESC, r.updated_at DESC NULLS LAST, r.id ASC
     LIMIT 1;
 
     IF existing_id IS NOT NULL THEN

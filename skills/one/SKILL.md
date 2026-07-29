@@ -45,7 +45,21 @@ Always follow this sequence when the user wants to do something on a connected p
 one --agent connection list
 ```
 
-Returns connected platforms with their connection keys (needed for execution) and platform names in kebab-case (needed for searching).
+Returns connected platforms with their connection keys (needed for execution), platform names in kebab-case (needed for searching), and an `access` field per connection telling you what you may run there.
+
+**Read `access` before you plan a workflow** — it saves you from discovering a restriction as a 403 halfway through:
+
+| `access` | What it means |
+|----------|---------------|
+| `{"policy": "full"}` | Every action on this connection is available |
+| `{"policy": "methods", "methods": ["GET"]}` | Only actions with these HTTP methods will execute — don't propose writes |
+| `{"policy": "actions", "actions": [...]}` | Only these exact actions may run. Each has `actionId`, `title`, `method` — **use them directly and skip `actions search`** |
+
+Two more fields appear only when relevant:
+- `"knowledgeOnly": true` — `actions execute` is disabled. Read knowledge and write integration code instead of executing.
+- `"unresolvedActionIds": [...]` — allowlisted ids that couldn't be looked up; treat them as unavailable and tell the user.
+
+An empty `actions` array means the allowlist grants nothing on that connection — say so rather than searching for alternatives.
 
 ### 1b. Delete a connection
 
@@ -170,9 +184,18 @@ Underneath, the store has no `platform` column — `type` is the only platform-s
 ```bash
 # User memories
 one --agent mem add note '{"content":"..."}' --tags work --weight 7
+one --agent mem update <id> '{"status":"done"}'         # merges into data; refreshes searchable_text
 one --agent mem search "deadline"                       # hybrid if key set, else FTS
 one --agent mem list note --limit 20
 one --agent mem link <from-id> <to-id> relates_to --bi
+
+# Identity keys (first-class column, NOT data). Unique across ACTIVE records;
+# archiving a record frees its keys. `mem update '{"keys":[...]}'` is rejected.
+one --agent mem key <id> --add email:x@y.com            # add/--remove/--set
+one --agent mem find-by-source email:x@y.com            # prefers the active owner
+
+# Backfill searchable_text (no embedding provider needed) — fixes NULL/noisy text
+one --agent mem reindex --searchable --type attio/attioPeople
 
 # Status + diagnostics
 one --agent mem status                                  # backend, provider, _upgrade hint

@@ -4,7 +4,7 @@
 
 import * as output from '../../lib/output.js';
 import { getBackend } from '../../lib/memory/runtime.js';
-import { embed } from '../../lib/memory/embedding.js';
+import { embed, defaultSearchableText } from '../../lib/memory/embedding.js';
 import { getMemoryConfigOrDefault } from '../../lib/memory/index.js';
 import { okJson, parsePositiveInt, requireMemoryInit } from './util.js';
 
@@ -32,6 +32,10 @@ interface ReindexFlags {
   batch?: string;
   /** Safety cap on total records to process. */
   limit?: string;
+  /** Regenerate searchable_text instead of embeddings. */
+  searchable?: boolean;
+  /** With --searchable: rewrite stale text too, not just NULL. */
+  all?: boolean;
 }
 
 /**
@@ -50,6 +54,11 @@ interface ReindexFlags {
  */
 export async function memReindexCommand(flags: ReindexFlags): Promise<void> {
   requireMemoryInit();
+  // --searchable is a different job: regenerate searchable_text from the
+  // record's own `data`. No embedding provider required.
+  if (flags.searchable) {
+    return memReindexSearchableCommand(flags);
+  }
   const backend = await getBackend();
   const cfg = getMemoryConfigOrDefault();
   if (cfg.embedding.provider !== 'openai') {
@@ -119,5 +128,78 @@ export async function memReindexCommand(flags: ReindexFlags): Promise<void> {
     reembedded,
     skipped,
     force: !!flags.force,
+  });
+}
+
+/**
+ * Backfill `searchable_text` from each record's own `data`. Fixes the
+ * NULL-searchable_text records (agent/SDK writes that never derived it) and
+ * the UUID-noise-leading text on synced records (the improved
+ * `defaultSearchableText` now filters ids/timestamps and leads with
+ * name/title/email fields). Regenerated text also clears the row's stale
+ * embedding so a follow-up `mem reindex` re-embeds against the clean text.
+ *
+ * By default only NULL/empty rows are touched. `--all` additionally
+ * rewrites rows whose stored text is stale vs. what `data` produces now.
+ */
+async function memReindexSearchableCommand(flags: ReindexFlags): Promise<void> {
+  const backend = await getBackend();
+  const onlyNull = !flags.all;
+  const totalCap = flags.limit ? parsePositiveInt(flags.limit, 1_000_000, 'limit') : 1_000_000;
+  const PAGE = 500;
+
+  let considered = 0;
+  let updated = 0;
+  let unchanged = 0;
+  let emptied = 0; // rows whose data yields no usable text — left as-is
+  // `offset` is the count of rows we've decided to LEAVE in place. Updated
+  // rows drop out of the (onlyNull) filter, so the rows we skip accumulate
+  // at the front of the ordered set; advancing offset past them avoids both
+  // the re-scan-forever loop and skipping unprocessed rows.
+  let offset = 0;
+
+  while (considered < totalCap) {
+    const pageSize = Math.min(PAGE, totalCap - considered);
+    const rows = await backend.listForSearchableBackfill({
+      type: flags.type,
+      onlyNull,
+      limit: pageSize,
+      offset,
+    });
+    if (rows.length === 0) break;
+    considered += rows.length;
+
+    let updatedThisPage = 0;
+    for (const r of rows) {
+      const next = defaultSearchableText(r.data);
+      if (!next) { emptied++; continue; }
+      if (next === (r.searchable_text ?? '')) { unchanged++; continue; }
+      await backend.updateSearchableText(r.id, next);
+      updated++;
+      updatedThisPage++;
+    }
+
+    // Advance past the rows that stayed in the result set. In onlyNull mode
+    // updated rows leave the filter (their text is no longer NULL), so only
+    // the skipped rows (emptied/unchanged) still count toward the offset. In
+    // --all mode nothing leaves the set, so advance by the full page.
+    offset += onlyNull ? rows.length - updatedThisPage : rows.length;
+
+    if (!output.isAgentMode()) {
+      process.stderr.write(`  searchable: updated ${updated} / considered ${considered}\r`);
+    }
+  }
+
+  if (!output.isAgentMode()) process.stderr.write('\n');
+
+  okJson({
+    status: 'ok',
+    mode: 'searchable',
+    type: flags.type ?? null,
+    scope: onlyNull ? 'null_only' : 'all',
+    considered,
+    updated,
+    unchanged,
+    emptied,
   });
 }

@@ -16,6 +16,7 @@ import type {
   UpsertResult,
   UpsertOptions,
   RawSqlResult,
+  KeyUpdateOutcome,
 } from '../../backend.js';
 import { validateReadOnlySql } from './sql-guard.js';
 import type {
@@ -84,6 +85,17 @@ interface RecordRow {
   updated_at: string;
 }
 
+// Postgres unique_violation (23505). The key-uniqueness trigger raises it
+// with ERRCODE = 'unique_violation'; node-pg surfaces `.code`, and PGlite
+// carries either `.code` or the SQLSTATE/message. Match defensively.
+function isUniqueViolation(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { code?: unknown; message?: unknown };
+  if (e.code === '23505') return true;
+  const msg = typeof e.message === 'string' ? e.message : '';
+  return /23505|unique_violation|Key conflict/i.test(msg);
+}
+
 function toRecord(row: RecordRow): MemRecord {
   return {
     id: row.id,
@@ -129,6 +141,21 @@ export class CoreBackend implements MemBackend {
 
   async ensureSchema(): Promise<void> {
     const caps = this.caps;
+    // Fast path: if the store already reports the current schema version,
+    // every DDL statement below would be an idempotent no-op — so skip the
+    // whole block (no advisory lock, no CREATE OR REPLACE churn). This is
+    // the hot path taken by essentially every CLI invocation, and it's what
+    // makes concurrent `one mem` processes cheap: with no DDL and no lock
+    // there's nothing left to serialize or deadlock on (the 40P01 the lock
+    // below guards against only arises while DDL actually runs). A version
+    // mismatch (fresh DB, or an upgrade that bumped SCHEMA_VERSION) falls
+    // through to the locked setup exactly once, then this check short-
+    // circuits forever after.
+    try {
+      if ((await this.getSchemaVersion()) === SCHEMA_VERSION) return;
+    } catch {
+      // mem_meta doesn't exist yet (fresh DB) — fall through to full setup.
+    }
     // Apply in logical blocks so a backend without pgvector skips the
     // vector-specific DDL cleanly. The core blocks (tables, indexes,
     // functions) never reference the vector type — the embedding column
@@ -283,6 +310,19 @@ export class CoreBackend implements MemBackend {
     const hash = patch.content_hash ?? existing.content_hash ?? null;
     const weight = patch.weight ?? existing.weight;
 
+    // Changing searchable_text invalidates any existing embedding — it was
+    // computed from the OLD text. Plain `mem reindex` only re-embeds rows
+    // missing an embedding or under a wrong model, so without clearing the
+    // bookkeeping here an edited row would serve its pre-edit vector
+    // forever (only `--force` would catch it). Null the embedding columns
+    // in the same UPDATE so the row is re-embedded on the next reindex.
+    // Mirrors updateSearchableText, which does this for the backfill path.
+    const textChanged = searchable !== (existing.searchable_text ?? null);
+    const clearEmbedding = textChanged && this.caps.vectorSearch;
+    const embeddingReset = clearEmbedding
+      ? `, embedding = NULL, embedded_at = NULL, embedding_model = NULL`
+      : '';
+
     const res = await this.client.query<RecordRow>(
       `UPDATE mem_records
          SET data = $2::jsonb,
@@ -291,12 +331,60 @@ export class CoreBackend implements MemBackend {
              sources = $5::jsonb,
              searchable_text = $6,
              content_hash = $7,
-             weight = $8
+             weight = $8${embeddingReset}
        WHERE id = $1
        RETURNING *`,
       [id, JSON.stringify(data), tags, keys, JSON.stringify(sources), searchable, hash, weight],
     );
     return res.rows[0] ? toRecord(res.rows[0]) : null;
+  }
+
+  async updateKeys(id: string, keys: string[]): Promise<KeyUpdateOutcome> {
+    // Conflict-check + write in one transaction so two concurrent key
+    // edits can't both slip past the check and claim the same key. The
+    // key-uniqueness trigger is the ultimate backstop, but doing the
+    // lookup here lets us report WHICH key collided and WHICH record owns
+    // it — the trigger only knows the conflicting record id.
+    try {
+      return await this.client.transaction(async (tx) => {
+        const exists = await tx.query<{ id: string }>(
+          `SELECT id FROM mem_records WHERE id = $1`,
+          [id],
+        );
+        if (!exists.rows[0]) return { status: 'not_found' as const };
+
+        // Scoped to active records — matches mem_enforce_key_uniqueness.
+        // The correlated subquery surfaces the first requested key that
+        // overlaps another active record's keys, so the error can name it.
+        const conflict = await tx.query<{ id: string; type: string; key: string }>(
+          `SELECT r.id, r.type,
+                  (SELECT k FROM unnest($2::text[]) AS k WHERE k = ANY(r.keys) LIMIT 1) AS key
+             FROM mem_records r
+            WHERE r.keys && $2::text[] AND r.id != $1 AND r.status = 'active'
+            LIMIT 1`,
+          [id, keys],
+        );
+        const c = conflict.rows[0];
+        if (c) {
+          return { status: 'conflict' as const, key: c.key, recordId: c.id, recordType: c.type };
+        }
+
+        const res = await tx.query<RecordRow>(
+          `UPDATE mem_records SET keys = $2::text[] WHERE id = $1 RETURNING *`,
+          [id, keys.length > 0 ? keys : null],
+        );
+        return { status: 'ok' as const, record: toRecord(res.rows[0]) };
+      });
+    } catch (err) {
+      // A concurrent edit could claim one of these keys between our SELECT
+      // and UPDATE; the trigger then throws 23505. Map it back to a
+      // structured conflict (we can't cheaply say which key raced, so
+      // report the first requested one) rather than leaking a raw error.
+      if (isUniqueViolation(err)) {
+        return { status: 'conflict', key: keys[0] ?? '', recordId: 'unknown', recordType: 'unknown' };
+      }
+      throw err;
+    }
   }
 
   async remove(id: string): Promise<boolean> {
@@ -314,12 +402,38 @@ export class CoreBackend implements MemBackend {
   }
 
   async unarchive(id: string): Promise<boolean> {
-    const res = await this.client.query(
-      `UPDATE mem_records SET status = 'active', archived_reason = NULL
-       WHERE id = $1 AND status = 'archived'`,
-      [id],
-    );
-    return (res.rowCount ?? 0) > 0;
+    // Flipping status back to 'active' re-arms the key-uniqueness trigger.
+    // If this row's key was reclaimed by another active record while it was
+    // archived (the flip side of "archiving frees a key"), the trigger
+    // raises a raw 23505. Translate that into an actionable message naming
+    // the reclaiming record instead of leaking the internal trigger text.
+    try {
+      const res = await this.client.query(
+        `UPDATE mem_records SET status = 'active', archived_reason = NULL
+         WHERE id = $1 AND status = 'archived'`,
+        [id],
+      );
+      return (res.rowCount ?? 0) > 0;
+    } catch (err) {
+      if (!isUniqueViolation(err)) throw err;
+      // Find which key + active record now owns it, for a useful message.
+      const owner = await this.client.query<{ id: string; type: string; key: string }>(
+        `SELECT r.id, r.type,
+                (SELECT k FROM unnest(a.keys) AS k
+                  WHERE k = ANY(r.keys) LIMIT 1) AS key
+           FROM mem_records a
+           JOIN mem_records r
+             ON r.keys && a.keys AND r.id != a.id AND r.status = 'active'
+          WHERE a.id = $1
+          LIMIT 1`,
+        [id],
+      );
+      const o = owner.rows[0];
+      const detail = o
+        ? `key "${o.key}" was reclaimed by active record ${o.id} (type ${o.type}) — re-key it or archive that record first`
+        : `one of its keys was reclaimed by another active record`;
+      throw new Error(`Cannot unarchive ${id}: ${detail}`);
+    }
   }
 
   async list(type: string, opts: ListOptions = {}): Promise<MemRecord[]> {
@@ -439,6 +553,76 @@ export class CoreBackend implements MemBackend {
               embedded_at = NOW()
         WHERE id = $1`,
       [id, literal, model],
+    );
+  }
+
+  async listForSearchableBackfill(opts: {
+    type?: string;
+    onlyNull?: boolean;
+    limit?: number;
+    offset?: number;
+  } = {}): Promise<Array<{
+    id: string;
+    type: string;
+    data: Record<string, unknown>;
+    searchable_text: string | null;
+  }>> {
+    const limit = opts.limit ?? 1000;
+    const offset = opts.offset ?? 0;
+    const params: unknown[] = [];
+    const clauses: string[] = [`status = 'active'`];
+
+    if (opts.type) {
+      params.push(opts.type);
+      clauses.push(`type = $${params.length}`);
+    }
+    if (opts.onlyNull) {
+      // NULL *or* empty — an empty string is just as useless to FTS and is
+      // exactly what a bad earlier write left behind.
+      clauses.push(`(searchable_text IS NULL OR searchable_text = '')`);
+    }
+
+    params.push(limit);
+    params.push(offset);
+    // Order by id so paginated runs are stable. Unlike the reindex scan
+    // (whose filter shrinks as it works), a stale-detection pass may leave
+    // rows in place, so the caller pages with a real offset.
+    const res = await this.client.query<{
+      id: string;
+      type: string;
+      data: Record<string, unknown>;
+      searchable_text: string | null;
+    }>(
+      `SELECT id, type, data, searchable_text
+         FROM mem_records
+        WHERE ${clauses.join(' AND ')}
+        ORDER BY id ASC
+        LIMIT $${params.length - 1} OFFSET $${params.length}`,
+      params,
+    );
+    return res.rows;
+  }
+
+  async updateSearchableText(id: string, text: string): Promise<void> {
+    // Clear the embedding bookkeeping too: the stored vector was built
+    // from the OLD searchable_text, so it's now stale. Nulling embedded_at
+    // makes the row eligible for the next `mem reindex` (embedding) pass.
+    // The embedding column only exists when vectorSearch is on.
+    if (this.caps.vectorSearch) {
+      await this.client.query(
+        `UPDATE mem_records
+            SET searchable_text = $2,
+                embedding = NULL,
+                embedded_at = NULL,
+                embedding_model = NULL
+          WHERE id = $1`,
+        [id, text],
+      );
+      return;
+    }
+    await this.client.query(
+      `UPDATE mem_records SET searchable_text = $2 WHERE id = $1`,
+      [id, text],
     );
   }
 
@@ -597,8 +781,14 @@ export class CoreBackend implements MemBackend {
 
   async findBySource(sourceKey: string): Promise<MemRecord | null> {
     // sourceKey lives in keys[] (indexed GIN), so this is a fast lookup.
+    // Prefer the ACTIVE owner: key uniqueness is scoped to active records
+    // (an archived dupe can legitimately still hold the same key for
+    // provenance), so when both exist the live record is the answer.
     const res = await this.client.query<RecordRow>(
-      `SELECT * FROM mem_records WHERE $1 = ANY(keys) LIMIT 1`,
+      `SELECT * FROM mem_records
+        WHERE $1 = ANY(keys)
+        ORDER BY (status = 'active') DESC, updated_at DESC
+        LIMIT 1`,
       [sourceKey],
     );
     return res.rows[0] ? toRecord(res.rows[0]) : null;

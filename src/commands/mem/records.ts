@@ -6,7 +6,7 @@
 
 import pc from 'picocolors';
 import * as output from '../../lib/output.js';
-import { getBackend, addRecord } from '../../lib/memory/runtime.js';
+import { getBackend, addRecord, updateRecord } from '../../lib/memory/runtime.js';
 import { embed } from '../../lib/memory/embedding.js';
 import { getMemoryConfigOrDefault } from '../../lib/memory/index.js';
 import type { MemRecord } from '../../lib/memory/types.js';
@@ -50,10 +50,66 @@ export async function memGetCommand(id: string, flags: GetFlags): Promise<void> 
 export async function memUpdateCommand(id: string, patchRaw: string): Promise<void> {
   requireMemoryInit();
   const patch = parseJsonArg(patchRaw, 'patch');
-  const backend = await getBackend();
-  const updated = await backend.update(id, { type: '', data: patch } as Parameters<typeof backend.update>[1]);
+  // The patch is merged into `data`. `keys` is a first-class column, not a
+  // data field — steer callers to `one mem key` instead of silently
+  // burying `{"keys":[...]}` under data.keys where it does nothing.
+  if (patch && typeof patch === 'object' && !Array.isArray(patch) && 'keys' in patch) {
+    output.error('`keys` is not a data field. Use `one mem key <id> --set <csv>` (or --add/--remove) to change a record\'s keys.');
+  }
+  // Route through updateRecord so searchable_text + content_hash are
+  // regenerated from the merged data (backend.update alone leaves them
+  // stale — see runtime.updateRecord).
+  const updated = await updateRecord(id, { data: patch } as Parameters<typeof updateRecord>[1]);
   if (!updated) output.error(`Record ${id} not found`);
   printRecord(updated as unknown as Record<string, unknown>);
+}
+
+interface KeyFlags {
+  add?: string;
+  remove?: string;
+  set?: string;
+}
+
+/**
+ * Manage the `keys` column on an existing record — the first-class,
+ * uniqueness-checked way to change identity keys after creation. Without
+ * this, keys could only be set at insert time (`mem add --keys`), and
+ * `mem update '{"keys":[...]}'` silently wrote them into `data` instead.
+ */
+export async function memKeyCommand(id: string, flags: KeyFlags): Promise<void> {
+  requireMemoryInit();
+  const backend = await getBackend();
+
+  const setList = parseCsv(flags.set);
+  const addList = parseCsv(flags.add) ?? [];
+  const removeList = parseCsv(flags.remove) ?? [];
+  if (!setList && addList.length === 0 && removeList.length === 0) {
+    output.error('Pass at least one of --add <csv>, --remove <csv>, or --set <csv>.');
+  }
+
+  const existing = (await backend.getById(id)) as { keys?: string[] } | null;
+  if (!existing) output.error(`Record ${id} not found`);
+
+  // --set replaces wholesale; otherwise start from current keys, add, remove.
+  let next: string[];
+  if (setList) {
+    next = setList;
+  } else {
+    const removeSet = new Set(removeList);
+    next = [...(existing!.keys ?? []), ...addList].filter(k => !removeSet.has(k));
+  }
+  // De-dupe, preserve order.
+  next = [...new Set(next)];
+
+  const outcome = await backend.updateKeys(id, next);
+  if (outcome.status === 'not_found') output.error(`Record ${id} not found`);
+  if (outcome.status === 'conflict') {
+    output.error(
+      `Key "${outcome.key}" is already owned by active record ${outcome.recordId} (type ${outcome.recordType}). ` +
+      `Keys must be unique across active records — archive or re-key that record first.`,
+    );
+  }
+  printRecord((outcome as { record: unknown }).record as Record<string, unknown>);
 }
 
 interface ArchiveFlags {

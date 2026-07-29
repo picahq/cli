@@ -164,33 +164,107 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+// A value that's just a UUID / opaque id contributes nothing to FTS but
+// dominates the leading tokens on Attio-shaped records (workspace / object
+// / record ids come first in the JSON). Drop them.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Pure timestamps / dates (ISO 8601, with or without time, and the
+// nanosecond form Attio emits: 2025-06-30T23:36:40.816000000Z).
+const TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})?)?$/;
+
+// Keys whose *values* are opaque ids / links / structural noise — skip the
+// whole leaf regardless of what it holds. Matches `id`, `record_id`,
+// `workspace_id`, `attio_url`, `avatar_url`, `*_ids`, bare `uuid`, etc.
+const NOISE_KEY_RE = /(^|_)(id|ids|uuid|guid|url|href|link|avatar|photo|icon|hash|token|slug)$/i;
+// Attio (and similar) structural wrappers — their values are enum-ish noise
+// ("workspace-member", "personal-name", "text", timestamps) that bury the
+// human fields. Drop the subtree.
+const NOISE_KEY_EXACT = new Set([
+  'attribute_type', 'actor_type', 'created_by_actor',
+  'active_from', 'active_until', 'created_at', 'updated_at', 'last_synced_at',
+]);
+// Container keys carry no meaning themselves — descend but keep the PARENT
+// key as context, so `values.job_title[0].value` is classified as
+// "job_title", not the generic "value".
+const CONTAINER_KEYS = new Set([
+  'values', 'value', 'data', 'attributes', 'properties', 'items',
+  'records', 'result', 'results', 'fields',
+]);
+// Human-meaningful fields that should lead the searchable text so FTS ranks
+// on names / titles / emails instead of trailing metadata. Handles Attio's
+// nested leaf keys (`full_name`, `email_address`, `job_title`) directly.
+const PRIORITY_KEY_RE = /(^|_)(name|full_name|first_name|last_name|display_name|title|job_title|role|position|email|email_address|company|organization|org|description|bio|summary|headline|label|subject|content|body|text_content)$/i;
+
 /**
  * Pull a reasonable searchable text out of arbitrary JSON when a profile
- * hasn't specified one. Used by `mem add` and as the default fallback in
- * sync when a profile has no `memory.searchable` block.
+ * hasn't specified one. Used by `mem add`, by `mem reindex --searchable`,
+ * and as the default fallback in sync when a profile has no
+ * `memory.searchable` block.
+ *
+ * The walk is key-aware so it can (a) drop UUID / timestamp / opaque-id
+ * noise that otherwise leads the text on synced records (Attio in
+ * particular starts every record with workspace/object/record UUIDs and
+ * timestamps), and (b) emit name / title / email-like fields FIRST so FTS
+ * ranks on the fields humans actually search. Nested container keys
+ * (`values`, `value`, …) pass their parent key down as context so Attio's
+ * `values.name[0].full_name` / `values.job_title[0].value` shapes classify
+ * correctly. Tokens are de-duplicated (order-preserving) — Attio repeats
+ * the same name/actor many times across a record.
  */
 export function defaultSearchableText(data: Record<string, unknown>, maxLen = 4000): string {
-  const parts: string[] = [];
-  const walk = (value: unknown, depth = 0): void => {
+  const priority: string[] = [];
+  const normal: string[] = [];
+
+  const push = (key: string | undefined, text: string): void => {
+    if (key && PRIORITY_KEY_RE.test(key)) priority.push(text);
+    else normal.push(text);
+  };
+
+  const walk = (value: unknown, key: string | undefined, depth: number): void => {
     if (value === null || value === undefined) return;
-    if (typeof value === 'string' && value.trim()) {
-      parts.push(value.trim());
+    if (typeof value === 'string') {
+      const t = value.trim();
+      if (!t) return;
+      if (UUID_RE.test(t) || TIMESTAMP_RE.test(t)) return;
+      if (key && NOISE_KEY_RE.test(key)) return;
+      push(key, t);
       return;
     }
     if (typeof value === 'number' || typeof value === 'boolean') {
-      parts.push(String(value));
+      if (key && NOISE_KEY_RE.test(key)) return;
+      push(key, String(value));
       return;
     }
-    if (depth > 4) return;
+    if (depth > 6) return;
     if (Array.isArray(value)) {
-      for (const v of value) walk(v, depth + 1);
+      // Array indices aren't meaningful keys — carry the parent key down.
+      for (const v of value) walk(v, key, depth + 1);
       return;
     }
     if (typeof value === 'object') {
-      for (const v of Object.values(value as Record<string, unknown>)) walk(v, depth + 1);
+      for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+        const lower = k.toLowerCase();
+        if (NOISE_KEY_EXACT.has(lower) || NOISE_KEY_RE.test(k)) continue;
+        // Container keys keep the parent context; real keys become context.
+        const nextKey = CONTAINER_KEYS.has(lower) ? key : k;
+        walk(v, nextKey, depth + 1);
+      }
     }
   };
-  walk(data);
-  const joined = parts.join(' ').replace(/\s+/g, ' ').trim();
+
+  walk(data, undefined, 0);
+
+  // Priority fields first, then everything else; de-dupe case-insensitively
+  // while preserving first-seen order.
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  for (const t of [...priority, ...normal]) {
+    const norm = t.toLowerCase();
+    if (seen.has(norm)) continue;
+    seen.add(norm);
+    ordered.push(t);
+  }
+
+  const joined = ordered.join(' ').replace(/\s+/g, ' ').trim();
   return joined.length > maxLen ? joined.slice(0, maxLen) : joined;
 }

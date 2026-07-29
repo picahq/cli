@@ -33,7 +33,7 @@ describe('PGlite plugin — live integration', () => {
 
   it('reports the schema version after ensureSchema', async () => {
     const v = await backend.getSchemaVersion();
-    assert.equal(v, '2.2.0');
+    assert.equal(v, '2.3.0');
   });
 
   it('advertises capabilities the CoreBackend relies on', () => {
@@ -229,6 +229,117 @@ describe('PGlite plugin — live integration', () => {
     const healed = await backend.getById(first.record.id);
     assert.equal(healed?.status, 'active', 'upsertByKeys must un-archive on match');
     assert.equal(healed?.archived_reason, null, 'archived_reason must clear on resurrection');
+  });
+
+  it('updateKeys replaces the keys column and enforces active uniqueness', async () => {
+    const a = await backend.insert({ type: 'person', data: { name: 'A' }, keys: ['email:a@x.com'] });
+    const b = await backend.insert({ type: 'person', data: { name: 'B' }, keys: ['email:b@x.com'] });
+
+    // Happy path: add a second key to A.
+    const ok = await backend.updateKeys(a.id, ['email:a@x.com', 'phone:+1555']);
+    assert.equal(ok.status, 'ok');
+    assert.deepEqual(
+      new Set((ok as { record: { keys: string[] } }).record.keys),
+      new Set(['email:a@x.com', 'phone:+1555']),
+    );
+
+    // Conflict: try to give A one of B's keys — reports the key + owner.
+    const conflict = await backend.updateKeys(a.id, ['email:b@x.com']);
+    assert.equal(conflict.status, 'conflict');
+    assert.equal((conflict as { key: string }).key, 'email:b@x.com');
+    assert.equal((conflict as { recordId: string }).recordId, b.id);
+
+    // not_found for an unknown id.
+    const missing = await backend.updateKeys('00000000-0000-0000-0000-000000000000', ['email:z@x.com']);
+    assert.equal(missing.status, 'not_found');
+  });
+
+  it('key uniqueness is scoped to active — an archived record frees its key', async () => {
+    const first = await backend.insert({
+      type: 'person', data: { name: 'Squatter' }, keys: ['email:reuse@x.com'],
+    });
+    // While active, a second active record can't claim the key.
+    await assert.rejects(
+      backend.insert({ type: 'person', data: { name: 'Dup' }, keys: ['email:reuse@x.com'] }),
+      /already exist/i,
+    );
+    // Archive the first — its key is now reclaimable.
+    await backend.archive(first.id, 'superseded');
+    const second = await backend.insert({
+      type: 'person', data: { name: 'Reclaimer' }, keys: ['email:reuse@x.com'],
+    });
+    assert.ok(second.id);
+
+    // find-by-source prefers the ACTIVE owner over the archived one.
+    const found = await backend.findBySource('email:reuse@x.com');
+    assert.equal(found?.id, second.id);
+    assert.equal(found?.status, 'active');
+  });
+
+  it('listForSearchableBackfill + updateSearchableText fills NULL rows', async () => {
+    // Insert with an explicit NULL searchable_text (as an SDK/raw write might).
+    const rec = await backend.insert({
+      type: 'backfill-me',
+      data: { name: 'Grace Hopper', title: 'Rear Admiral' },
+      keys: ['email:grace@navy.mil'],
+      searchable_text: null,
+    });
+    const before = await backend.getById(rec.id);
+    assert.equal(before?.searchable_text, null);
+
+    const rows = await backend.listForSearchableBackfill({ type: 'backfill-me', onlyNull: true });
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].id, rec.id);
+
+    await backend.updateSearchableText(rec.id, 'Grace Hopper Rear Admiral');
+    const after = await backend.getById(rec.id);
+    assert.equal(after?.searchable_text, 'Grace Hopper Rear Admiral');
+
+    // Row is no longer returned by the NULL-only scan.
+    const again = await backend.listForSearchableBackfill({ type: 'backfill-me', onlyNull: true });
+    assert.equal(again.length, 0);
+  });
+
+  it('unarchive surfaces an actionable error when the key was reclaimed', async () => {
+    const a = await backend.insert({
+      type: 'person', data: { name: 'Original' }, keys: ['email:reclaim@x.com'],
+    });
+    await backend.archive(a.id, 'superseded');
+    const b = await backend.insert({
+      type: 'person', data: { name: 'Reclaimer' }, keys: ['email:reclaim@x.com'],
+    });
+
+    // Flipping A back to active would collide with B on the shared key —
+    // must throw a message naming B, not a raw 23505.
+    await assert.rejects(
+      backend.unarchive(a.id),
+      (err: unknown) =>
+        err instanceof Error &&
+        /reclaimed by active record/.test(err.message) &&
+        err.message.includes(b.id),
+    );
+    // A stays archived; B stays active.
+    assert.equal((await backend.getById(a.id))?.status, 'archived');
+    assert.equal((await backend.getById(b.id))?.status, 'active');
+  });
+
+  it('update clears the stale embedding when searchable_text changes', async () => {
+    const rec = await backend.insert({
+      type: 'note', data: { content: 'original' }, searchable_text: 'original',
+    });
+    const vec = new Array(1536).fill(0.01);
+    await backend.updateEmbedding(rec.id, vec, 'openai:test');
+    assert.ok((await backend.getById(rec.id))?.embedded_at, 'precondition: embedded');
+
+    // Text changes → embedding is invalidated so the next reindex re-embeds.
+    const changed = await backend.update(rec.id, { data: { content: 'changed' }, searchable_text: 'changed' });
+    assert.equal(changed?.embedded_at, null, 'embedding must clear when text changes');
+    assert.equal(changed?.embedding_model, null);
+
+    // Metadata-only edit (no text change) → embedding preserved.
+    await backend.updateEmbedding(rec.id, vec, 'openai:test');
+    const weighted = await backend.update(rec.id, { weight: 8 });
+    assert.ok(weighted?.embedded_at, 'embedding preserved when text unchanged');
   });
 
   it('sync state round-trips', async () => {

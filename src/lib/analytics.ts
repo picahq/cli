@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import type { Command } from 'commander';
 import pc from 'picocolors';
 import {
@@ -14,7 +14,7 @@ import {
   readAnalyticsQueue,
   writeAnalyticsQueue,
   appendUsageLog,
-  readUsageLog,
+  claimUsageLog,
   writeUsageLog,
   readUsageState,
   writeUsageState,
@@ -133,6 +133,11 @@ function distinctId(): string {
   return getWhoAmI()?.user?.id ?? getDeviceId();
 }
 
+/** True when the CLI has an identity — a logged-in user or a configured API key. */
+function isAuthenticated(): boolean {
+  return !!getWhoAmI()?.user || !!getApiKey();
+}
+
 function baseProperties(): Record<string, unknown> {
   return {
     $lib: 'one-cli',
@@ -142,6 +147,7 @@ function baseProperties(): Record<string, unknown> {
     os: process.platform,
     arch: process.arch,
     node_version: process.versions.node,
+    authenticated: isAuthenticated(),
   };
 }
 
@@ -205,7 +211,10 @@ export function capture(
     return;
   }
   const did = opts.distinctId ?? distinctId();
-  const props: Record<string, unknown> = { ...baseProperties(), ...properties, $insert_id: randomUUID() };
+  const props: Record<string, unknown> = { ...baseProperties(), ...properties };
+  // One-off events get a random id; rollups pass a content-derived id (see
+  // emitRollup) so duplicate batches collapse to a single event in PostHog.
+  if (props.$insert_id === undefined) props.$insert_id = randomUUID();
   // Person props belong only to the *current* user; never tag a rollup for a
   // previous login (distinct_id ≠ current) with the new user's email/name.
   if (did === distinctId()) {
@@ -234,19 +243,38 @@ function utcDay(ts: number): string {
 }
 
 /**
+ * Top-level commands worth recording BEFORE authentication — the install / try /
+ * activation funnel. Anything else run without an identity is dropped, so a
+ * determined unauthenticated loop (e.g. `actions execute` failing on repeat)
+ * can't pollute analytics. Fail-closed: unknown commands need auth to count.
+ */
+const PRE_AUTH_COMMANDS = new Set([
+  'init', 'login', 'logout', 'guide', 'platforms', 'onboard', 'config', 'update', 'help',
+]);
+
+/** Authenticated → record everything; unauthenticated → only the pre-auth funnel. */
+function shouldRecord(commandPath: string): boolean {
+  if (isAuthenticated()) return true;
+  return PRE_AUTH_COMMANDS.has(commandPath.split(' ')[0]);
+}
+
+/**
  * Record the command about to run for usage analytics. Appends the command
  * PATH (e.g. "actions execute") — never args/flags — to the local rollup log
  * (instant, sync), then flushes any due rollups. The first command of the day
  * flushes immediately so a user is captured even if they run the CLI once and
- * never again. Never throws, never blocks. No-op when telemetry is disabled.
+ * never again. Never throws, never blocks. No-op when telemetry is disabled, or
+ * when an unauthenticated session runs an auth-required command (see shouldRecord).
  */
 export function recordCommand(command: Command): void {
   if (isTelemetryDisabled()) {
     writeUsageLog([]);
     return;
   }
+  const cmdPath = commandPath(command);
+  if (!shouldRecord(cmdPath)) return;
   const did = distinctId();
-  const entry: UsageEntry = { ts: Date.now(), command: commandPath(command), agent: isAgentMode(), did };
+  const entry: UsageEntry = { ts: Date.now(), command: cmdPath, agent: isAgentMode(), did };
   appendUsageLog(JSON.stringify(entry));
 
   const today = utcDay(entry.ts);
@@ -269,8 +297,13 @@ export function flushUsageRollups(opts: { force?: boolean } = {}): void {
     writeUsageLog([]);
     return;
   }
+  // Atomically claim the batch so concurrent CLI processes can't each emit it
+  // (the cause of duplicate "CLI Usage Rollup" events). Only one flush wins.
+  const lines = claimUsageLog();
+  if (!lines || lines.length === 0) return;
+
   const entries: UsageEntry[] = [];
-  for (const line of readUsageLog()) {
+  for (const line of lines) {
     try {
       const e = JSON.parse(line) as UsageEntry;
       if (e && typeof e.ts === 'number' && typeof e.command === 'string' && typeof e.did === 'string') {
@@ -280,10 +313,7 @@ export function flushUsageRollups(opts: { force?: boolean } = {}): void {
       // skip a malformed line
     }
   }
-  if (entries.length === 0) {
-    writeUsageLog([]);
-    return;
-  }
+  if (entries.length === 0) return;
 
   const currentDid = entries[entries.length - 1].did;
   const now = Date.now();
@@ -305,7 +335,9 @@ export function flushUsageRollups(opts: { force?: boolean } = {}): void {
     if (due) emitRollup(did, group);
     else kept.push(...group);
   }
-  writeUsageLog(kept.map((e) => JSON.stringify(e)));
+  // Re-append (never overwrite) the not-yet-due entries, so we can't clobber rows
+  // another process appended to the fresh log while we held this batch.
+  for (const e of kept) appendUsageLog(JSON.stringify(e));
 }
 
 /** Build + enqueue one "CLI Usage Rollup" event carrying exact counts for a batch. */
@@ -316,6 +348,13 @@ function emitRollup(did: string, group: UsageEntry[]): void {
     byCommand[e.command] = (byCommand[e.command] ?? 0) + 1;
     if (e.agent) agentCount += 1;
   }
+  // Content-derived id hashed over the EXACT entries (each command's timestamp +
+  // path + agent flag). A re-emitted copy of the same batch hashes identically so
+  // PostHog dedupes it on ingest; genuinely different batches hash differently
+  // (distinct per-command timestamps), so this never collapses real activity.
+  const insertId = createHash('sha1')
+    .update(`${did}|${group.map((e) => `${e.ts}:${e.command}:${e.agent ? 1 : 0}`).join('|')}`)
+    .digest('hex');
   capture(
     'CLI Usage Rollup',
     {
@@ -325,6 +364,7 @@ function emitRollup(did: string, group: UsageEntry[]): void {
       human_count: group.length - agentCount,
       window_start: new Date(group[0].ts).toISOString(),
       window_end: new Date(group[group.length - 1].ts).toISOString(),
+      $insert_id: insertId,
     },
     { distinctId: did, timestamp: new Date(group[group.length - 1].ts).toISOString() },
   );

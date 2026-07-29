@@ -43,7 +43,7 @@ Search for actions, read their docs, and execute them. This is the core workflow
 
 **Quick start:**
 \`\`\`bash
-one --agent connection list                                    # See connected platforms
+one --agent connection list                                    # See connected platforms + your access on each
 one --agent connection delete <connection-key>                 # Remove a connection
 one --agent actions search <platform> "<query>" -t execute     # Find an action
 one --agent actions knowledge <platform> <actionId>            # Read docs (REQUIRED)
@@ -132,6 +132,7 @@ Request specific sections:
 - Always use the **exact action ID** from search results — don't guess
 - Always read **knowledge** before executing any action
 - Connection keys come from \`one connection list\` — don't hardcode them
+- \`connection list\` also reports an \`access\` field per connection (\`full\` / \`methods\` / \`actions\`) — read it before planning so you don't propose an action the access config will reject
 - Skills stay in lockstep with the CLI version automatically — every command checks a \`.one-cli-version\` marker in the canonical skill dir and refreshes the files if the CLI has been upgraded. Check manually with \`one config skills status\`; force a resync with \`one config skills sync\`
 `;
 
@@ -147,7 +148,17 @@ Always follow this sequence. Never skip the knowledge step.
 one --agent connection list
 \`\`\`
 
-Returns platforms, status, connection keys, and tags.
+Returns platforms, status, connection keys, tags, and an \`access\` field per connection describing what the current access config lets you run there:
+
+| \`access\` | Meaning |
+|----------|---------|
+| \`{"policy": "full"}\` | Every action on the connection |
+| \`{"policy": "methods", "methods": ["GET"]}\` | Only actions with these HTTP methods will execute |
+| \`{"policy": "actions", "actions": [{"actionId", "title", "method"}]}\` | Only these exact actions — use them directly, skip \`actions search\` |
+
+Also present when relevant: \`knowledgeOnly: true\` (execution disabled — read knowledge and write code instead), \`unresolvedActionIds\` (allowlisted ids that could not be looked up), and \`accessHint\` (a one-line summary of the restriction).
+
+Read \`access\` before planning — it prevents proposing an action the config will reject. Change it with \`one config\`.
 
 ### 1b. Delete a Connection
 
@@ -482,10 +493,19 @@ one --agent mem add note '{"content":"..."}' --tags work,urgent --weight 8 --key
 # Get (optionally with links)
 one --agent mem get <id> --links
 
-# Update (shallow merge into data)
+# Update (shallow merge into data; regenerates searchable_text from the merged data)
 one --agent mem update <id> '{"status":"done"}'
 
-# Archive / unarchive
+# Manage identity keys AFTER creation (keys are a first-class column, NOT data).
+# Unique across ACTIVE records — a clear error names the record that owns a taken key.
+one --agent mem key <id> --add email:new@x.com
+one --agent mem key <id> --remove email:old@x.com
+one --agent mem key <id> --set 'email:a@x.com,phone:+1555'   # replace all keys
+# NOTE: passing keys to 'mem update' is rejected — keys are not a data field.
+
+# Archive / unarchive. Archiving FREES a record's keys: an archived record no
+# longer blocks a new active record from reusing the same key (uniqueness is
+# scoped to active records).
 one --agent mem archive <id> --reason superseded
 
 # List by type — type is positional. Synced rows are namespaced as <platform>/<model>.
@@ -551,7 +571,11 @@ one --agent mem status          # backend, provider, _upgrade hint
 one --agent mem doctor          # 7-check health report
 one --agent mem vacuum          # backend maintenance (VACUUM ANALYZE)
 one --agent mem reindex         # re-embed records under current model
+one --agent mem reindex --searchable              # backfill searchable_text where NULL
+one --agent mem reindex --searchable --type attio/attioPeople --all   # also rewrite stale text
 \`\`\`
+
+\`mem reindex --searchable\` regenerates \`searchable_text\` from each record's own \`data\` (no embedding provider needed). It fixes rows that landed with NULL searchable_text and, thanks to the cleaned-up text builder, drops UUID/timestamp noise and leads with name/title/email fields so FTS ranks on what humans search. Regenerated rows are re-queued for embedding on the next \`mem reindex\`.
 
 ## Admin
 

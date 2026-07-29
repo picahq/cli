@@ -157,6 +157,7 @@ class LazyPgliteBackend implements MemBackend {
   async upsertByKeys(...a: Parameters<MemBackend['upsertByKeys']>): ReturnType<MemBackend['upsertByKeys']> { return (await this.ensure()).upsertByKeys(...a); }
   async getById(...a: Parameters<MemBackend['getById']>): ReturnType<MemBackend['getById']> { return (await this.ensure()).getById(...a); }
   async update(...a: Parameters<MemBackend['update']>): ReturnType<MemBackend['update']> { return (await this.ensure()).update(...a); }
+  async updateKeys(...a: Parameters<MemBackend['updateKeys']>): ReturnType<MemBackend['updateKeys']> { return (await this.ensure()).updateKeys(...a); }
   async remove(...a: Parameters<MemBackend['remove']>): ReturnType<MemBackend['remove']> { return (await this.ensure()).remove(...a); }
   async archive(...a: Parameters<MemBackend['archive']>): ReturnType<MemBackend['archive']> { return (await this.ensure()).archive(...a); }
   async unarchive(...a: Parameters<MemBackend['unarchive']>): ReturnType<MemBackend['unarchive']> { return (await this.ensure()).unarchive(...a); }
@@ -164,7 +165,9 @@ class LazyPgliteBackend implements MemBackend {
   async count(...a: Parameters<MemBackend['count']>): ReturnType<MemBackend['count']> { return (await this.ensure()).count(...a); }
   async listForReindex(...a: Parameters<MemBackend['listForReindex']>): ReturnType<MemBackend['listForReindex']> { return (await this.ensure()).listForReindex(...a); }
   async listKeysByType(...a: Parameters<MemBackend['listKeysByType']>): ReturnType<MemBackend['listKeysByType']> { return (await this.ensure()).listKeysByType(...a); }
+  async listForSearchableBackfill(...a: Parameters<MemBackend['listForSearchableBackfill']>): ReturnType<MemBackend['listForSearchableBackfill']> { return (await this.ensure()).listForSearchableBackfill(...a); }
   async updateEmbedding(...a: Parameters<MemBackend['updateEmbedding']>): ReturnType<MemBackend['updateEmbedding']> { return (await this.ensure()).updateEmbedding(...a); }
+  async updateSearchableText(...a: Parameters<MemBackend['updateSearchableText']>): ReturnType<MemBackend['updateSearchableText']> { return (await this.ensure()).updateSearchableText(...a); }
   async raw(sql: string, params?: unknown[]): ReturnType<NonNullable<MemBackend['raw']>> {
     const b = await this.ensure();
     if (!b.raw) throw new Error('Backend does not support raw SQL');
