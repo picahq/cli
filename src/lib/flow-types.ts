@@ -154,6 +154,17 @@ export interface FlowBashConfig {
   command: string;
   timeout?: number;
   parseJson?: boolean;
+  /**
+   * Unwrap a `claude --print --output-format json` CLI envelope before using
+   * the output (#90). The envelope looks like
+   * `{ "type": "result", "result": "```json\n{...}\n```" }`; with this set the
+   * step extracts `.result`, strips markdown code fences, drops any preamble
+   * text, and parses the inner JSON as `$.steps.<id>.output`. If the unwrapped
+   * payload isn't valid JSON the step fails with a clear error rather than
+   * passing broken data downstream. Implies JSON output (no need to also set
+   * `parseJson`).
+   */
+  parseEnvelope?: boolean;
   cwd?: string;
   env?: Record<string, FlowBashEnvValue>;
 }

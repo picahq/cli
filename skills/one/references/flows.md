@@ -478,9 +478,11 @@ e.g. if sub-flow `enrich-customer` has a step `load` that returns `{ TEAM: "acme
 {
   "id": "analyze",
   "type": "bash",
-  "bash": { "command": "cat /tmp/data.json | claude --print 'Analyze this' --output-format json", "timeout": 180000, "parseJson": true }
+  "bash": { "command": "cat /tmp/data.json | claude --print 'Analyze this' --output-format json", "timeout": 180000, "parseEnvelope": true }
 }
 ```
+
+**Parsing output.** `parseJson: true` parses stdout as JSON (and strips outer code fences). For **`claude --print --output-format json`** steps use **`parseEnvelope: true`** instead — `claude` wraps the model's answer in a CLI envelope `{ "type": "result", "result": "```json\n{...}\n```" }`, and `parseEnvelope` unwraps `.result`, strips the inner code fences, drops any preamble/trailer text, and parses the inner JSON as `$.steps.<id>.output`. If the unwrapped payload isn't valid JSON the step fails (no silently-broken data). No more hand-rolled `unwrap()` helpers in code steps.
 
 **Safe interpolation.** Plain `{{$.input.x}}` does string substitution and is **unsafe** for bash — values containing quotes, `$`, backticks, `&`, etc. will break the command (or worse). Use the `q` helper to POSIX-shell-quote the value:
 
@@ -665,8 +667,8 @@ Each substep inside `parallel.steps` must have the full step schema: `id`, `name
 
 When raw data needs analysis, use this pattern:
 1. `file-write` — save data to temp file (API responses are too large to inline)
-2. `bash` — call `claude --print` to analyze (set timeout to 180000+, use `--output-format json`)
-3. `code` — parse and structure the AI output for downstream steps
+2. `bash` — call `claude --print` to analyze (set timeout to 180000+, use `--output-format json` and `"parseEnvelope": true` so `$.steps.<id>.output` is the clean parsed JSON)
+3. `code` — structure the AI output for downstream steps (no manual envelope unwrap needed — `parseEnvelope` already did it)
 
 ## CLI Commands
 

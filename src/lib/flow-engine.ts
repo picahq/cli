@@ -665,6 +665,70 @@ function stripCodeFences(text: string): string {
   return match ? match[1].trim() : trimmed;
 }
 
+/**
+ * Strip code fences and any conversational preamble/trailer around a JSON
+ * body, returning just the `{...}`/`[...]` substring. Handles the common LLM
+ * shapes "Here is the analysis:\n{...}" and "```json\n{...}\n```". If no
+ * JSON-looking span is found, returns the fence-stripped text unchanged.
+ */
+function stripToJson(text: string): string {
+  const s = stripCodeFences(text);
+  // Slice from the first opening brace/bracket to the last closing one —
+  // trims both preamble ("Here is the analysis:\n{...}") and any trailer
+  // ("{...}\n\nLet me know!"). A clean JSON body is returned unchanged.
+  const candidates = [s.indexOf('{'), s.indexOf('[')].filter(i => i >= 0);
+  if (candidates.length === 0) return s;
+  const start = Math.min(...candidates);
+  const end = Math.max(s.lastIndexOf('}'), s.lastIndexOf(']'));
+  return end > start ? s.slice(start, end + 1) : s;
+}
+
+/**
+ * Unwrap a `claude --print --output-format json` envelope and parse the inner
+ * JSON (#90). Handles the three defensive layers flows otherwise re-implement:
+ * envelope detection (`{type:'result', result}`), code-fence stripping, and
+ * preamble removal. Accepts stdout that is the full envelope, a bare result
+ * string, or already-unwrapped JSON. Throws (with a snippet) when the payload
+ * isn't valid JSON, so a bad LLM response fails the step instead of passing
+ * broken data downstream.
+ */
+export function unwrapClaudeEnvelope(stdout: string, stepId: string): unknown {
+  const trimmed = stdout.trim();
+  let envelope: unknown;
+  try {
+    envelope = JSON.parse(trimmed);
+  } catch {
+    envelope = trimmed; // not JSON at the top level — treat stdout as the result text
+  }
+
+  // Drill to the text that should contain the model's JSON.
+  let resultText: string;
+  if (
+    envelope && typeof envelope === 'object' && !Array.isArray(envelope) &&
+    (envelope as Record<string, unknown>).type === 'result' &&
+    typeof (envelope as Record<string, unknown>).result === 'string'
+  ) {
+    resultText = (envelope as Record<string, unknown>).result as string;
+  } else if (typeof envelope === 'string') {
+    resultText = envelope;
+  } else {
+    // Top-level JSON that isn't the envelope (e.g. claude already emitted bare
+    // JSON, or a future format) — use it directly.
+    return envelope;
+  }
+
+  const payload = stripToJson(resultText);
+  try {
+    return JSON.parse(payload);
+  } catch (err) {
+    const snippet = payload.length > 200 ? `${payload.slice(0, 200)}…` : payload;
+    throw new Error(
+      `Bash step "${stepId}" parseEnvelope: claude output was not valid JSON after unwrapping ` +
+      `(${err instanceof Error ? err.message : String(err)}). Got: ${snippet}`,
+    );
+  }
+}
+
 // ── Step Executors ──
 
 async function executeActionStep(
@@ -1381,7 +1445,11 @@ async function executeBashStep(
       maxBuffer: 10 * 1024 * 1024,
     });
 
-    const output = config.parseJson ? JSON.parse(stripCodeFences(stdout)) : stdout.trim();
+    const output = config.parseEnvelope
+      ? unwrapClaudeEnvelope(stdout, step.id)
+      : config.parseJson
+        ? JSON.parse(stripCodeFences(stdout))
+        : stdout.trim();
     return {
       status: 'success',
       output,
