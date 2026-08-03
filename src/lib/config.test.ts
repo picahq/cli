@@ -77,13 +77,14 @@ function withSandbox(): {
 
 describe('getProjectRoot', () => {
   let tmpDir: string;
+  let homeDir: string;
   let originalHome: string | undefined;
   let originalCwd: string;
 
   beforeEach(() => {
     originalHome = process.env.HOME;
     originalCwd = process.cwd();
-    ({ tmpDir } = withSandbox());
+    ({ tmpDir, homeDir } = withSandbox());
   });
 
   afterEach(() => {
@@ -133,6 +134,37 @@ describe('getProjectRoot', () => {
     const dir = path.join(tmpDir, 'orphan', 'sub');
     fs.mkdirSync(dir, { recursive: true });
     assert.equal(getProjectRoot(dir), dir);
+  });
+
+  it('does not treat $HOME as a project root when ~/.one exists (the CLI config dir)', () => {
+    // Incident: cwd was a marker-less dir under $HOME. The walk reached
+    // $HOME, matched ~/.one — the CLI's own config directory — and the
+    // project config landed under the home-dir slug, shadowing the
+    // global config for everything under $HOME.
+    fs.mkdirSync(path.join(homeDir, '.one'));
+    const dir = path.join(homeDir, 'projects', 'agent');
+    fs.mkdirSync(dir, { recursive: true });
+    assert.equal(getProjectRoot(dir), dir, 'should fall back to cwd, not $HOME');
+  });
+
+  it('does not treat $HOME as a project root via .git or package.json either', () => {
+    // A dotfiles repo (~/.git) or stray ~/package.json is common and
+    // must not promote all of $HOME to one project. Scope-for-all-of-
+    // home is what the global config is for.
+    fs.mkdirSync(path.join(homeDir, '.git'));
+    fs.writeFileSync(path.join(homeDir, 'package.json'), '{}');
+    const dir = path.join(homeDir, 'projects', 'agent');
+    fs.mkdirSync(dir, { recursive: true });
+    assert.equal(getProjectRoot(dir), dir);
+  });
+
+  it('still detects a marked project root below $HOME', () => {
+    fs.mkdirSync(path.join(homeDir, '.one'));
+    const repo = path.join(homeDir, 'projects', 'repo');
+    const leaf = path.join(repo, 'sub');
+    fs.mkdirSync(leaf, { recursive: true });
+    fs.mkdirSync(path.join(repo, '.git'));
+    assert.equal(getProjectRoot(leaf), repo);
   });
 });
 
