@@ -40,11 +40,19 @@ export interface ResolvedConfig {
 export function getProjectRoot(cwd: string = process.cwd()): string {
   let dir = path.resolve(cwd);
   const root = path.parse(dir).root;
+  const home = os.homedir();
   while (dir !== root) {
+    // $HOME is never a project root: `~/.one` is the CLI's own config
+    // directory (not an opt-in marker), and a dotfiles `.git` or stray
+    // `package.json` in $HOME is common. Any of those would otherwise
+    // promote home to a project root, and the "project" config written
+    // under the home-dir slug would shadow the global config for every
+    // directory under $HOME. Scope for all-of-home is global config.
     if (
-      fs.existsSync(path.join(dir, '.one')) ||
-      fs.existsSync(path.join(dir, '.git')) ||
-      fs.existsSync(path.join(dir, 'package.json'))
+      dir !== home &&
+      (fs.existsSync(path.join(dir, '.one')) ||
+        fs.existsSync(path.join(dir, '.git')) ||
+        fs.existsSync(path.join(dir, 'package.json')))
     ) {
       return dir;
     }
