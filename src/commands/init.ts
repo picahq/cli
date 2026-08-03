@@ -941,7 +941,7 @@ function printOnboardingPrompt(): void {
   console.log(pc.cyan('  ┌─────────────────────────────────────────────────────────────'));
   console.log(pc.cyan('  │'));
   console.log(pc.cyan('  │  The One CLI (`one`) is now installed on this machine. It'));
-  console.log(pc.cyan('  │  lets you interact with 400+ third-party platforms (Gmail,'));
+  console.log(pc.cyan('  │  lets you interact with 600+ third-party platforms (Gmail,'));
   console.log(pc.cyan('  │  Slack, Shopify, HubSpot, Stripe, GitHub, etc.) through'));
   console.log(pc.cyan('  │  their APIs. Whenever you need to interact with any'));
   console.log(pc.cyan('  │  third-party platform or external service, use the `one`'));
@@ -1294,7 +1294,7 @@ async function promptConnectIntegrations(apiKey: string, connParams?: Connection
         label: i.label,
         hint: i.hint,
       })),
-      { value: 'more', label: 'Browse all 200+ platforms' },
+      { value: 'more', label: 'Browse all 600+ platforms' },
       { value: 'skip', label: 'Skip for now', hint: 'you can always run one add later' },
     ];
 

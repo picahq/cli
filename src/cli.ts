@@ -70,7 +70,7 @@ const program = new Command();
 program
   .name('one')
   .option('--agent', 'Machine-readable JSON output (no colors, spinners, or prompts)')
-  .description(`One CLI — Connect AI agents to 400+ platforms through one interface.
+  .description(`One CLI — Connect AI agents to 600+ platforms through one interface.
 
   Setup:
     one login                             Authenticate via browser (opens app.withone.ai)
@@ -142,7 +142,7 @@ program
         -d '{"to":"j@example.com","subject":"Hello","body":"Hi!","connectionKey":"live::gmail::default::abc123"}'
 
   Platform names are lowercase; multi-word names use dashes (e.g. hubspot, ship-station, google-calendar).
-  Run 'one platforms' to browse all 400+ available platforms.`)
+  Run 'one platforms' to browse all 600+ available platforms.`)
   .version(version);
 
 // Fire a non-blocking version check alongside every command
