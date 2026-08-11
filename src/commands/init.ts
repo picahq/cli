@@ -1,3 +1,4 @@
+import { homeDir } from '../lib/home.js';
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
 import fs from 'node:fs';
@@ -299,7 +300,7 @@ async function chooseConfigScope(
 }
 
 function tildify(filePath: string): string {
-  const home = os.homedir();
+  const home = homeDir();
   return filePath.startsWith(home) ? '~' + filePath.slice(home.length) : filePath;
 }
 
@@ -702,11 +703,11 @@ function getSkillSourceDir(): string {
 }
 
 function getCanonicalSkillPath(): string {
-  return path.join(os.homedir(), CANONICAL_SKILL_DIR, 'one');
+  return path.join(homeDir(), CANONICAL_SKILL_DIR, 'one');
 }
 
 function getAgentSkillPath(agent: SkillAgent): string {
-  return path.join(os.homedir(), agent.skillDir, 'one');
+  return path.join(homeDir(), agent.skillDir, 'one');
 }
 
 function isSkillInstalled(): boolean {

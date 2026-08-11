@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { computeConnectionAccess, formatAccess, resolveAllowedActions } from './access.js';
 import type { ActionDetails, ResolvedAllowedAction } from './types.js';
+import { setHomeTo, snapshotHomeEnv, restoreHomeEnv, type HomeEnvSnapshot } from '../test-support/home.js';
 
 const granted: ResolvedAllowedAction[] = [
   { actionId: 'a1', title: 'Send Email', method: 'POST', platform: 'gmail' },
@@ -68,17 +69,16 @@ describe('formatAccess', () => {
 // $HOME to a temp dir instead of touching the developer's real ~/.one/.
 describe('resolveAllowedActions', () => {
   let tmpDir: string;
-  let originalHome: string | undefined;
+  let originalHome: HomeEnvSnapshot;
 
   beforeEach(() => {
-    originalHome = process.env.HOME;
+    originalHome = snapshotHomeEnv();
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'one-cli-access-test-'));
-    process.env.HOME = tmpDir;
+    setHomeTo(tmpDir);
   });
 
   afterEach(() => {
-    if (originalHome === undefined) delete process.env.HOME;
-    else process.env.HOME = originalHome;
+    restoreHomeEnv(originalHome);
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 

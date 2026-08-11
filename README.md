@@ -683,6 +683,22 @@ ONE_PERMISSIONS=read
 
 > ⚠️ **Add `.onerc` to your `.gitignore`.** If you put `ONE_SECRET` in it, committing the file will leak your API key. Treat `.onerc` like `.env` — never check it in.
 
+### Relocating the CLI's state (`ONE_HOME`)
+
+Everything the CLI stores — `~/.one/config.json`, the knowledge cache, memory
+databases, sync schedules, and the installed skill files — is rooted at your
+home directory. Set `ONE_HOME` to put it somewhere else:
+
+```bash
+export ONE_HOME=/srv/one-state
+one whoami          # now reads /srv/one-state/.one/config.json
+```
+
+Useful for containers, CI runners, and shared/multi-tenant shells where the
+account's home directory isn't the right place for per-workspace state. It
+works identically on every platform — unlike `HOME`, which `os.homedir()`
+ignores on Windows.
+
 ## The workflow
 
 The power of One is in the workflow. Every interaction follows the same pattern:

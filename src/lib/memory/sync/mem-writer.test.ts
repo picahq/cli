@@ -10,6 +10,7 @@ import { writeConfig } from '../../config.js';
 import { getBackend, resetBackendSingleton } from '../runtime.js';
 import { registerBackend } from '../plugins.js';
 import { pglitePlugin } from '../plugins/pglite/index.js';
+import { setHomeTo, snapshotHomeEnv, restoreHomeEnv } from '../../../test-support/home.js';
 
 /**
  * Exercises the dual-write helper end-to-end against a live PGlite. Proves
@@ -24,7 +25,7 @@ describe('sync mem-writer — dual-write into the unified memory store', () => {
     // Isolate HOME so we never touch the user's real config file.
     tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'mem-writer-test-'));
     dbDir = path.join(tmpHome, 'mem.pglite');
-    process.env.HOME = tmpHome;
+    setHomeTo(tmpHome);
     fs.mkdirSync(path.join(tmpHome, '.one'), { mode: 0o700 });
     writeConfig({
       apiKey: 'sk_test_dummy',
