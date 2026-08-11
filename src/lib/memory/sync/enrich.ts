@@ -252,6 +252,106 @@ export interface EnrichContext {
    * memory-primary story for profiles with an enrich block (Gmail, Fathom).
    */
   profile?: SyncProfile;
+  /**
+   * Whether the enriched batch may be mirrored into unified memory. Phase 1
+   * gates its own memory write on `options.toMemory !== false` (`--no-memory`);
+   * phase 2 did not, so `--no-memory` leaked and enrichment still wrote. (#174)
+   */
+  writeToMemory?: boolean;
+}
+
+/**
+ * Column holding the `enrich.invalidateOn` value observed at enrich time.
+ * Compared against the live list-endpoint value on the next sync to decide
+ * whether a record's detail payload has gone stale. (#174)
+ */
+export const ENRICH_FINGERPRINT_COLUMN = '_enrich_fp';
+
+/** Add a column if the table doesn't already have it. */
+function ensureColumn(
+  db: Database.Database,
+  safeTable: string,
+  column: string,
+  type: string,
+): void {
+  const cols = db.prepare(`PRAGMA table_info("${safeTable}")`).all() as Array<{ name: string }>;
+  if (!cols.some(c => c.name === column)) {
+    db.exec(`ALTER TABLE "${safeTable}" ADD COLUMN "${column}" ${type}`);
+  }
+}
+
+/**
+ * Clear every enrichment stamp for a model, so the next phase 2 re-fetches all
+ * detail endpoints. Backs `one sync run --re-enrich`.
+ *
+ * Returns the number of rows unstamped. A no-op (0) when the table doesn't
+ * exist yet or nothing was ever enriched.
+ */
+export function clearEnrichmentStamps(
+  db: Database.Database,
+  model: string,
+  timestampField = '_enriched_at',
+): number {
+  const safeTable = model.replace(/[^a-zA-Z0-9_]/g, '_');
+  const exists = db.prepare(
+    `SELECT name FROM sqlite_master WHERE type='table' AND name = ?`
+  ).get(safeTable);
+  if (!exists) return 0;
+
+  const cols = db.prepare(`PRAGMA table_info("${safeTable}")`).all() as Array<{ name: string }>;
+  if (!cols.some(c => c.name === timestampField)) return 0;
+
+  const result = db.prepare(
+    `UPDATE "${safeTable}" SET "${timestampField}" = NULL WHERE "${timestampField}" IS NOT NULL`
+  ).run();
+  return result.changes;
+}
+
+/**
+ * Clear the enrichment stamp for rows whose `enrich.invalidateOn` fingerprint
+ * has moved since they were last enriched, so phase 2 re-fetches exactly those.
+ *
+ * Deliberately skips rows with no recorded fingerprint (`IS NOT NULL` guard):
+ * treating "never fingerprinted" as "changed" would re-enrich every existing
+ * row the first time a user upgrades onto a profile that adds `invalidateOn`.
+ *
+ * Returns the number of rows invalidated.
+ */
+export function invalidateStaleEnrichments(
+  db: Database.Database,
+  model: string,
+  config: EnrichConfig,
+): number {
+  const fpField = config.invalidateOn;
+  if (!fpField) return 0;
+
+  const tsField = config.timestampField ?? '_enriched_at';
+  const safeTable = model.replace(/[^a-zA-Z0-9_]/g, '_');
+  const exists = db.prepare(
+    `SELECT name FROM sqlite_master WHERE type='table' AND name = ?`
+  ).get(safeTable);
+  if (!exists) return 0;
+
+  const cols = new Set(
+    (db.prepare(`PRAGMA table_info("${safeTable}")`).all() as Array<{ name: string }>).map(c => c.name),
+  );
+  // The fingerprint source must exist on the row; the bookkeeping columns are
+  // created on demand so a profile can add `invalidateOn` without a migration.
+  if (!cols.has(fpField)) return 0;
+  if (!cols.has(tsField)) return 0;
+  if (!cols.has(ENRICH_FINGERPRINT_COLUMN)) {
+    ensureColumn(db, safeTable, ENRICH_FINGERPRINT_COLUMN, 'TEXT');
+    return 0; // nothing could have been fingerprinted yet
+  }
+
+  // `IS NOT` is SQLite's null-safe inequality.
+  const result = db.prepare(
+    `UPDATE "${safeTable}" SET "${tsField}" = NULL
+      WHERE "${tsField}" IS NOT NULL
+        AND "${ENRICH_FINGERPRINT_COLUMN}" IS NOT NULL
+        AND "${ENRICH_FINGERPRINT_COLUMN}" IS NOT CAST("${fpField}" AS TEXT)`
+  ).run();
+  return result.changes;
 }
 
 /**
@@ -362,6 +462,12 @@ export async function enrichPhase(
           ? deepMerge(row, enrichedData)
           : { ...enrichedData, [idField]: id };
         merged[tsField] = now;
+        // Record the fingerprint this detail payload corresponds to, so the
+        // next sync can tell whether upstream has moved since. (#174)
+        if (config.invalidateOn) {
+          const fp = merged[config.invalidateOn] ?? row[config.invalidateOn];
+          merged[ENRICH_FINGERPRINT_COLUMN] = fp == null ? null : String(fp);
+        }
         pending.push({ merged, id });
       } else if (result.status === 'fulfilled' && result.value === null) {
         rateLimited++;
@@ -452,7 +558,11 @@ export async function enrichPhase(
     // SQLite has the full thread bodies / meeting transcripts / etc. — which
     // defeats the point of enrich for memory-primary reads. Best-effort: if
     // the profile wasn't plumbed through, skip quietly.
-    if (ctx.profile && memoryBatch.length > 0) {
+    //
+    // `writeToMemory === false` is `--no-memory`, which phase 1 has always
+    // honoured and phase 2 used to ignore. Unset means on, so callers that
+    // don't plumb it through keep the previous behaviour. (#174)
+    if (ctx.profile && ctx.writeToMemory !== false && memoryBatch.length > 0) {
       try {
         await writePageToMemory(ctx.profile, memoryBatch);
       } catch (err) {
