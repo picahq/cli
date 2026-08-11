@@ -1,3 +1,4 @@
+import { homeDir } from '../../../home.js';
 /**
  * Embedded Postgres backend plugin — bootstraps a real Postgres process
  * via pgserve (Postgres 18), then talks to it over node-pg. Default
@@ -64,7 +65,10 @@ const BASE_CAPABILITIES: BackendCapabilities = {
 };
 
 const DEFAULTS: EmbeddedPostgresConfig = {
-  dataDir: path.join(os.homedir(), '.one', 'pg'),
+  // Getter, not a bound value: DEFAULTS is built at module load, so a plain
+  // `path.join(homeDir(), ...)` here would capture the home directory before
+  // ONE_HOME could take effect. See lib/home.ts.
+  get dataDir() { return path.join(homeDir(), '.one', 'pg'); },
   database: 'one_mem',
   schema: 'public',
   pgvector: true,

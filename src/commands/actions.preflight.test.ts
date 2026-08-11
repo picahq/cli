@@ -6,6 +6,7 @@ import path from 'node:path';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { actionsExecuteCommand, actionsExecuteParallelCommand } from './actions.js';
+import { setHomeTo, snapshotHomeEnv, restoreHomeEnv, type HomeEnvSnapshot } from '../test-support/home.js';
 
 // Contract lock for the execute "_preflight" field: agent-mode execute and
 // execute --parallel must report whether the action-details preflight was
@@ -64,7 +65,7 @@ function startServer(): Promise<Harness> {
 
 describe('execute _preflight contract (agent mode)', () => {
   let tmpHome: string;
-  let originalHome: string | undefined;
+  let originalHome: HomeEnvSnapshot;
   let originalAgent: string | undefined;
   let originalArgv: string[];
   let originalWrite: typeof process.stdout.write;
@@ -73,11 +74,11 @@ describe('execute _preflight contract (agent mode)', () => {
   let harness: Harness;
 
   beforeEach(async () => {
-    originalHome = process.env.HOME;
+    originalHome = snapshotHomeEnv();
     originalAgent = process.env.ONE_AGENT;
     originalArgv = process.argv;
     tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'one-cli-preflight-test-'));
-    process.env.HOME = tmpHome;
+    setHomeTo(tmpHome);
     process.env.ONE_AGENT = '1';
 
     harness = await startServer();
@@ -111,7 +112,7 @@ describe('execute _preflight contract (agent mode)', () => {
     process.stdout.write = originalWrite;
     process.exit = originalExit;
     process.argv = originalArgv;
-    if (originalHome === undefined) delete process.env.HOME; else process.env.HOME = originalHome;
+    restoreHomeEnv(originalHome);
     if (originalAgent === undefined) delete process.env.ONE_AGENT; else process.env.ONE_AGENT = originalAgent;
     harness.server.close();
     fs.rmSync(tmpHome, { recursive: true, force: true });

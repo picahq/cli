@@ -9,6 +9,7 @@ import { registerBackend } from '../../lib/memory/plugins.js';
 import { pglitePlugin } from '../../lib/memory/plugins/pglite/index.js';
 import { updateMemoryConfig, DEFAULT_MEMORY_CONFIG } from '../../lib/memory/config.js';
 import { writeConfig } from '../../lib/config.js';
+import { setHomeTo, snapshotHomeEnv, restoreHomeEnv } from '../../test-support/home.js';
 
 // #131: `one mem find-by-key <key> [<key2>]` — exercises the full command path
 // (getBackend → findByKeys → group-by-type → agent JSON) against a real PGlite
@@ -36,7 +37,7 @@ describe('mem find-by-key command (#131)', () => {
 
   before(async () => {
     tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'find-by-key-test-'));
-    process.env.HOME = tmpHome;
+    setHomeTo(tmpHome);
     fs.mkdirSync(path.join(tmpHome, '.one'), { mode: 0o700 });
     writeConfig({ apiKey: 'sk_test_dummy', installedAgents: [], createdAt: new Date().toISOString() });
     registerBackend(pglitePlugin);
