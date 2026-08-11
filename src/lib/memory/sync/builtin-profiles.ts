@@ -57,6 +57,44 @@ export function loadBuiltinProfile(platform: string, model: string): BuiltinProf
 }
 
 /**
+ * Capability fields a built-in profile can gain in a CLI release.
+ *
+ * `sync run` resolves profiles with `readProfile()` alone — it never merges or
+ * diffs against the shipped built-in. So when a release adds a field to a
+ * built-in profile, every user who already ran `sync init` keeps their older
+ * copy and silently gets none of it, forever, with no warning. That is how
+ * identity keys (#129/#130) shipped and then reached nobody who had already
+ * onboarded.
+ *
+ * Deliberately a curated list, not "every key the built-in has". A profile is
+ * user-editable, and fields someone may have removed on purpose (`transform`,
+ * `exclude`, `onChange`, …) must not nag. These five only ever add behaviour.
+ */
+const CAPABILITY_FIELDS = ['identityKeys', 'identityKey', 'enrich', 'dateFilter', 'memory'] as const;
+
+/**
+ * Capability fields the shipped built-in declares that the user's installed
+ * profile is missing. Empty when there is no built-in, no installed profile,
+ * or the installed copy is current.
+ *
+ * A direct field comparison rather than an mtime check: file mtimes are not
+ * meaningful for an npm-installed package, where every file is stamped at
+ * install time.
+ */
+export function findMissingBuiltinCapabilities(
+  platform: string,
+  model: string,
+  installed: Record<string, unknown> | null | undefined,
+): string[] {
+  if (!installed) return [];
+  const builtin = loadBuiltinProfile(platform, model);
+  if (!builtin) return [];
+  return CAPABILITY_FIELDS.filter(
+    field => builtin[field] !== undefined && installed[field] === undefined,
+  );
+}
+
+/**
  * List all built-in profiles, optionally filtered by platform.
  */
 export function listBuiltinProfiles(platform?: string): BuiltinProfile[] {

@@ -311,6 +311,8 @@ Without declared paths, the default walker concatenates every string in the reco
 
 **Connections are late-bound** — profiles use `"connection": { "platform": "<name>" }`, not literal `connectionKey` strings. The key is resolved at sync time, so `one add <platform>` (re-auth) doesn't break the profile. For multi-account platforms, add `"tag": "<connection-tag>"` to disambiguate, and create the tagged connection with `one add <platform> --tag <name>`. Don't hardcode connection keys in profiles.
 
+**Installed profiles do not auto-update.** `sync run` reads only `.one/sync/profiles/<platform>_<model>.json` and never merges the shipped built-in, so a profile created before a capability shipped silently lacks it — a pre-#167 gmail profile writes zero identity keys, forever, with no change in record counts. `sync run` warns when the built-in declares `identityKeys` / `identityKey` / `enrich` / `dateFilter` / `memory` that your copy lacks (agent mode: a `profileDrift` array). Fix with `one sync init <platform> <model>`, which patches rather than overwrites.
+
 **Cross-platform identity on a profile.** Two separate fields, and picking the wrong one silently mangles data:
 
 - `"identityKey": "properties.email"` — singular. "This record IS this entity." One dot-path; the value lands in `keys[]` and MERGES records for the same entity across platforms (HubSpot + Attio for one person collapse into a single record).

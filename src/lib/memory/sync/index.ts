@@ -8,7 +8,7 @@ import { readProfile, writeProfile, writeDraftProfile, listProfiles, generateTem
 import { syncModel } from './runner.js';
 import { testSyncProfile } from './test.js';
 import { inferProfileFromKnowledge } from './infer.js';
-import { loadBuiltinProfile, listBuiltinProfiles } from './builtin-profiles.js';
+import { loadBuiltinProfile, listBuiltinProfiles, findMissingBuiltinCapabilities } from './builtin-profiles.js';
 import { addSchedule, listSchedules, removeSchedule, scheduleStatus, repairSchedule } from './schedule.js';
 import { parseCondition, splitConditions } from './where-parser.js';
 import { readSyncState, removeModelState, getModelState } from './state.js';
@@ -141,7 +141,12 @@ async function syncProfilesCommand(platform?: string): Promise<void> {
         model: p.model,
         description: p.description,
         hasEnrich: !!(p as any).enrich,
-        hasIdentityKey: !!(p as any).identityKey,
+        // `identityKey` (singular) is the entity-merge key; `identityKeys`
+        // (plural, #167) are non-merging association keys. Reading only the
+        // singular reported hasIdentityKey:false for gmail/gcal/fathom — the
+        // three profiles the plural form was added for. (#129/#130)
+        hasIdentityKey: !!(p as any).identityKey || !!(p as any).identityKeys,
+        hasIdentityKeys: !!(p as any).identityKeys,
       })),
       total: profiles.length,
       _hint: profiles.length > 0
@@ -164,7 +169,7 @@ async function syncProfilesCommand(platform?: string): Promise<void> {
   for (const p of profiles) {
     const extras: string[] = [];
     if ((p as any).enrich) extras.push('enrich');
-    if ((p as any).identityKey) extras.push('identity');
+    if ((p as any).identityKey || (p as any).identityKeys) extras.push('identity');
     if ((p as any).dateFilter) extras.push('incremental');
     const tags = extras.length > 0 ? ` ${pc.dim(`[${extras.join(', ')}]`)}` : '';
     console.log(`  ${pc.bold(`${p.platform}/${p.model}`.padEnd(35))} ${p.description}${tags}`);
@@ -637,6 +642,24 @@ async function syncRunCommand(platform: string, options: SyncRunOptions): Promis
     await maybeAutoMigrateLegacy(platform, toSync.map(p => p.model));
   }
 
+  // Warn when the shipped built-in has gained capability fields the user's
+  // installed profile lacks. `sync run` reads only the on-disk profile, so
+  // without this a feature added to a built-in reaches nobody who already ran
+  // `sync init` — silently, forever. (#129/#130)
+  const profileDrift = toSync
+    .map(p => ({ model: p.model, missing: findMissingBuiltinCapabilities(platform, p.model, p as unknown as Record<string, unknown>) }))
+    .filter(d => d.missing.length > 0);
+
+  if (profileDrift.length > 0 && !output.isAgentMode()) {
+    for (const d of profileDrift) {
+      console.log(
+        `  ${pc.yellow('!')} ${platform}/${d.model} is missing ${d.missing.map(f => pc.bold(f)).join(', ')} ` +
+        `from the current built-in profile.\n` +
+        `    Run ${pc.bold(`one sync init ${platform} ${d.model}`)} to pick ${d.missing.length > 1 ? 'them' : 'it'} up.`
+      );
+    }
+  }
+
   const results = [];
   for (const profile of toSync) {
     try {
@@ -662,7 +685,21 @@ async function syncRunCommand(platform: string, options: SyncRunOptions): Promis
   }
 
   if (output.isAgentMode()) {
-    output.json({ platform, results });
+    output.json({
+      platform,
+      results,
+      // Surfaced to agents too: a profile silently missing a capability the
+      // built-in now declares is invisible in the record counts. (#129/#130)
+      ...(profileDrift.length > 0
+        ? {
+            profileDrift: profileDrift.map(d => ({
+              model: d.model,
+              missingFields: d.missing,
+              fix: `one sync init ${platform} ${d.model}`,
+            })),
+          }
+        : {}),
+    });
     return;
   }
 

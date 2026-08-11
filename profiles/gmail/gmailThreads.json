@@ -18,7 +18,8 @@
   "identityKeys": [
     { "prefix": "email", "path": "messages[].payload.headers[name=From].value" },
     { "prefix": "email", "path": "messages[].payload.headers[name=To].value" },
-    { "prefix": "email", "path": "messages[].payload.headers[name=Cc].value" }
+    { "prefix": "email", "path": "messages[].payload.headers[name=Cc].value" },
+    { "prefix": "email", "path": "messages[].payload.headers[name=Bcc].value" }
   ],
   "enrich": {
     "actionId": "conn_mod_def::GJ3ok0Eq0R8::AAzgZVLqTg2iBuITKpJLZg",
