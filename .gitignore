@@ -4,3 +4,10 @@ dist/
 *.log
 .one
 .idea/
+
+# Captured API responses used while developing. These are real payloads from
+# real accounts — they are for local use only and must never be committed.
+# Unit-test fixtures live inline in the *.test.ts files that use them.
+/test/
+*.dump.json
+*.capture.json
