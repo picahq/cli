@@ -20,6 +20,7 @@ import {
   writeUsageState,
 } from './config.js';
 import { isAgentMode } from './output.js';
+import { cliVersion } from './version.js';
 
 /**
  * CLI usage analytics for the One CLI (identified — keyed to the One user).
@@ -92,13 +93,10 @@ function posthogKey(): string {
   return process.env.ONE_POSTHOG_KEY || DEFAULT_POSTHOG_KEY;
 }
 
-function cliVersion(): string {
-  try {
-    return (require('../package.json') as { version: string }).version;
-  } catch {
-    return 'unknown';
-  }
-}
+// cliVersion() now lives in lib/version.ts — the old `require('../package.json')`
+// here resolved to `src/package.json`, which does not exist, so every telemetry
+// event in a source checkout reported version "unknown". Correct only in the
+// bundled dist/ layout.
 
 function envName(): 'live' | 'test' {
   const key = getApiKey();

@@ -571,8 +571,9 @@ flow
 flow
   .command('resume <runId>')
   .description('Resume a paused or failed workflow run')
-  .action(async (runId: string) => {
-    await flowResumeCommand(runId);
+  .option('--allow-bash', 'Allow bash step execution (disabled by default for security) — required to resume any flow containing bash steps')
+  .action(async (runId: string, options: { allowBash?: boolean }) => {
+    await flowResumeCommand(runId, options);
   });
 
 flow

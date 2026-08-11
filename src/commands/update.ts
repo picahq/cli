@@ -1,13 +1,12 @@
 import { homeDir } from '../lib/home.js';
-import { createRequire } from 'module';
 import { spawn } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import * as output from '../lib/output.js';
+import { cliVersion } from '../lib/version.js';
 
-const require = createRequire(import.meta.url);
-const { version: currentVersion } = require('../package.json');
+const currentVersion = cliVersion();
 
 // Lazy: binding these at module load captures the home directory from the env
 // as it was at import time, which defeats ONE_HOME (and every test that sets
