@@ -105,6 +105,11 @@ async function syncDoctorCommand(): Promise<void> {
 
   const allOk = checks.every(c => c.ok);
 
+  // Exit non-zero when sync isn't ready, so `one sync doctor && one sync run ...`
+  // actually gates. Set exitCode rather than process.exit() so the postAction
+  // hook still runs (backend close, telemetry flush). (#178)
+  if (!allOk) process.exitCode = 1;
+
   if (output.isAgentMode()) {
     output.json({ ok: allOk, checks });
     return;
