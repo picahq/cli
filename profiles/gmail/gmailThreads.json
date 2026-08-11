@@ -21,6 +21,12 @@
     { "prefix": "email", "path": "messages[].payload.headers[name=Cc].value" },
     { "prefix": "email", "path": "messages[].payload.headers[name=Bcc].value" }
   ],
+  "derive": {
+    "from_email": {
+      "path": "messages[0].payload.headers[name=From].value",
+      "extract": "email"
+    }
+  },
   "enrich": {
     "actionId": "conn_mod_def::GJ3ok0Eq0R8::AAzgZVLqTg2iBuITKpJLZg",
     "pathVars": { "userId": "me", "id": "{id}" },

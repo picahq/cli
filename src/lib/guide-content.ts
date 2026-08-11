@@ -869,6 +869,30 @@ Enrichment runs after list sync completes (Phase 2), not inline. It's inherently
 
 **Limitation:** Each profile supports one enrich action. If you need multiple enrichments (e.g. both summary and transcript from Fathom), create a second profile/model for the second enrichment.
 
+## Derived fields (\`derive\`)
+
+Add flat, queryable top-level fields computed from paths already in the record — no shell, no \`jq\`:
+
+\`\`\`json
+{
+  "derive": {
+    "from_email": {
+      "path": "messages[0].payload.headers[name=From].value",
+      "extract": "email"
+    },
+    "company": "organization.name"
+  }
+}
+\`\`\`
+
+- Paths use the same resolver as \`identityKeys\`, so \`[]\` wildcards, \`[0]\` indexes and \`[name=From]\` filters all work
+- \`extract: "email"\` pulls the address out of a display-name header (\`"Jane <jane@acme.com>"\` → \`jane@acme.com\`), lowercased
+- A path resolving to nothing **omits** the field rather than writing null, so \`--where\` filters behave
+- A path resolving to several values takes the first — it's a flat field by definition, and the path syntax lets you be specific
+- Applied on both sync phases, so an enriching profile gets the same field whether the record came from the list or the detail pass
+
+**Prefer \`derive\` over \`transform\` for extracting a field.** \`transform\` spawns \`sh -c\`, so it needs \`jq\` (or whatever you invoke) on PATH and does nothing on Windows. \`derive\` is pure and works everywhere — which is why the built-in \`gmail/gmailThreads\` profile uses it for \`from_email\`. Reach for \`transform\` when you need real computation, not field extraction.
+
 ## Record Transform
 
 Pipe records through any shell command or flow between fetch and store. The command receives a JSON array on stdin and must return a JSON array on stdout.
@@ -943,7 +967,9 @@ Two ways to tag a record with a cross-platform identifier (e.g. email), dependin
 ]}
 \`\`\`
 
-Each \`path\` supports \`[]\` wildcards (one key per element) and a \`[name=From]\` equality filter (e.g. Gmail \`messages[].payload.headers[name=From].value\`). \`email\`-prefixed values are email-extracted, so display-name headers (\`"Jane <jane@acme.com>"\`) and comma-lists normalize cleanly. Values are lowercased/trimmed/deduped. \`sync test\` previews how many identity keys each record resolves.
+Each \`path\` supports \`[]\` wildcards (one key per element) and a \`[name=From]\` equality filter (e.g. Gmail \`messages[].payload.headers[name=From].value\`). \`email\`-prefixed values are email-extracted, so display-name headers (\`"Jane <jane@acme.com>"\`) and comma-lists normalize cleanly. Values are lowercased/trimmed/deduped.
+
+\`sync test\` previews how many identity keys each record resolves. For an **enriching** profile the participant paths live in the detail payload, so \`sync test\` spends one detail call on the first sample and previews against the merged shape — you see the keys a real sync would write, not zero plus a promise. If that call can't be made (rate limit, permissions), it falls back to the list-shape preview and says the keys resolve after enrichment.
 
 The built-in \`gmail/gmailThreads\` profile collects From/To/**Cc/Bcc**. Gmail only returns a \`Bcc\` header on messages the authenticated user sent — it is stripped for recipients — so Bcc keys appear on your own sent threads and nowhere else.
 
