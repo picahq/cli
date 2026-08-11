@@ -18,7 +18,7 @@ describe('writeFlowResultFile (#87)', () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'one-flow-out-'));
     out = path.join(dir, 'result.json');
   });
-  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
 
   const meta = { runId: 'run_1', logFile: '/tmp/x.log', status: 'success' };
 

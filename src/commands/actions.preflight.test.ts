@@ -115,7 +115,7 @@ describe('execute _preflight contract (agent mode)', () => {
     restoreHomeEnv(originalHome);
     if (originalAgent === undefined) delete process.env.ONE_AGENT; else process.env.ONE_AGENT = originalAgent;
     harness.server.close();
-    fs.rmSync(tmpHome, { recursive: true, force: true });
+    fs.rmSync(tmpHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   });
 
   function lastJson(): any {

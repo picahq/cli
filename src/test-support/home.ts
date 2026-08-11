@@ -86,7 +86,7 @@ export function withTempHome(prefix = 'one-cli-test-'): TempHome {
       // A stale temp dir is harmless; failing teardown would mask the real
       // assertion failure.
       if (dir) {
-        try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* leave it */ }
+        try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); } catch { /* leave it */ }
       }
       dir = '';
     },

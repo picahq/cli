@@ -34,13 +34,30 @@ describe('calculateRelevance', () => {
   });
 
   it('caps access contribution at maxAccessCount', () => {
+    // Both calls must score against the SAME instant. Without a pinned `now`
+    // the recency term is re-read from the wall clock per call, so these two
+    // differed by ~1e-10 whenever the calls straddled a millisecond boundary —
+    // which failed this exact-equality assertion on CI intermittently.
+    const now = Date.now();
     const capped = calculateRelevance({
-      weight: 5, accessCount: 1_000_000, createdAt: YESTERDAY, lastAccessedAt: YESTERDAY, maxAccessCount: 100,
+      weight: 5, accessCount: 1_000_000, createdAt: YESTERDAY, lastAccessedAt: YESTERDAY, maxAccessCount: 100, now,
     });
     const atCap = calculateRelevance({
-      weight: 5, accessCount: 100, createdAt: YESTERDAY, lastAccessedAt: YESTERDAY, maxAccessCount: 100,
+      weight: 5, accessCount: 100, createdAt: YESTERDAY, lastAccessedAt: YESTERDAY, maxAccessCount: 100, now,
     });
     assert.equal(capped, atCap);
+  });
+
+  it('is deterministic for a pinned clock', () => {
+    const inputs = { weight: 7, accessCount: 42, createdAt: YESTERDAY, lastAccessedAt: YESTERDAY, now: 1_760_000_000_000 };
+    assert.equal(calculateRelevance(inputs), calculateRelevance(inputs));
+  });
+
+  it('still reads the wall clock when no `now` is supplied', () => {
+    // The default path must keep working — `now` is an opt-in for callers that
+    // need a stable instant, not a required argument.
+    const r = calculateRelevance({ weight: 5, accessCount: 10, createdAt: YESTERDAY });
+    assert.ok(r >= 0 && r <= 1, `expected a score in range, got ${r}`);
   });
 
   it('returns values within [0, 1]', () => {

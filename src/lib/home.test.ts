@@ -74,7 +74,7 @@ describe('getProjectRoot never escapes above $HOME', () => {
   afterEach(() => {
     process.chdir(cwd);
     restoreHomeEnv(saved);
-    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
+    try { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); } catch { /* ignore */ }
   });
 
   it('ignores a marker sitting above the home directory', () => {

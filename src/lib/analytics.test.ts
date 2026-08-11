@@ -88,7 +88,7 @@ describe('CLI usage rollups', () => {
       if (v === undefined) delete process.env[k];
       else process.env[k] = v;
     }
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   });
 
   it('never misses a user and keeps exact per-user counts', () => {

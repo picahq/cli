@@ -17,7 +17,7 @@ describe('flow validate — references inside code.module files (#75)', () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'one-modref-'));
     fs.mkdirSync(path.join(dir, 'lib'), { recursive: true });
   });
-  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
 
   function writeModule(name: string, body: string): void {
     fs.writeFileSync(path.join(dir, 'lib', name), body);
