@@ -1,3 +1,4 @@
+import { homeDir } from './home.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -6,13 +7,13 @@ import type { Config, AccessControlSettings, PermissionLevel, WhoAmIResponse } f
 import type { OneApi } from './api.js';
 
 // Home-rooted paths are resolved LAZILY on every access. Binding them at
-// module-load time would cache `os.homedir()` from the initial process env,
+// module-load time would cache `homeDir()` from the initial process env,
 // which breaks tests (and any caller) that sets `process.env.HOME` after
 // import. Test-isolation bug history: on 2026-04-21, running the unified-
 // memory suite clobbered the user's real `~/.one/config.json` because
 // these constants had already resolved to the real home before the test's
 // `before()` hook ran. Keep these as getters.
-function configDir(): string { return path.join(os.homedir(), '.one'); }
+function configDir(): string { return path.join(homeDir(), '.one'); }
 function configFile(): string { return path.join(configDir(), 'config.json'); }
 function projectsDir(): string { return path.join(configDir(), 'projects'); }
 
@@ -40,7 +41,7 @@ export interface ResolvedConfig {
 export function getProjectRoot(cwd: string = process.cwd()): string {
   let dir = path.resolve(cwd);
   const root = path.parse(dir).root;
-  const home = os.homedir();
+  const home = homeDir();
   while (dir !== root) {
     // $HOME is never a project root: `~/.one` is the CLI's own config
     // directory (not an opt-in marker), and a dotfiles `.git` or stray
@@ -56,6 +57,13 @@ export function getProjectRoot(cwd: string = process.cwd()): string {
     ) {
       return dir;
     }
+    // Never walk ABOVE $HOME either. Skipping home but continuing upward let
+    // the walk reach `C:\Users` / `/home` / `/`, and a `.git`, `package.json`
+    // or `.one` sitting in any of those would be adopted as the project root
+    // for every marker-less directory under home. Nothing above $HOME is ever
+    // a meaningful project root; a project outside home is unaffected, since
+    // the walk never reaches home in that case.
+    if (dir === home) break;
     dir = path.dirname(dir);
   }
   return path.resolve(cwd);

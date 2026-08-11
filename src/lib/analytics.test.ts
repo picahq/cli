@@ -7,6 +7,7 @@ import type { Command } from 'commander';
 
 import { recordCommand, flushUsageRollups } from './analytics.js';
 import { appendUsageLog, readUsageLog, readAnalyticsQueue, claimUsageLog } from './config.js';
+import { setHomeTo, snapshotHomeEnv, restoreHomeEnv } from '../test-support/home.js';
 
 // These tests exercise the REAL rollup code against REAL files: HOME is
 // sandboxed to a temp dir so all reads/writes land under <tmp>/.one (config.ts
@@ -70,7 +71,7 @@ describe('CLI usage rollups', () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'one-cli-rollup-test-'));
     const home = path.join(tmpDir, 'home');
     fs.mkdirSync(home, { recursive: true });
-    process.env.HOME = home;
+    setHomeTo(home);
     process.chdir(home); // isolate from any .onerc in the dev's cwd
     // Telemetry must be ENABLED to test the emit path.
     delete process.env.CI;

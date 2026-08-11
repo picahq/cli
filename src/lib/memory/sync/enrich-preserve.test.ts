@@ -14,6 +14,7 @@ import { writeConfig } from '../../config.js';
 import { getBackend, resetBackendSingleton } from '../runtime.js';
 import { registerBackend } from '../plugins.js';
 import { pglitePlugin } from '../plugins/pglite/index.js';
+import { setHomeTo, snapshotHomeEnv, restoreHomeEnv } from '../../../test-support/home.js';
 
 /**
  * A PRE-ENRICH WRITE MAY CREATE AND REFRESH, BUT IT MUST NEVER DEGRADE.
@@ -45,7 +46,7 @@ let workDir: string;
 before(async () => {
   originalCwd = process.cwd();
   tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'enrich-preserve-test-'));
-  process.env.HOME = tmpHome;
+  setHomeTo(tmpHome);
   // Silences the runner's progress/warning writes to stderr.
   process.env.ONE_AGENT = '1';
   fs.mkdirSync(path.join(tmpHome, '.one'), { mode: 0o700 });

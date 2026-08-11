@@ -1,3 +1,4 @@
+import { homeDir } from './home.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -8,7 +9,7 @@ export type InstallScope = 'global' | 'project';
 
 function expandPath(p: string): string {
   if (p.startsWith('~/')) {
-    return path.join(os.homedir(), p.slice(2));
+    return path.join(homeDir(), p.slice(2));
   }
   return p;
 }
@@ -37,26 +38,37 @@ function getClaudeDesktopDetectDir(): string {
 
 function getWindsurfConfigPath(): string {
   if (process.platform === 'win32') {
-    return path.join(process.env.USERPROFILE || os.homedir(), '.codeium', 'windsurf', 'mcp_config.json');
+    return path.join(homeDir(), '.codeium', 'windsurf', 'mcp_config.json');
   }
   return '~/.codeium/windsurf/mcp_config.json';
 }
 
 function getWindsurfDetectDir(): string {
   if (process.platform === 'win32') {
-    return path.join(process.env.USERPROFILE || os.homedir(), '.codeium', 'windsurf');
+    return path.join(homeDir(), '.codeium', 'windsurf');
   }
   return '~/.codeium/windsurf';
 }
 
 function getCursorConfigPath(): string {
   if (process.platform === 'win32') {
-    return path.join(process.env.USERPROFILE || os.homedir(), '.cursor', 'mcp.json');
+    return path.join(homeDir(), '.cursor', 'mcp.json');
   }
   return '~/.cursor/mcp.json';
 }
 
-const AGENTS: Agent[] = [
+/**
+ * Built per call, never bound at module load.
+ *
+ * On win32 the Windsurf/Cursor/Claude-Desktop helpers return absolute paths
+ * (built from homeDir(), or from %APPDATA%), while on POSIX they return lazy
+ * `~/...` strings that expandPath() resolves at use time. A module-scope array
+ * therefore captured the real home on Windows at import — the exact
+ * platform-asymmetric trap that let the test suite write to the developer's
+ * real home. Keep this a function. (see lib/home.ts)
+ */
+function getAgents(): Agent[] {
+  return [
   {
     id: 'claude-code',
     name: 'Claude Code',
@@ -104,14 +116,15 @@ const AGENTS: Agent[] = [
     detectDir: '~/.kiro',
     projectConfigPath: '.kiro/settings/mcp.json',
   },
-];
+  ];
+}
 
 export function getAllAgents(): Agent[] {
-  return AGENTS;
+  return getAgents();
 }
 
 export function detectInstalledAgents(): Agent[] {
-  return AGENTS.filter(agent => {
+  return getAgents().filter(agent => {
     const detectDir = expandPath(agent.detectDir);
     return fs.existsSync(detectDir);
   });
@@ -222,7 +235,7 @@ export interface AgentStatus {
 }
 
 export function getAgentStatuses(): AgentStatus[] {
-  return AGENTS.map(agent => {
+  return getAgents().map(agent => {
     const detected = fs.existsSync(expandPath(agent.detectDir));
     const globalMcp = detected && isMcpInstalled(agent, 'global');
     const projectMcp = agent.projectConfigPath

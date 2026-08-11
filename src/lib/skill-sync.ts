@@ -1,3 +1,4 @@
+import { homeDir } from './home.js';
 /**
  * Skill sync — keeps the user's installed skill files in lockstep with the
  * CLI version they're running.
@@ -39,7 +40,7 @@ export function getPackagedSkillDir(): string {
 }
 
 export function getCanonicalSkillPath(): string {
-  return path.join(os.homedir(), CANONICAL_SKILL_DIR, 'one');
+  return path.join(homeDir(), CANONICAL_SKILL_DIR, 'one');
 }
 
 function getVersionMarkerPath(): string {
