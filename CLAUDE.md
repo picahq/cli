@@ -11,6 +11,19 @@ Do NOT run `npm publish` directly. The release is automated via GitHub.
 5. Once merged to `main`, create a **release tag** in GitHub for that version
 6. The GitHub release triggers the automated deploy to npm
 
+### Editing package-lock.json
+
+`npm install` on this project prunes `node_modules/pg` out of the lockfile on
+any machine where that optional dependency can't be installed — which would
+ship a broken postgres backend to everyone else. Two rules:
+
+1. For a **version-only bump**, don't run `npm install` at all. Hand-edit the
+   two `"version"` fields (root and `packages[""]`).
+2. For a **real dependency change**, run `npm install --package-lock-only`,
+   then check `git diff package-lock.json` for dropped `node_modules/*` entries
+   and restore any that npm pruned. Verify with `npm ci` before pushing —
+   a malformed lockfile breaks every CI job at once.
+
 ### Version bump checklist
 
 Every feature PR must include a version bump before shipping:
