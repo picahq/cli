@@ -276,6 +276,16 @@ export interface SyncRunOptions {
    * flip on once without editing the profile. `--no-embed` sets false.
    */
   embed?: boolean;
+  /**
+   * Clear every enrichment stamp before phase 2, forcing the detail endpoint
+   * to be re-fetched for all records of the model.
+   *
+   * The manual escape hatch for profiles with no `enrich.invalidateOn`
+   * fingerprint (or when the detail shape itself changed). Expensive — one
+   * detail call per record — so it is opt-in per run, never implied by
+   * `--full-refresh`. (#174)
+   */
+  reEnrich?: boolean;
 }
 
 export interface SyncQueryOptions {
@@ -319,6 +329,24 @@ export interface EnrichConfig {
   delayMs?: number;
   /** Column name for enrichment timestamp (default: "_enriched_at"). */
   timestampField?: string;
+  /**
+   * Name of a list-endpoint field that acts as a change fingerprint for the
+   * detail payload — e.g. `historyId` for Gmail threads, `updated_at` for
+   * Fathom meetings.
+   *
+   * When set, the value seen at enrich time is recorded alongside the
+   * timestamp. On the next sync, any row whose fingerprint has moved has its
+   * enrichment stamp cleared, so phase 2 re-fetches the detail endpoint for
+   * exactly the records that actually changed upstream — and nothing else.
+   *
+   * Additive by design: rows enriched before a fingerprint was recorded are
+   * never auto-invalidated (that would re-enrich the entire table on the first
+   * run after upgrading). They pick up a fingerprint the next time they are
+   * enriched for any other reason, including `--re-enrich`. Profiles with no
+   * sensible fingerprint field simply omit this and keep today's
+   * enrich-exactly-once behaviour. (#174)
+   */
+  invalidateOn?: string;
 }
 
 export interface DiscoveredModel {

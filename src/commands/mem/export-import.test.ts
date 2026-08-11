@@ -9,6 +9,7 @@ import { registerBackend } from '../../lib/memory/plugins.js';
 import { pglitePlugin } from '../../lib/memory/plugins/pglite/index.js';
 import { updateMemoryConfig, DEFAULT_MEMORY_CONFIG } from '../../lib/memory/config.js';
 import { writeConfig } from '../../lib/config.js';
+import { setHomeTo, snapshotHomeEnv, restoreHomeEnv } from '../../test-support/home.js';
 
 /** Swallow the command's stdout report so the test output stays readable. */
 async function quiet(fn: () => Promise<void>): Promise<void> {
@@ -47,7 +48,7 @@ describe('mem export → fresh store → mem import round-trip (#128)', () => {
   before(async () => {
     tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'mem-export-import-test-'));
     dumpFile = path.join(tmpHome, 'dump.jsonl');
-    process.env.HOME = tmpHome;
+    setHomeTo(tmpHome);
     fs.mkdirSync(path.join(tmpHome, '.one'), { mode: 0o700 });
     writeConfig({ apiKey: 'sk_test_dummy', installedAgents: [], createdAt: new Date().toISOString() });
     registerBackend(pglitePlugin);

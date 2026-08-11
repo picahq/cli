@@ -843,6 +843,7 @@ When a list endpoint returns lightweight records (e.g. just IDs), add an \`enric
   "enrich": {
     "actionId": "<get-message-action-id>",
     "pathVars": { "messageId": "{{id}}" },
+    "invalidateOn": "historyId",
     "concurrency": 3,
     "delayMs": 200
   }
@@ -850,7 +851,8 @@ When a list endpoint returns lightweight records (e.g. just IDs), add an \`enric
 \`\`\`
 
 - \`pathVars\` / \`queryParams\` / \`body\` support \`{{field}}\` interpolation from the list record
-- \`concurrency\` controls parallel detail requests per page (default: 3, lower = safer for rate limits)
+- \`invalidateOn\` names a list field that acts as a change fingerprint, so records whose detail went stale are re-enriched automatically (see "Re-enriching" below). Omit it to keep enrich-exactly-once behaviour
+- \`concurrency\` controls parallel detail requests per page (default: 5, lower = safer for rate limits)
 - \`delayMs\` is the pause between batches (default: 200ms)
 - \`resultsPath\` extracts a sub-object from the detail response before merging
 - \`merge: false\` replaces the record entirely instead of deep-merging
@@ -906,7 +908,19 @@ So for a row the mirror reports as already enriched, Phase 1 writes **non-author
 
 The write still happens, so \`--embed\`, profile edits, and the store's un-archive self-heal all keep working on enriched rows. The one thing given up: a field that disappears from the *list* shape upstream no longer disappears from an enriched record, because a merge cannot delete. \`sync run\` reports the count as \`memPreserved\`.
 
-**Known gap:** \`--full-refresh\` does **not** clear \`_enriched_at\`, so it does not re-enrich — and there is currently no way to re-enrich a record whose upstream detail content changed after its first enrichment. Delete the mirror (\`.one/sync/data/<platform>.db\`) to force a full re-enrich.
+**Re-enriching.** \`--full-refresh\` re-pulls the list but deliberately does **not** clear \`_enriched_at\` — it reconciles deletions, it is not a detail refresh. There are two ways to refresh detail content:
+
+- **\`enrich.invalidateOn\` (preferred, automatic).** Name a list-endpoint field that acts as a change fingerprint — \`historyId\` for Gmail threads, \`updated_at\` for Fathom meetings. The value seen at enrich time is recorded, and on the next sync any record whose fingerprint has moved is re-enriched. Records that did not change upstream cost nothing.
+
+  \`\`\`json
+  { "enrich": { "actionId": "...", "invalidateOn": "historyId" } }
+  \`\`\`
+
+  Additive by design: rows enriched before a fingerprint existed are never auto-invalidated (that would re-enrich the whole table on the first run after upgrading) — they pick one up the next time they enrich. Profiles with no sensible fingerprint field simply omit it and keep enrich-exactly-once behaviour.
+
+- **\`one sync run <platform> --re-enrich\` (manual escape hatch).** Clears every enrichment stamp and re-fetches all detail endpoints. Costs one detail call per record, so it is opt-in per run and never implied by \`--full-refresh\`. Use it when the detail *shape* changed, or for profiles with no fingerprint field.
+
+Deleting the mirror (\`.one/sync/data/<platform>.db\`) is no longer necessary.
 
 ## Cross-Platform Identity
 
@@ -1011,12 +1025,12 @@ Every \`sync X\` command is also exposed as \`mem sync X\` — same handlers, sa
 | Command | What it does |
 |---------|-------------|
 | \`sync profiles [platform]\` | List built-in pre-validated profiles |
-| \`sync doctor\` | Verify sync engine health |
+| \`sync doctor\` | Verify sync engine health. **Exits non-zero when not ready**, so \`one sync doctor && one sync run <platform>\` is a safe gate — run it first from cron/launchd, where a bare PATH can select a Node the native driver wasn't built for |
 | \`sync models <platform>\` | Discover available models |
 | \`sync init <plat> <model>\` | Create/patch profile (seeds from built-in, auto-tests) |
 | \`sync test <plat>/<model>\` | Validate profile. \`--show-searchable\` previews embedded text across 5 samples with per-path hit rates |
 | \`sync suggest-searchable <plat>/<model>\` | Rank candidate \`memory.searchable\` paths by signal density; emits paste-ready config |
-| \`sync run <platform>\` | Sync data (\`--full-refresh\`, \`--since\`, \`--dry-run\`, \`--no-memory\`) |
+| \`sync run <platform>\` | Sync data (\`--full-refresh\`, \`--since\`, \`--dry-run\`, \`--no-memory\`, \`--re-enrich\`) |
 | \`sync query <plat>/<model>\` | Query memory with \`--where\` (dotted paths), \`--after/before\` |
 | \`sync schema <plat>/<model>\` | Inspect the JSON structure of synced records (field paths, types, examples) — run before writing \`--where\` / query paths |
 | \`sync search "<query>"\` | Hybrid FTS + semantic across all synced data |

@@ -1,3 +1,4 @@
+import { homeDir } from '../../home.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -12,8 +13,9 @@ import path from 'node:path';
  * project they've ever set up.
  */
 
-const REGISTRY_DIR = path.join(os.homedir(), '.one', 'sync');
-const REGISTRY_FILE = path.join(REGISTRY_DIR, 'schedules.json');
+// Lazy: see the note in lib/home.ts — module-load binding defeats ONE_HOME.
+const REGISTRY_DIR = () => path.join(homeDir(), '.one', 'sync');
+const REGISTRY_FILE = () => path.join(REGISTRY_DIR(), 'schedules.json');
 
 export interface RegisteredSchedule {
   /** Stable id, e.g. "notion-cron-sync-test" (platform + slug of cwd). */
@@ -39,8 +41,8 @@ interface RegistryFile {
 
 function readRaw(): RegistryFile {
   try {
-    if (!fs.existsSync(REGISTRY_FILE)) return { schedules: [] };
-    const raw = fs.readFileSync(REGISTRY_FILE, 'utf-8');
+    if (!fs.existsSync(REGISTRY_FILE())) return { schedules: [] };
+    const raw = fs.readFileSync(REGISTRY_FILE(), 'utf-8');
     const parsed = JSON.parse(raw) as RegistryFile;
     if (!parsed || !Array.isArray(parsed.schedules)) return { schedules: [] };
     return parsed;
@@ -50,10 +52,10 @@ function readRaw(): RegistryFile {
 }
 
 function writeRaw(file: RegistryFile): void {
-  fs.mkdirSync(REGISTRY_DIR, { recursive: true });
-  const tmp = REGISTRY_FILE + '.tmp';
+  fs.mkdirSync(REGISTRY_DIR(), { recursive: true });
+  const tmp = REGISTRY_FILE() + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(file, null, 2));
-  fs.renameSync(tmp, REGISTRY_FILE);
+  fs.renameSync(tmp, REGISTRY_FILE());
 }
 
 /** Generate a stable id from platform + cwd basename. */

@@ -1,3 +1,4 @@
+import { homeDir } from '../lib/home.js';
 import { createRequire } from 'module';
 import { spawn } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
@@ -8,9 +9,12 @@ import * as output from '../lib/output.js';
 const require = createRequire(import.meta.url);
 const { version: currentVersion } = require('../package.json');
 
-const ONE_DIR = join(homedir(), '.one');
-const CACHE_PATH = join(ONE_DIR, 'update-check.json');
-const LOCK_PATH = join(ONE_DIR, 'auto-update.lock');
+// Lazy: binding these at module load captures the home directory from the env
+// as it was at import time, which defeats ONE_HOME (and every test that sets
+// it). See the note in lib/home.ts.
+const ONE_DIR = () => join(homeDir(), '.one');
+const CACHE_PATH = () => join(ONE_DIR(), 'update-check.json');
+const LOCK_PATH = () => join(ONE_DIR(), 'auto-update.lock');
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
 const AGE_GATE_MS = 30 * 60 * 1000; // 30 minutes — don't auto-install versions published less than 30min ago
 const LOCK_TTL_MS = 10 * 60 * 1000; // 10 minutes — after this a held lock is presumed dead and reclaimed
@@ -40,7 +44,7 @@ async function fetchLatestVersionInfo(): Promise<RegistryInfo | null> {
 
 function readCache(): { lastCheck: number; latestVersion: string; publishedAt?: string | null } | null {
   try {
-    return JSON.parse(readFileSync(CACHE_PATH, 'utf8'));
+    return JSON.parse(readFileSync(CACHE_PATH(), 'utf8'));
   } catch {
     return null;
   }
@@ -48,8 +52,8 @@ function readCache(): { lastCheck: number; latestVersion: string; publishedAt?: 
 
 function writeCache(latestVersion: string, publishedAt?: string | null): void {
   try {
-    mkdirSync(join(homedir(), '.one'), { recursive: true });
-    writeFileSync(CACHE_PATH, JSON.stringify({ lastCheck: Date.now(), latestVersion, publishedAt }));
+    mkdirSync(join(homeDir(), '.one'), { recursive: true });
+    writeFileSync(CACHE_PATH(), JSON.stringify({ lastCheck: Date.now(), latestVersion, publishedAt }));
   } catch {
     // best-effort
   }
@@ -154,20 +158,20 @@ export function isAutoUpdateDisabled(): boolean {
  * guard between concurrent invocations.
  */
 function acquireUpdateLock(targetVersion: string): boolean {
-  try { mkdirSync(ONE_DIR, { recursive: true }); } catch { /* best-effort */ }
+  try { mkdirSync(ONE_DIR(), { recursive: true }); } catch { /* best-effort */ }
 
   try {
-    const lock = JSON.parse(readFileSync(LOCK_PATH, 'utf8')) as { startedAt?: number };
+    const lock = JSON.parse(readFileSync(LOCK_PATH(), 'utf8')) as { startedAt?: number };
     const startedAt = typeof lock.startedAt === 'number' ? lock.startedAt : 0;
     if (Date.now() - startedAt < LOCK_TTL_MS) return false; // a fresh install is already running
-    rmSync(LOCK_PATH, { force: true }); // stale — reclaim it
+    rmSync(LOCK_PATH(), { force: true }); // stale — reclaim it
   } catch {
     // no lock (or unreadable) — fall through and try to create one
   }
 
   try {
     writeFileSync(
-      LOCK_PATH,
+      LOCK_PATH(),
       JSON.stringify({ pid: process.pid, startedAt: Date.now(), targetVersion }),
       { flag: 'wx' }, // fail if another invocation created it first
     );
@@ -210,6 +214,6 @@ export function autoUpdate(targetVersion: string, publishedAt: string | null): v
     stdio: 'ignore',
     shell: true,
   });
-  child.on('error', () => { try { rmSync(LOCK_PATH, { force: true }); } catch { /* best-effort */ } });
+  child.on('error', () => { try { rmSync(LOCK_PATH(), { force: true }); } catch { /* best-effort */ } });
   child.unref();
 }

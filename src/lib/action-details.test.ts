@@ -6,6 +6,7 @@ import path from 'node:path';
 import { resolveActionDetails, isActionDetailsEntry } from './action-details.js';
 import { knowledgeCachePath } from './cache.js';
 import type { ActionDetails, CacheEntry, ApiResponseWithMeta } from './types.js';
+import { setHomeTo, snapshotHomeEnv, restoreHomeEnv, type HomeEnvSnapshot } from '../test-support/home.js';
 
 // HOME is sandboxed to a temp dir so cache reads/writes never touch the real
 // ~/.one/cache — same pattern as config.test.ts (cache paths resolve lazily).
@@ -65,17 +66,16 @@ function stubApi(responder: (call: StubCall) => ApiResponseWithMeta<ActionDetail
 
 describe('resolveActionDetails', () => {
   let tmpHome: string;
-  let originalHome: string | undefined;
+  let originalHome: HomeEnvSnapshot;
 
   beforeEach(() => {
-    originalHome = process.env.HOME;
+    originalHome = snapshotHomeEnv();
     tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'one-cli-action-details-test-'));
-    process.env.HOME = tmpHome;
+    setHomeTo(tmpHome);
   });
 
   afterEach(() => {
-    if (originalHome === undefined) delete process.env.HOME;
-    else process.env.HOME = originalHome;
+    restoreHomeEnv(originalHome);
     fs.rmSync(tmpHome, { recursive: true, force: true });
   });
 

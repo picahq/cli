@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { getProjectRoot, getProjectSlug, resolveConfig } from './config.js';
+import { setHomeTo, snapshotHomeEnv, restoreHomeEnv, type HomeEnvSnapshot } from '../test-support/home.js';
 
 describe('getProjectSlug', () => {
   it('encodes a POSIX absolute path by replacing path separators', () => {
@@ -52,10 +53,14 @@ function withSandbox(): {
   writeProjectConfig: (absDir: string, content: object) => void;
   writeGlobalConfig: (content: object) => void;
 } {
+  // The sandbox root IS the sandboxed home, so every fixture these tests
+  // create lives under it. On Windows `os.tmpdir()` is itself inside the real
+  // home (%LOCALAPPDATA%\Temp), so a fixture created as a *sibling* of the
+  // sandbox home escapes it: getProjectRoot's walk climbs past the fake home,
+  // reaches the developer's real `~/.one`, and adopts it as the project root.
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'one-cli-config-test-'));
-  const homeDir = path.join(tmpDir, 'home');
-  fs.mkdirSync(homeDir, { recursive: true });
-  process.env.HOME = homeDir;
+  const homeDir = tmpDir;
+  setHomeTo(homeDir);
 
   const projectsDir = path.join(homeDir, '.one', 'projects');
 
@@ -78,19 +83,18 @@ function withSandbox(): {
 describe('getProjectRoot', () => {
   let tmpDir: string;
   let homeDir: string;
-  let originalHome: string | undefined;
+  let originalHome: HomeEnvSnapshot;
   let originalCwd: string;
 
   beforeEach(() => {
-    originalHome = process.env.HOME;
+    originalHome = snapshotHomeEnv();
     originalCwd = process.cwd();
     ({ tmpDir, homeDir } = withSandbox());
   });
 
   afterEach(() => {
     process.chdir(originalCwd);
-    if (originalHome === undefined) delete process.env.HOME;
-    else process.env.HOME = originalHome;
+    restoreHomeEnv(originalHome);
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -170,21 +174,20 @@ describe('getProjectRoot', () => {
 
 describe('resolveConfig', () => {
   let tmpDir: string;
-  let originalHome: string | undefined;
+  let originalHome: HomeEnvSnapshot;
   let originalCwd: string;
   let writeProjectConfig: (absDir: string, content: object) => void;
   let writeGlobalConfig: (content: object) => void;
 
   beforeEach(() => {
-    originalHome = process.env.HOME;
+    originalHome = snapshotHomeEnv();
     originalCwd = process.cwd();
     ({ tmpDir, writeProjectConfig, writeGlobalConfig } = withSandbox());
   });
 
   afterEach(() => {
     process.chdir(originalCwd);
-    if (originalHome === undefined) delete process.env.HOME;
-    else process.env.HOME = originalHome;
+    restoreHomeEnv(originalHome);
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 

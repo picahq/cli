@@ -423,8 +423,11 @@ one sync run stripe --since 90d
 one mem sync run stripe                              # identical (alias)
 # Profiles with `enrich` run a second detail pass. It enriches each record ONCE;
 # the list pass thereafter merges rather than replaces, so the enriched payload
-# survives (reported as `memPreserved`). `--full-refresh` does not re-enrich —
-# delete .one/sync/data/<platform>.db to force that.
+# survives (reported as `memPreserved`). `--full-refresh` reconciles deletions,
+# it does not refresh detail content. To refresh detail:
+one sync run gmail --re-enrich                       # re-fetch every detail endpoint
+# ...or set `enrich.invalidateOn` in the profile (e.g. "historyId", "updated_at")
+# so only records that actually changed upstream are re-enriched, automatically.
 
 # Query + search (reads from memory)
 one sync query stripe/balanceTransactions --where "status=available" --limit 20
@@ -682,6 +685,22 @@ ONE_PERMISSIONS=read
 ```
 
 > ⚠️ **Add `.onerc` to your `.gitignore`.** If you put `ONE_SECRET` in it, committing the file will leak your API key. Treat `.onerc` like `.env` — never check it in.
+
+### Relocating the CLI's state (`ONE_HOME`)
+
+Everything the CLI stores — `~/.one/config.json`, the knowledge cache, memory
+databases, sync schedules, and the installed skill files — is rooted at your
+home directory. Set `ONE_HOME` to put it somewhere else:
+
+```bash
+export ONE_HOME=/srv/one-state
+one whoami          # now reads /srv/one-state/.one/config.json
+```
+
+Useful for containers, CI runners, and shared/multi-tenant shells where the
+account's home directory isn't the right place for per-workspace state. It
+works identically on every platform — unlike `HOME`, which `os.homedir()`
+ignores on Windows.
 
 ## The workflow
 

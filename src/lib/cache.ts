@@ -1,3 +1,4 @@
+import { homeDir } from './home.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -7,11 +8,11 @@ import { getCacheTtl } from './config.js';
 // Resolved lazily (not at module load) so tests that sandbox $HOME get the
 // sandboxed path — same pattern as config.ts.
 function knowledgeDir(): string {
-  return path.join(os.homedir(), '.one', 'cache', 'knowledge');
+  return path.join(homeDir(), '.one', 'cache', 'knowledge');
 }
 
 function searchDir(): string {
-  return path.join(os.homedir(), '.one', 'cache', 'search');
+  return path.join(homeDir(), '.one', 'cache', 'search');
 }
 
 export function sanitizeFilename(input: string): string {

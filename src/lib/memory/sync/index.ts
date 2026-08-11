@@ -105,6 +105,11 @@ async function syncDoctorCommand(): Promise<void> {
 
   const allOk = checks.every(c => c.ok);
 
+  // Exit non-zero when sync isn't ready, so `one sync doctor && one sync run ...`
+  // actually gates. Set exitCode rather than process.exit() so the postAction
+  // hook still runs (backend close, telemetry flush). (#178)
+  if (!allOk) process.exitCode = 1;
+
   if (output.isAgentMode()) {
     output.json({ ok: allOk, checks });
     return;
@@ -1369,6 +1374,7 @@ function registerSyncSubcommands(sync: Command): void {
     .option('--max-pages <n>', 'Maximum number of pages to fetch')
     .option('--dry-run', 'Fetch first page only, show results without persisting')
     .option('--full-refresh', 'Fetch ALL records and delete local rows no longer in the source (handles deletions)')
+    .option('--re-enrich', 'Re-fetch the detail endpoint for every already-enriched record (profiles with an "enrich" block). Costs one detail call per record — for routine freshness set enrich.invalidateOn in the profile instead')
     .option('--no-memory', 'Skip the unified memory dual-write (default: memory is always written)')
     .option('--embed', 'Embed synced rows under the configured model, regardless of profile.memory.embed', false)
     .option('--no-embed', 'Skip embedding even if the profile opts in')
@@ -1376,7 +1382,7 @@ function registerSyncSubcommands(sync: Command): void {
     // derisking window. Memory is now the primary target, so the flag is
     // a silent no-op retained so existing scripts keep running.
     .option('--to-memory', '(deprecated — memory is now always written; flag kept for back-compat)')
-    .action(async (platform: string, options: { models?: string; since?: string; force?: boolean; maxPages?: string; dryRun?: boolean; fullRefresh?: boolean; memory?: boolean; embed?: boolean; toMemory?: boolean }) => {
+    .action(async (platform: string, options: { models?: string; since?: string; force?: boolean; maxPages?: string; dryRun?: boolean; fullRefresh?: boolean; reEnrich?: boolean; memory?: boolean; embed?: boolean; toMemory?: boolean }) => {
       await syncRunCommand(platform, {
         models: options.models?.split(',').map(m => m.trim()),
         since: options.since,
@@ -1384,6 +1390,7 @@ function registerSyncSubcommands(sync: Command): void {
         maxPages: options.maxPages ? parseInt(options.maxPages, 10) : undefined,
         dryRun: options.dryRun,
         fullRefresh: options.fullRefresh,
+        reEnrich: options.reEnrich,
         // Commander inverts `--no-memory` / `--no-embed` into options.X === false.
         toMemory: options.memory !== false,
         // Only override when the flag was actually passed — leaving

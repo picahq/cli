@@ -23,7 +23,7 @@
     "dev": "tsup --watch",
     "start": "node bin/cli.js",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test \"src/**/*.test.ts\"",
+    "test": "node scripts/run-tests.mjs",
     "prepare": "tsup"
   },
   "dependencies": {

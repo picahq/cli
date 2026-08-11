@@ -14,6 +14,7 @@ import { writeConfig } from '../../config.js';
 import { getBackend, resetBackendSingleton } from '../runtime.js';
 import { registerBackend } from '../plugins.js';
 import { pglitePlugin } from '../plugins/pglite/index.js';
+import { setHomeTo, snapshotHomeEnv, restoreHomeEnv } from '../../../test-support/home.js';
 
 /**
  * A PRE-ENRICH WRITE MAY CREATE AND REFRESH, BUT IT MUST NEVER DEGRADE.
@@ -45,7 +46,7 @@ let workDir: string;
 before(async () => {
   originalCwd = process.cwd();
   tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'enrich-preserve-test-'));
-  process.env.HOME = tmpHome;
+  setHomeTo(tmpHome);
   // Silences the runner's progress/warning writes to stderr.
   process.env.ONE_AGENT = '1';
   fs.mkdirSync(path.join(tmpHome, '.one'), { mode: 0o700 });
@@ -532,19 +533,25 @@ describe('syncModel — a second run must not thin out the enriched memory recor
     );
   });
 
-  it('PRE-EXISTING GAP: --no-memory does not stop phase 2 mirroring into memory', async (t) => {
+  it('--no-memory stops phase 2 mirroring into memory too (#174)', async (t) => {
     if (!sqliteAvailable) return t.skip('better-sqlite3 unavailable');
-    // Documenting, not endorsing. The runner passes `profile` into the enrich
-    // context unconditionally, and enrich.ts mirrors every merged batch into
-    // memory whenever that profile is present — it never consults
-    // `options.toMemory`. So a NEW record still lands in memory under
-    // `--no-memory`. Untouched by this change (the guard only ever REMOVES
-    // writes), and left alone on purpose so the fix stays scoped; pinned here
-    // so it can't regress silently in either direction.
+    // Was a documented gap: the runner passed `profile` into the enrich context
+    // unconditionally and enrich.ts mirrored every merged batch into memory
+    // whenever that profile was present, never consulting `options.toMemory`.
+    // Phase 1 had always honoured the flag, so `--no-memory` half-worked — new
+    // records still landed in memory via phase 2. Now gated on
+    // ctx.writeToMemory, which the runner sets from options.toMemory.
     const state = { listIds: ['T1', 'T2', 'T3', 'T4'], detailCalls: [] as string[] };
     await syncModel(makeApi(state), profile, { toMemory: false, force: true });
-    const t4 = await stored('T4');
-    assert.ok(t4, 'phase 2 wrote it despite --no-memory');
-    assert.equal((t4!.data as any).messages[0].snippet, 'FULL BODY of T4');
+
+    assert.equal(await stored('T4'), null, 'phase 2 must not write to memory under --no-memory');
+
+    // ...but enrichment itself must still have run. --no-memory suppresses the
+    // unified-memory dual-write only; the SQLite mirror is still populated, so
+    // a later run without the flag has enriched rows to publish.
+    assert.ok(
+      state.detailCalls.includes('T4'),
+      'the detail endpoint should still be called — --no-memory is not --no-enrich',
+    );
   });
 });
