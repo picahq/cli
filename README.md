@@ -423,8 +423,11 @@ one sync run stripe --since 90d
 one mem sync run stripe                              # identical (alias)
 # Profiles with `enrich` run a second detail pass. It enriches each record ONCE;
 # the list pass thereafter merges rather than replaces, so the enriched payload
-# survives (reported as `memPreserved`). `--full-refresh` does not re-enrich —
-# delete .one/sync/data/<platform>.db to force that.
+# survives (reported as `memPreserved`). `--full-refresh` reconciles deletions,
+# it does not refresh detail content. To refresh detail:
+one sync run gmail --re-enrich                       # re-fetch every detail endpoint
+# ...or set `enrich.invalidateOn` in the profile (e.g. "historyId", "updated_at")
+# so only records that actually changed upstream are re-enriched, automatically.
 
 # Query + search (reads from memory)
 one sync query stripe/balanceTransactions --where "status=available" --limit 20
