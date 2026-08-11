@@ -945,6 +945,10 @@ Two ways to tag a record with a cross-platform identifier (e.g. email), dependin
 
 Each \`path\` supports \`[]\` wildcards (one key per element) and a \`[name=From]\` equality filter (e.g. Gmail \`messages[].payload.headers[name=From].value\`). \`email\`-prefixed values are email-extracted, so display-name headers (\`"Jane <jane@acme.com>"\`) and comma-lists normalize cleanly. Values are lowercased/trimmed/deduped. \`sync test\` previews how many identity keys each record resolves.
 
+The built-in \`gmail/gmailThreads\` profile collects From/To/**Cc/Bcc**. Gmail only returns a \`Bcc\` header on messages the authenticated user sent — it is stripped for recipients — so Bcc keys appear on your own sent threads and nowhere else.
+
+**Upgrading an existing profile.** \`sync run\` reads only your on-disk profile at \`.one/sync/profiles/<platform>_<model>.json\` — it never merges built-in updates, so a profile created before a capability shipped will not have it. \`sync run\` now warns when the shipped built-in declares \`identityKeys\`, \`identityKey\`, \`enrich\`, \`dateFilter\`, or \`memory\` that your copy lacks, and \`--agent\` output carries a \`profileDrift\` array with the same information. Run \`one sync init <platform> <model>\` to pick the fields up (it patches, preserving your edits).
+
 Query everything sharing an identity key, grouped by type:
 
 \`\`\`bash
