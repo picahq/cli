@@ -686,7 +686,13 @@ one --agent flow execute <key> --allow-bash -i key=value
 one --agent flow runs [flowKey]
 one --agent flow inspect <runId>          # per-step outputs of a past run (add --full for untruncated)
 one --agent flow resume <runId>
+one --agent flow resume <runId> --allow-bash   # required if the flow has bash steps
 ```
+
+`flow resume` gates bash exactly like `flow execute` — the permission is not
+inherited from the original run. Resuming a bash flow without the flag fails
+fast with `{"error": "...", "requiresBash": true, "flowKey": "...", "runId": "..."}`,
+so re-invoke with `--allow-bash` rather than treating it as a broken run.
 
 ## Debugging a flow
 

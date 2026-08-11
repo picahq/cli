@@ -564,7 +564,10 @@ export async function flowValidateCommand(keyOrPath: string): Promise<void> {
   output.note(`Workflow "${(flowData as Flow).key}" passed all validation checks`, 'Valid');
 }
 
-export async function flowResumeCommand(runId: string): Promise<void> {
+export async function flowResumeCommand(
+  runId: string,
+  options: { allowBash?: boolean } = {},
+): Promise<void> {
   output.intro(pc.bgCyan(pc.black(' One Workflow ')));
 
   const state = FlowRunner.loadRunState(runId);
@@ -590,6 +593,18 @@ export async function flowResumeCommand(runId: string): Promise<void> {
     return;
   }
 
+  // Same pre-flight `flow execute` runs: fail fast with the machine-readable
+  // shape rather than partway through, so a caller knows to re-invoke with the
+  // flag instead of parsing a mid-run engine error.
+  if (!options.allowBash && flowRequiresBash(flow)) {
+    const msg = `Workflow "${flow.key}" contains bash steps. Re-run with --allow-bash to permit shell execution.`;
+    if (output.isAgentMode()) {
+      output.json({ error: msg, requiresBash: true, flowKey: flow.key, runId });
+      process.exit(1);
+    }
+    output.error(msg);
+  }
+
   const runner = FlowRunner.fromRunState(state!);
 
   const onEvent = (event: FlowEvent): void => {
@@ -602,7 +617,11 @@ export async function flowResumeCommand(runId: string): Promise<void> {
   spinner.start(`Resuming run ${runId} (${state!.completedSteps.length} steps already completed)...`);
 
   try {
-    const context = await runner.resume(flow, api, permissions, actionIds, { onEvent, rootDir });
+    const context = await runner.resume(flow, api, permissions, actionIds, {
+      onEvent,
+      rootDir,
+      allowBash: options.allowBash,
+    });
     spinner.stop('Workflow completed');
 
     if (output.isAgentMode()) {
