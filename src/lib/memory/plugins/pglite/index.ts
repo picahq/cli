@@ -1,3 +1,4 @@
+import { homeDir } from '../../../home.js';
 /**
  * PGlite backend plugin — default for local, embedded Postgres.
  *
@@ -37,12 +38,12 @@ const CAPABILITIES: BackendCapabilities = {
 };
 
 function defaultDbPath(): string {
-  return path.join(os.homedir(), '.one', 'mem.pglite');
+  return path.join(homeDir(), '.one', 'mem.pglite');
 }
 
 function expandHome(p: string): string {
-  if (p.startsWith('~/')) return path.join(os.homedir(), p.slice(2));
-  if (p === '~') return os.homedir();
+  if (p.startsWith('~/')) return path.join(homeDir(), p.slice(2));
+  if (p === '~') return homeDir();
   return p;
 }
 

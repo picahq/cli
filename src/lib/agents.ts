@@ -1,3 +1,4 @@
+import { homeDir } from './home.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -8,7 +9,7 @@ export type InstallScope = 'global' | 'project';
 
 function expandPath(p: string): string {
   if (p.startsWith('~/')) {
-    return path.join(os.homedir(), p.slice(2));
+    return path.join(homeDir(), p.slice(2));
   }
   return p;
 }
@@ -37,21 +38,21 @@ function getClaudeDesktopDetectDir(): string {
 
 function getWindsurfConfigPath(): string {
   if (process.platform === 'win32') {
-    return path.join(process.env.USERPROFILE || os.homedir(), '.codeium', 'windsurf', 'mcp_config.json');
+    return path.join(homeDir(), '.codeium', 'windsurf', 'mcp_config.json');
   }
   return '~/.codeium/windsurf/mcp_config.json';
 }
 
 function getWindsurfDetectDir(): string {
   if (process.platform === 'win32') {
-    return path.join(process.env.USERPROFILE || os.homedir(), '.codeium', 'windsurf');
+    return path.join(homeDir(), '.codeium', 'windsurf');
   }
   return '~/.codeium/windsurf';
 }
 
 function getCursorConfigPath(): string {
   if (process.platform === 'win32') {
-    return path.join(process.env.USERPROFILE || os.homedir(), '.cursor', 'mcp.json');
+    return path.join(homeDir(), '.cursor', 'mcp.json');
   }
   return '~/.cursor/mcp.json';
 }
