@@ -587,7 +587,12 @@ Resume a paused or failed workflow run from where it left off.
 
 ```bash
 one flow resume abc123
+one flow resume abc123 --allow-bash    # required if the flow has bash steps
 ```
+
+`--allow-bash` is gated the same way as on `flow execute` — resuming doesn't
+inherit the permission from the original run, so pass it again. `one flow list`
+shows which flows need it.
 
 ### `one flow runs [flowKey]`
 
