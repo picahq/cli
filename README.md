@@ -48,7 +48,10 @@ one login              # Opens browser for authentication (global or per-directo
 one logout             # Clear credentials (with scope picker and confirmation)
 ```
 
-Requires Node.js 18+.
+Requires Node.js 18+. `one sync` additionally needs Node 20+, because its
+local SQLite engine (`better-sqlite3`, an optional dependency) ships prebuilt
+binaries only for Node 20 and above. On Node 18 every other command works
+normally; `one sync` reports that the engine isn't installed.
 
 ## Quick start
 
