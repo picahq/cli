@@ -184,7 +184,7 @@ describe('file-read schema — executor integration / onError (#80)', () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'one-fr-schema-'));
     file = path.join(dir, 'config.json');
   });
-  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
 
   const schema = { name: { type: 'string', required: true }, mode: { type: 'string', required: true, enum: ['dev', 'prod'] } };
   const flow = (onError?: unknown): Flow => ({

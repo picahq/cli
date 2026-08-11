@@ -79,7 +79,7 @@ describe('resolveAllowedActions', () => {
 
   afterEach(() => {
     restoreHomeEnv(originalHome);
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   });
 
   function stubApi(byId: Record<string, Partial<ActionDetails> | Error>) {

@@ -95,7 +95,7 @@ describe('getProjectRoot', () => {
   afterEach(() => {
     process.chdir(originalCwd);
     restoreHomeEnv(originalHome);
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   });
 
   it('returns the nearest ancestor that contains .git', () => {
@@ -188,7 +188,7 @@ describe('resolveConfig', () => {
   afterEach(() => {
     process.chdir(originalCwd);
     restoreHomeEnv(originalHome);
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   });
 
   it('reads cwd-slug config even when cwd has no marker (orphan-config fix)', () => {

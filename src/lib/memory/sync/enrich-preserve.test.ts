@@ -77,7 +77,7 @@ after(async () => {
   const backend = await getBackend();
   await backend.close();
   resetBackendSingleton();
-  try { fs.rmSync(tmpHome, { recursive: true, force: true }); } catch { /* ignore */ }
+  try { fs.rmSync(tmpHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); } catch { /* ignore */ }
 });
 
 // ─────────────────────────────────────────────────────────────────────────

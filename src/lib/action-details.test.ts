@@ -76,7 +76,7 @@ describe('resolveActionDetails', () => {
 
   afterEach(() => {
     restoreHomeEnv(originalHome);
-    fs.rmSync(tmpHome, { recursive: true, force: true });
+    fs.rmSync(tmpHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   });
 
   it('serves a fresh full-shape entry from disk without any API call', async () => {
