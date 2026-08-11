@@ -311,6 +311,8 @@ Without declared paths, the default walker concatenates every string in the reco
 
 **Connections are late-bound** — profiles use `"connection": { "platform": "<name>" }`, not literal `connectionKey` strings. The key is resolved at sync time, so `one add <platform>` (re-auth) doesn't break the profile. For multi-account platforms, add `"tag": "<connection-tag>"` to disambiguate, and create the tagged connection with `one add <platform> --tag <name>`. Don't hardcode connection keys in profiles.
 
+**Extracting a flat field? Use `derive`, not `transform`.** `derive` computes top-level fields from paths already in the record (`"derive": { "from_email": { "path": "messages[0].payload.headers[name=From].value", "extract": "email" } }`), using the same path syntax as `identityKeys`. `transform` spawns `sh -c`, so it needs `jq` on PATH and silently does nothing on Windows — never put one in a profile you intend to share. A path that resolves to nothing omits the field rather than writing null.
+
 **Installed profiles do not auto-update.** `sync run` reads only `.one/sync/profiles/<platform>_<model>.json` and never merges the shipped built-in, so a profile created before a capability shipped silently lacks it — a pre-#167 gmail profile writes zero identity keys, forever, with no change in record counts. `sync run` warns when the built-in declares `identityKeys` / `identityKey` / `enrich` / `dateFilter` / `memory` that your copy lacks (agent mode: a `profileDrift` array). Fix with `one sync init <platform> <model>`, which patches rather than overwrites.
 
 **Cross-platform identity on a profile.** Two separate fields, and picking the wrong one silently mangles data:

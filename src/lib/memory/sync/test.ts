@@ -7,6 +7,7 @@ import type { SyncProfile } from './types.js';
 import { extractRecords, isRootPath } from './extract.js';
 import { resolveProfileConnectionKey } from './profile.js';
 import { collectIdentityKeys, resolveEntityIdentity } from './mem-writer.js';
+import { enrichOneForPreview } from './enrich.js';
 
 export interface SyncTestCheck {
   name: string;
@@ -53,6 +54,12 @@ export interface SyncTestReport {
      * wrong" from "these resolve one phase later".
      */
     resolvesAfterEnrich?: boolean;
+    /**
+     * True when these counts came from a REAL enriched record — `sync test`
+     * spent one detail call so the author sees what actually resolves, rather
+     * than zero keys plus a promise that they'll appear later. (#129)
+     */
+    previewedAfterEnrich?: boolean;
   };
 }
 
@@ -396,7 +403,24 @@ export async function testSyncProfile(api: OneApi, profile: SyncProfile): Promis
   report.sample = first;
   report.samples = (records as Record<string, unknown>[]).slice(0, SEARCHABLE_SAMPLE_SIZE);
 
-  report.identityKeysPreview = buildIdentityKeysPreview(report.samples, profile);
+  // For an enriching profile the participant paths live in the DETAIL payload,
+  // so previewing against list-shape samples always reported zero keys plus an
+  // explanatory note. That told the author "this is expected" but never showed
+  // what would actually resolve (#129, acceptance 4). Spend one detail call on
+  // the first sample and preview against the merged shape instead.
+  //
+  // Best-effort: if the call fails (rate limit, permissions, a detail action
+  // the key can't reach) we keep the un-enriched preview, which still carries
+  // `resolvesAfterEnrich` so zero keys don't read as broken paths.
+  if (profile.enrich && (profile.identityKeys?.length ?? 0) > 0 && report.samples.length > 0) {
+    const merged = await enrichOneForPreview(api, profile, report.samples[0], connectionKey);
+    if (merged) {
+      const preview = buildIdentityKeysPreview([merged], profile);
+      if (preview) report.identityKeysPreview = { ...preview, previewedAfterEnrich: true };
+    }
+  }
+
+  report.identityKeysPreview ??= buildIdentityKeysPreview(report.samples, profile);
 
   report.ok = checks.every(c => c.ok);
 
