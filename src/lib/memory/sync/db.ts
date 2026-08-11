@@ -15,6 +15,58 @@ export function listSyncedPlatforms(): string[] {
     .map(f => f.replace(/\.db$/, ''));
 }
 
+/**
+ * Distinguish "the native driver cannot run in this process" from "the file on
+ * disk is bad".
+ *
+ * better-sqlite3 loads its addon lazily *inside* the Database constructor, so
+ * `await import('better-sqlite3')` succeeds under a mismatched Node and the ABI
+ * error only surfaces at open time — where it is otherwise indistinguishable
+ * from corruption. Rotating on one of these destroyed a healthy 747MB Gmail
+ * sync database (#178).
+ */
+export function isDriverFault(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  if (code === 'ERR_DLOPEN_FAILED') return true;
+  const msg = err instanceof Error ? err.message : String(err ?? '');
+  return /NODE_MODULE_VERSION|compiled against a different Node\.js version|Could not locate the bindings file|invalid ELF header|wrong ELF class|symbol not found|image not found|not a valid Win32 application/i.test(msg);
+}
+
+/**
+ * Ask SQLite whether the file is actually damaged, via a read-only probe so the
+ * check itself can never mutate it. Returns true only when the database opens
+ * *and* reports `ok` — a throw or any other verdict means "could not prove it
+ * healthy", which is the conservative answer for a caller deciding whether to
+ * discard user data.
+ */
+export function passesIntegrityCheck(
+  Ctor: Awaited<ReturnType<typeof loadSqlite>>,
+  dbPath: string,
+): boolean {
+  let probe: Database.Database | undefined;
+  try {
+    probe = new Ctor(dbPath, { readonly: true, fileMustExist: true });
+    const result = probe.pragma('quick_check') as unknown;
+    const first = Array.isArray(result) ? result[0] : result;
+    const verdict = typeof first === 'string' ? first : (first as { quick_check?: string })?.quick_check;
+    return verdict === 'ok';
+  } catch {
+    return false;
+  } finally {
+    try { probe?.close(); } catch { /* nothing to close */ }
+  }
+}
+
+/**
+ * Timestamped backup path. The old code rotated to a fixed `<db>.bak`, so a
+ * second bad run overwrote the only surviving copy of the data — the reason
+ * #178 was recoverable exactly once. Colons are illegal in Windows filenames,
+ * hence the `:`/`.` substitution.
+ */
+export function backupPathFor(dbPath: string, now: Date = new Date()): string {
+  return `${dbPath}.bak.${now.toISOString().replace(/[:.]/g, '-')}`;
+}
+
 export async function openDatabase(
   platform: string,
   opts: { readonly?: boolean } = {},
@@ -35,13 +87,47 @@ export async function openDatabase(
   let db: Database.Database;
   try {
     db = new Database(dbPath);
-  } catch {
-    // Corrupted database — back up and start fresh
-    const backupPath = dbPath + '.bak';
-    if (fs.existsSync(dbPath)) {
-      fs.renameSync(dbPath, backupPath);
-      process.stderr.write(`Database corrupted, starting fresh. Backup saved at ${backupPath}\n`);
+  } catch (err) {
+    // An environment fault is not a corrupt file. Never rotate on one. (#178)
+    if (isDriverFault(err)) {
+      const detail = err instanceof Error ? err.message.split('\n')[0] : String(err);
+      throw new Error(
+        `The local sync engine (better-sqlite3) could not load in this Node process.\n` +
+        `Your database was NOT modified.\n\n` +
+        `This usually means the CLI is running under a different Node than the one\n` +
+        `better-sqlite3 was built for — currently node ${process.version} ` +
+        `(NODE_MODULE_VERSION ${process.versions.modules}). ` +
+        `\`one\` is a #!/usr/bin/env node shim, so a minimal PATH under cron, launchd,\n` +
+        `or an agent runner can select a different interpreter than your shell does.\n\n` +
+        `Rebuild it against this Node with:\n` +
+        `  one sync install\n\n` +
+        `Underlying error: ${detail}`
+      );
     }
+
+    // Nothing on disk to protect — the open failed for some other reason (bad
+    // path, permissions, full disk). Surface it instead of masking it.
+    if (!fs.existsSync(dbPath)) throw err;
+
+    // Only discard a file SQLite itself reports as damaged. A healthy database
+    // that merely failed to open (locked, read-only mount) must be left alone.
+    if (passesIntegrityCheck(Database, dbPath)) {
+      const detail = err instanceof Error ? err.message.split('\n')[0] : String(err);
+      throw new Error(
+        `Could not open ${dbPath}, but it passes SQLite's integrity check — ` +
+        `so it is not corrupt and has been left untouched.\n\n` +
+        `Underlying error: ${detail}`
+      );
+    }
+
+    // Genuine corruption. Timestamp the backup so a repeat run cannot destroy
+    // the previous one.
+    const backupPath = backupPathFor(dbPath);
+    fs.renameSync(dbPath, backupPath);
+    process.stderr.write(
+      `Database at ${dbPath} failed its integrity check. ` +
+      `Backup saved at ${backupPath}, starting fresh.\n`
+    );
     db = new Database(dbPath);
   }
 
