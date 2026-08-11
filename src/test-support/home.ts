@@ -35,7 +35,13 @@ export interface TempHome {
   teardown(): void;
 }
 
-const VARS = ['ONE_HOME', 'HOME', 'USERPROFILE'] as const;
+/**
+ * `APPDATA` is in here because Claude Desktop's MCP config is NOT home-rooted
+ * on Windows — `lib/agents.ts` resolves it via `%APPDATA%\Claude\...`, which
+ * no home override can intercept. Without it, a Windows test run rewrites the
+ * developer's real Claude Desktop MCP config.
+ */
+const VARS = ['ONE_HOME', 'HOME', 'USERPROFILE', 'APPDATA'] as const;
 
 /**
  * The real home, captured at module load — before any sandbox has moved it.
