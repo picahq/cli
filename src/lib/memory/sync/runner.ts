@@ -10,7 +10,13 @@ import { openDatabase, ensureTable, rebuildFtsIndex, evolveSchema, upsertRecords
 import { acquireSyncLock } from './lock.js';
 import { classifyRecords, fireHooks, type ChangeEvent } from './hooks.js';
 import { writePageToMemory, resolveEntityIdentity } from './mem-writer.js';
-import { enrichPhase, findEnrichedIds, type EnrichResult } from './enrich.js';
+import {
+  enrichPhase,
+  findEnrichedIds,
+  clearEnrichmentStamps,
+  invalidateStaleEnrichments,
+  type EnrichResult,
+} from './enrich.js';
 import { transformRecords } from './transform.js';
 import { extractRecords } from './extract.js';
 import { resolveProfileConnectionKey } from './profile.js';
@@ -774,6 +780,26 @@ export async function syncModel(
     // Requires the SQLite path (enrich still reads via SQL).
     let enrichResult: EnrichResult | null = null;
     if (profile.enrich && db && tableCreated && !options.dryRun) {
+      // Decide what phase 2 should re-fetch before it selects on
+      // `<tsField> IS NULL`. Without this, a record's detail endpoint was
+      // called exactly once, ever — `--full-refresh` re-pulled the list but
+      // left every enrichment stamp in place, so stale detail content was
+      // permanent. (#174)
+      if (options.reEnrich) {
+        const cleared = clearEnrichmentStamps(db, model, profile.enrich.timestampField);
+        if (cleared > 0 && !isAgentMode()) {
+          console.log(`    Re-enriching ${cleared} record(s) (--re-enrich)`);
+        }
+      } else {
+        const invalidated = invalidateStaleEnrichments(db, model, profile.enrich);
+        if (invalidated > 0 && !isAgentMode()) {
+          console.log(
+            `    ${invalidated} record(s) changed upstream ` +
+            `(${profile.enrich.invalidateOn}) — re-enriching those`
+          );
+        }
+      }
+
       enrichResult = await enrichPhase(
         api, db, profile.enrich, model, profile.idField,
         connectionKey, platform,
@@ -788,6 +814,8 @@ export async function syncModel(
           // memory store. Without this, memory holds only the pre-enrich
           // list payload — see enrich.ts:memoryBatch writeback.
           profile,
+          // Phase 1 honours --no-memory; phase 2 used to ignore it. (#174)
+          writeToMemory: options.toMemory !== false,
         },
       );
       enrichedTotal = enrichResult.enriched;
