@@ -1007,7 +1007,7 @@ Every \`sync X\` command is also exposed as \`mem sync X\` — same handlers, sa
 | Command | What it does |
 |---------|-------------|
 | \`sync profiles [platform]\` | List built-in pre-validated profiles |
-| \`sync doctor\` | Verify sync engine health |
+| \`sync doctor\` | Verify sync engine health. **Exits non-zero when not ready**, so \`one sync doctor && one sync run <platform>\` is a safe gate — run it first from cron/launchd, where a bare PATH can select a Node the native driver wasn't built for |
 | \`sync models <platform>\` | Discover available models |
 | \`sync init <plat> <model>\` | Create/patch profile (seeds from built-in, auto-tests) |
 | \`sync test <plat>/<model>\` | Validate profile. \`--show-searchable\` previews embedded text across 5 samples with per-path hit rates |
