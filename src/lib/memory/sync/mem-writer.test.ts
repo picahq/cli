@@ -94,6 +94,35 @@ describe('sync mem-writer — dual-write into the unified memory store', () => {
     assert.ok((bob!.keys ?? []).includes('email:bob@example.com'));
   });
 
+  it('folds profile.derive fields into the stored record (#129)', async () => {
+    // The wiring, not the resolver — deriveFields is unit-tested separately.
+    // This is the bit that would silently no-op if the call site were dropped.
+    const derived: SyncProfile = {
+      ...profile,
+      model: 'derivedPeople',
+      derive: {
+        from_email: { path: 'headers[name=From].value', extract: 'email' },
+        company: 'org.name',
+        missing: 'nope.not.here',
+      },
+    };
+
+    await writePageToMemory(derived, [
+      { id: 'd1', headers: [{ name: 'From', value: 'Jane Doe <Jane@Acme.com>' }], org: { name: 'Acme' } },
+    ]);
+
+    const backend = await getBackend();
+    const rec = await backend.findBySource('attio/derivedPeople:d1');
+    assert.ok(rec, 'record should have landed');
+
+    const data = rec!.data as Record<string, unknown>;
+    assert.equal(data.from_email, 'jane@acme.com', 'derived + email-extracted');
+    assert.equal(data.company, 'Acme');
+    assert.equal('missing' in data, false, 'a path that resolves to nothing must not write a null');
+    // The raw source fields are untouched — derive adds, never replaces.
+    assert.ok(data.headers, 'original fields survive');
+  });
+
   it('re-running the same page updates (not inserts)', async () => {
     const records = [{ id: 'p1', name: 'Alice Updated', email: 'alice@example.com' }];
     const report = await writePageToMemory(profile, records);

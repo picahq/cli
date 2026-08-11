@@ -205,7 +205,16 @@ export async function writePageToMemory(
   // `preEnrichShape` comment below for why that distinction matters.
   const enrichTimestampField = profile.enrich?.timestampField ?? '_enriched_at';
 
-  for (const record of records) {
+  for (const rawRecord of records) {
+    // `derive` fields are folded in before anything reads the record, so the
+    // stored `data`, `searchable_text` and any `--where` filter all see them.
+    // Applied here rather than in the runner because this is the one point
+    // BOTH sync phases pass through — phase 1 writes list-shape records and
+    // phase 2 writes enriched ones, and a derived field that only existed on
+    // one of them would flicker between runs. (#129)
+    const derived = deriveFields(rawRecord, profile.derive);
+    const record = Object.keys(derived).length > 0 ? { ...rawRecord, ...derived } : rawRecord;
+
     report.attempted++;
     // Support dotted idField paths (e.g. "id.record_id") so profiles
     // against APIs whose ids live inside a nested object (Attio v2,
@@ -414,6 +423,48 @@ function identityValuesFor(
   }
   const v = s.toLowerCase().trim();
   return v ? [v] : [];
+}
+
+/**
+ * Compute a profile's `derive` fields for one record. (#129)
+ *
+ * Returns only the fields that actually resolved — a path that matches nothing
+ * is omitted rather than written as null, so `--where` filters behave and
+ * records don't fill with empty keys.
+ *
+ * Reuses the `identityKeys` path resolver, so `[]`, `[0]` and `[name=From]`
+ * all work and profile authors have one path syntax to learn, not two.
+ */
+export function deriveFields(
+  record: Record<string, unknown>,
+  derive: SyncProfile['derive'],
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (!derive) return out;
+
+  for (const [field, spec] of Object.entries(derive)) {
+    const { path, extract } = typeof spec === 'string' ? { path: spec, extract: undefined } : spec;
+    if (!path) continue;
+
+    const values = resolveIdentityPath(record, path)
+      .filter(v => v !== null && v !== undefined && typeof v !== 'object');
+    if (values.length === 0) continue;
+
+    if (extract === 'email') {
+      // Same extraction identityKeys applies to `email`-prefixed values, so a
+      // display-name header (`"Jane <jane@acme.com>"`) yields the address.
+      const emails = values.flatMap(v => identityValuesFor('email', v));
+      if (emails.length === 0) continue;
+      out[field] = emails[0];
+      continue;
+    }
+
+    // Flat by definition: first match wins. The path syntax is expressive
+    // enough to say which one you meant.
+    out[field] = values[0];
+  }
+
+  return out;
 }
 
 type PathToken =

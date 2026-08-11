@@ -132,6 +132,35 @@ export interface SyncProfile {
    */
   transform?: string;
   /**
+   * Derived top-level fields, computed from paths already in the record.
+   *
+   * The point is to get a flat, queryable field (`--where from_email=...`)
+   * without a `transform`. `transform` is the only other way to produce one,
+   * and it spawns `sh -c` — so it needs `jq` on PATH and is a silent no-op on
+   * Windows. A built-in profile can't depend on either. (#129)
+   *
+   * Values are a path, or `{ path, extract }` when the raw value needs
+   * cleaning. Paths use the same resolver as `identityKeys`, so `[]`
+   * wildcards, `[0]` indexes and `[name=From]` filters all work:
+   *
+   *   "derive": {
+   *     "from_email": {
+   *       "path": "messages[0].payload.headers[name=From].value",
+   *       "extract": "email"
+   *     }
+   *   }
+   *
+   * `extract: "email"` pulls the address out of a display-name header
+   * (`"Jane <jane@acme.com>"` → `jane@acme.com`), lowercased — the same
+   * extraction `identityKeys` applies to `email`-prefixed values.
+   *
+   * A path resolving to nothing omits the field rather than writing null, so
+   * records stay clean and `--where` behaves. A path resolving to several
+   * values takes the first: this produces a flat field by definition, and the
+   * path syntax already lets you be specific about which one you want.
+   */
+  derive?: Record<string, string | { path: string; extract?: 'email' }>;
+  /**
    * Enrich each record by calling a detail endpoint after the list fetch.
    * Useful when the list endpoint returns lightweight records (e.g. just IDs)
    * and a second API call is needed for the full data.

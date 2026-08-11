@@ -603,6 +603,45 @@ export async function enrichPhase(
   return { enriched, skipped, rateLimited, total, duration };
 }
 
+/**
+ * Fetch and merge the detail payload for ONE record, exactly as phase 2 would.
+ *
+ * Exists so `one sync test` can preview what an enriching profile resolves
+ * after enrichment (#129, acceptance 4) instead of reporting zero keys against
+ * the list shape. It deliberately reuses `enrichSingleRow` and the same
+ * resultsPath / fields / exclude / merge handling as the real phase, because a
+ * preview that constructed its own request would drift from what a sync
+ * actually writes — which is worse than no preview.
+ *
+ * One record, one detail call. Returns null if the profile doesn't enrich or
+ * the call fails; the caller falls back to the un-enriched preview.
+ */
+export async function enrichOneForPreview(
+  api: OneApi,
+  profile: SyncProfile,
+  record: Record<string, unknown>,
+  connectionKey: string,
+): Promise<Record<string, unknown> | null> {
+  const config = profile.enrich;
+  if (!config) return null;
+
+  try {
+    const detailAction = (await resolveActionDetails(api, config.actionId)).details;
+    const detail = await enrichSingleRow(api, detailAction, config, record, connectionKey, profile.platform);
+    if (!detail) return null;
+
+    let enrichedData = detail;
+    if (config.fields && config.fields.length > 0) enrichedData = pickFields(enrichedData, config.fields);
+    if (config.exclude && config.exclude.length > 0) stripExcludedFields(enrichedData, config.exclude);
+
+    return config.merge !== false
+      ? deepMerge(record, enrichedData)
+      : { ...enrichedData, [profile.idField]: record[profile.idField] };
+  } catch {
+    return null;
+  }
+}
+
 /** Fetch detail data for a single row. Returns null if rate-limited after all retries. */
 async function enrichSingleRow(
   api: OneApi,
