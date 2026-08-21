@@ -906,7 +906,27 @@ So for a row the mirror reports as already enriched, Phase 1 writes **non-author
 
 The write still happens, so \`--embed\`, profile edits, and the store's un-archive self-heal all keep working on enriched rows. The one thing given up: a field that disappears from the *list* shape upstream no longer disappears from an enriched record, because a merge cannot delete. \`sync run\` reports the count as \`memPreserved\`.
 
-**Known gap:** \`--full-refresh\` does **not** clear \`_enriched_at\`, so it does not re-enrich — and there is currently no way to re-enrich a record whose upstream detail content changed after its first enrichment. Delete the mirror (\`.one/sync/data/<platform>.db\`) to force a full re-enrich.
+**Known gap:** \`--full-refresh\` does **not** clear \`_enriched_at\`, so it does not force a re-enrich by itself — delete the mirror (\`.one/sync/data/<platform>.db\`) for that. What it no longer requires: re-enriching a record whose upstream detail content changed since its first enrichment, IF the profile sets \`enrich.revisionField\` (see below).
+
+### Re-enriching a row whose detail changed (\`enrich.revisionField\`)
+
+By default Phase 2 enriches a row exactly once: \`WHERE "_enriched_at" IS NULL\` is permanently false after the first successful enrichment, so a detail field that changes upstream (Gmail: a thread gets a new message, or a label/read-state flips) is never picked up again — the mirror just goes stale silently.
+
+If the list response already carries a cheap revision marker — a value the source bumps on any change to the record — set \`enrich.revisionField\` to its name and Phase 2 also re-enriches a row whenever that field's current value has moved past what it captured at the row's last enrichment. No extra API calls: the marker rides along on every \`sync run\` for free.
+
+\`\`\`json
+{
+  "enrich": {
+    "actionId": "<get-thread-action-id>",
+    "pathVars": { "id": "{{id}}" },
+    "revisionField": "historyId"
+  }
+}
+\`\`\`
+
+Gmail's \`threads.list\` returns \`historyId\` per thread, and Gmail bumps it on ANY mutation — new message, label add/remove, read/unread — which is exactly the staleness signal \`labels\`/\`is_unread\`/\`messages\` need. The captured-at-last-enrichment value lives in a companion column, \`"<timestampField>_rev"\` (default \`_enriched_at_rev\`), stamped alongside the timestamp. Omit \`revisionField\` to keep the historical enrich-once behaviour — it's opt-in per profile.
+
+One-time cost on rollout: every row that was ever enriched before \`revisionField\` was added has no revision stamp yet, so the very first sync after adding it re-enriches the whole existing collection once (comparably expensive to a full re-enrich). After that it's incremental — only rows whose revision actually moved.
 
 ## Cross-Platform Identity
 

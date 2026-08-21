@@ -175,6 +175,13 @@ export interface EnrichResult {
  * absence is the normal never-enriched state), an idField with no matching
  * SQLite column (a dotted idField — the flat SQLite mirror can't represent
  * one, so we can't answer and must not guess), and any SQL error at all.
+ *
+ * When `config.revisionField` is set, "enriched" narrows to "enriched AND
+ * still current": a row whose incoming list record carries a revision value
+ * that has moved past the one captured at its last enrichment is EXCLUDED
+ * from the returned set, even though its timestamp is stamped — it's about
+ * to be re-enriched by `enrichPhase`'s mirrored query, so phase 1 must not
+ * treat it as stable and preserve a payload that is already stale.
  */
 export function findEnrichedIds(
   db: Database.Database,
@@ -188,6 +195,8 @@ export function findEnrichedIds(
   if (!tableCreated || records.length === 0) return enriched;
 
   const tsField = config.timestampField ?? '_enriched_at';
+  const revisionField = config.revisionField;
+  const revisionStampField = revisionField ? `${tsField}_rev` : undefined;
   const safeTable = model.replace(/[^a-zA-Z0-9_]/g, '_');
   const safeIdField = idField.replace(/"/g, '""');
   const safeTsField = tsField.replace(/"/g, '""');
@@ -196,25 +205,44 @@ export function findEnrichedIds(
     const cols = (db.prepare(`PRAGMA table_info("${safeTable}")`).all() as Array<{ name: string }>)
       .map(c => c.name);
     if (!cols.includes(tsField) || !cols.includes(idField)) return enriched;
+    const hasRevisionStamp = !!revisionStampField && cols.includes(revisionStampField);
 
     // `records` uses the flat top-level key, matching how `upsertRecords` and
     // `classifyRecords` address the SQLite mirror's id column.
-    const ids = records
-      .map(r => r[idField])
-      .filter((id): id is string | number => typeof id === 'string' || typeof id === 'number');
-    if (ids.length === 0) return enriched;
+    const byId = new Map<string, Record<string, unknown>>();
+    for (const r of records) {
+      const id = r[idField];
+      if (typeof id === 'string' || typeof id === 'number') byId.set(String(id), r);
+    }
+    if (byId.size === 0) return enriched;
 
     // Chunk the IN clause to stay under SQLite's variable limit, same as
     // classifyRecords.
+    const ids = [...byId.keys()];
+    const safeRevisionStampField = hasRevisionStamp ? revisionStampField!.replace(/"/g, '""') : undefined;
     const CHUNK = 500;
     for (let i = 0; i < ids.length; i += CHUNK) {
       const chunk = ids.slice(i, i + CHUNK);
       const placeholders = chunk.map(() => '?').join(',');
       const rows = db.prepare(
-        `SELECT "${safeIdField}" AS id FROM "${safeTable}" ` +
+        `SELECT "${safeIdField}" AS id${hasRevisionStamp ? `, "${safeRevisionStampField}" AS rev` : ''} FROM "${safeTable}" ` +
         `WHERE "${safeTsField}" IS NOT NULL AND "${safeIdField}" IN (${placeholders})`
-      ).all(...chunk) as Array<{ id: string | number }>;
-      for (const row of rows) enriched.add(String(row.id));
+      ).all(...chunk) as Array<{ id: string | number; rev?: string | number | null }>;
+      for (const row of rows) {
+        const id = String(row.id);
+        if (revisionField && hasRevisionStamp) {
+          // Compare the INCOMING list record's revision (what phase 1 is
+          // about to write) against the value frozen at last enrichment.
+          // An incoming record missing the field can't prove staleness, so
+          // it falls through to "still enriched" — same "can't answer, must
+          // not guess" rule the rest of this function follows.
+          const incomingRev = byId.get(id)?.[revisionField];
+          if (incomingRev !== undefined && String(incomingRev) !== String(row.rev ?? '')) {
+            continue; // due for re-enrichment — don't mark it stable
+          }
+        }
+        enriched.add(id);
+      }
     }
   } catch {
     // Corrupt mirror, renamed column, whatever — never crash a sync over an
@@ -255,10 +283,16 @@ export interface EnrichContext {
 }
 
 /**
- * Phase 2: Enrich unenriched rows in the local DB.
+ * Phase 2: Enrich unenriched (or STALE) rows in the local DB.
  *
- * Queries all rows where the timestamp field IS NULL, calls the detail
- * endpoint per record, merges the response back, and updates the row.
+ * Queries rows where the timestamp field IS NULL — never enriched — plus,
+ * when `config.revisionField` is set, rows whose revision has moved past
+ * the value captured at their last enrichment. Calls the detail endpoint
+ * per record, merges the response back, and updates the row.
+ *
+ * By the time this runs, phase 1 (runner.ts) has already written this run's
+ * list page into SQLite, so the revision column already holds the FRESH
+ * live value — the comparison below reads it straight off the row.
  */
 export async function enrichPhase(
   api: OneApi,
@@ -272,18 +306,37 @@ export async function enrichPhase(
 ): Promise<EnrichResult> {
   const startTime = Date.now();
   const tsField = config.timestampField ?? '_enriched_at';
+  const revisionField = config.revisionField;
+  const revisionStampField = revisionField ? `${tsField}_rev` : undefined;
   const safeTable = model.replace(/[^a-zA-Z0-9_]/g, '_');
   const safeIdField = idField.replace(/"/g, '""');
 
-  // Ensure the _enriched_at column exists
-  const cols = db.prepare(`PRAGMA table_info("${safeTable}")`).all() as Array<{ name: string }>;
+  // Ensure the _enriched_at column (and, if configured, its revision-stamp
+  // companion) exist.
+  let cols = db.prepare(`PRAGMA table_info("${safeTable}")`).all() as Array<{ name: string }>;
   if (!cols.some(c => c.name === tsField)) {
     db.exec(`ALTER TABLE "${safeTable}" ADD COLUMN "${tsField}" TEXT`);
   }
+  if (revisionStampField && !cols.some(c => c.name === revisionStampField)) {
+    db.exec(`ALTER TABLE "${safeTable}" ADD COLUMN "${revisionStampField}" TEXT`);
+  }
+  cols = db.prepare(`PRAGMA table_info("${safeTable}")`).all() as Array<{ name: string }>;
 
-  // Get all unenriched rows
+  // Only add the staleness branch when the revision column actually exists
+  // in the mirror (i.e. the list phase has ever populated it) — same
+  // "can't answer, don't guess" rule findEnrichedIds follows.
+  const hasRevisionColumn = !!revisionField && cols.some(c => c.name === revisionField);
+  let whereClause = `"${tsField}" IS NULL`;
+  if (hasRevisionColumn && revisionStampField) {
+    const safeRevisionField = revisionField!.replace(/"/g, '""');
+    const safeRevisionStampField = revisionStampField.replace(/"/g, '""');
+    whereClause += ` OR ("${safeRevisionField}" IS NOT NULL AND ` +
+      `("${safeRevisionStampField}" IS NULL OR "${safeRevisionField}" != "${safeRevisionStampField}"))`;
+  }
+
+  // Get all unenriched-or-stale rows
   const unenriched = db.prepare(
-    `SELECT * FROM "${safeTable}" WHERE "${tsField}" IS NULL`
+    `SELECT * FROM "${safeTable}" WHERE ${whereClause}`
   ).all() as Record<string, unknown>[];
 
   const total = unenriched.length;
@@ -362,6 +415,11 @@ export async function enrichPhase(
           ? deepMerge(row, enrichedData)
           : { ...enrichedData, [idField]: id };
         merged[tsField] = now;
+        // Freeze the revision this row was AT when we decided to enrich it —
+        // read off `row` (this run's fresh list value, already written by
+        // phase 1) before the detail merge can touch it. That's what the
+        // next run's staleness check compares the live value against.
+        if (revisionStampField) merged[revisionStampField] = row[revisionField!];
         pending.push({ merged, id });
       } else if (result.status === 'fulfilled' && result.value === null) {
         rateLimited++;
@@ -391,6 +449,12 @@ export async function enrichPhase(
           // Re-assert tsField in case the transform omitted it; if we don't,
           // the row's _enriched_at stays NULL and the next run re-enriches.
           if (!t[tsField]) t[tsField] = now;
+          // Same for the revision stamp — if the transform dropped it, the
+          // next run can't tell this row was ever revision-checked and would
+          // re-enrich it every time.
+          if (revisionStampField && t[revisionStampField] === undefined) {
+            t[revisionStampField] = p.merged[revisionStampField];
+          }
           writes.push({ merged: t, id: p.id });
         }
       }

@@ -319,6 +319,23 @@ export interface EnrichConfig {
   delayMs?: number;
   /** Column name for enrichment timestamp (default: "_enriched_at"). */
   timestampField?: string;
+  /**
+   * Column holding a revision marker that the LIST phase refreshes on every
+   * run for free (Gmail's `threads.list` returns `historyId`, which Gmail
+   * bumps on any mutation to the thread — new message, label add/remove,
+   * read/unread). When set, a row is re-enriched not only the first time
+   * (`timestampField IS NULL`) but also whenever this field's current value
+   * has moved past what was captured at the row's last enrichment — no
+   * extra API calls, no TTL to tune, and it can't go stale silently the way
+   * `timestampField IS NULL` alone does (that condition is permanently
+   * false once a row is ever enriched once).
+   *
+   * The captured-at-last-enrichment value lives in a companion column,
+   * `"<timestampField>_rev"`, stamped by `enrichPhase` alongside the
+   * timestamp. Omit this to keep the historical "enrich once, never again"
+   * behaviour.
+   */
+  revisionField?: string;
 }
 
 export interface DiscoveredModel {
