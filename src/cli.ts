@@ -184,11 +184,14 @@ program.hook('postAction', async () => {
   // immediately but the process hangs for ~10s before exiting.
   await closeBackendIfCached();
 
-  // Flush any usage rollup that came due during the command, then stop any
-  // in-flight telemetry send so it can't hold the process open, persisting
-  // anything undelivered for retry next run. See lib/analytics.ts.
+  // Flush any usage rollup that came due during the command and start sending
+  // it, then let in-flight telemetry sends finish for a few hundred ms at most
+  // before aborting them so they can't hold the process open; anything
+  // undelivered is persisted for a (bounded, deduped) retry next run. See
+  // lib/analytics.ts.
   analytics.flushUsageRollups();
-  analytics.flush();
+  analytics.drainQueue();
+  await analytics.flush();
 
   if (!updateCheckPromise) return;
   const info = await updateCheckPromise;
