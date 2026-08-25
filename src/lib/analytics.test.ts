@@ -5,8 +5,23 @@ import os from 'node:os';
 import path from 'node:path';
 import type { Command } from 'commander';
 
-import { recordCommand, flushUsageRollups } from './analytics.js';
-import { appendUsageLog, readUsageLog, readAnalyticsQueue, claimUsageLog } from './config.js';
+import {
+  recordCommand,
+  flushUsageRollups,
+  capture,
+  drainQueue,
+  flush,
+  uuidFromInsertId,
+  SEND_MAX_ATTEMPTS,
+  QUEUE_MAX_AGE_MS,
+} from './analytics.js';
+import {
+  appendUsageLog,
+  readUsageLog,
+  readAnalyticsQueue,
+  writeAnalyticsQueue,
+  claimUsageLog,
+} from './config.js';
 import { setHomeTo, snapshotHomeEnv, restoreHomeEnv } from '../test-support/home.js';
 
 // These tests exercise the REAL rollup code against REAL files: HOME is
@@ -268,5 +283,219 @@ describe('CLI usage rollups', () => {
     const second = claimUsageLog();
     assert.equal(first?.length, 3, 'first claimant gets the whole batch');
     assert.equal(second, null, 'a concurrent second claimant gets nothing → cannot double-emit');
+  });
+
+  // ── Fix 4: rollups are billed at the anonymous rate ─────────────────────────
+  it('rollups opt out of person processing and carry no $set', () => {
+    const old = Date.now() - WINDOW_MS - 1000;
+    appendUsageLog(logEntry({ did: 'whale', ts: old }));
+    flushUsageRollups();
+    const [r] = emittedRollups();
+    const props = r.properties as Record<string, unknown>;
+    assert.equal(props.$process_person_profile, false, 'rollup is an anonymous-rate event');
+    assert.equal(props.$set, undefined, 'no person properties ride on a rollup');
+  });
+});
+
+// ── Delivery: PostHog dedupes on `uuid`, and retries must be bounded ─────────
+//
+// Background: a CLI process aborts in-flight sends at exit. The request body
+// has usually already left, so PostHog ingests the event, but the CLI never
+// learns that and re-sends the whole backlog on the next run — and PostHog
+// does NOT dedupe on `$insert_id`, only on `uuid`. One user produced 233 copies
+// of each rollup this way.
+
+interface QueuedLine {
+  event: string;
+  uuid?: string;
+  timestamp: string;
+  properties: Record<string, unknown> & { $insert_id?: string };
+  attempts?: number;
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+function queuedLines(): QueuedLine[] {
+  return readAnalyticsQueue().map((l) => JSON.parse(l) as QueuedLine);
+}
+
+/** A fetch stub that records request bodies and resolves per `mode`. */
+function stubFetch(mode: 'ok' | 'hang' | 'fail' | 'slow-ok') {
+  const bodies: Array<Record<string, unknown>> = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = ((_url: unknown, init?: RequestInit) => {
+    bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    const signal = init?.signal;
+    return new Promise<Response>((resolve, reject) => {
+      const done = () => resolve(new Response('', { status: 200 }));
+      if (mode === 'ok') done();
+      else if (mode === 'slow-ok') setTimeout(done, 40);
+      else if (mode === 'fail') reject(new Error('network down'));
+      // 'hang': resolve only via abort
+      signal?.addEventListener('abort', () => reject(new Error('aborted')));
+    });
+  }) as typeof fetch;
+  return { bodies, restore: () => { globalThis.fetch = original; } };
+}
+
+describe('CLI analytics delivery', () => {
+  let tmpDir: string;
+  let originalCwd: string;
+  const orig: Record<string, string | undefined> = {};
+  let restoreFetch: (() => void) | undefined;
+
+  beforeEach(() => {
+    for (const k of ['HOME', 'CI', 'ONE_NO_TELEMETRY', 'ONE_DISABLE_TELEMETRY', 'DO_NOT_TRACK', 'ONE_SECRET']) {
+      orig[k] = process.env[k];
+    }
+    originalCwd = process.cwd();
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'one-cli-delivery-test-'));
+    const home = path.join(tmpDir, 'home');
+    fs.mkdirSync(home, { recursive: true });
+    setHomeTo(home);
+    process.chdir(home);
+    delete process.env.CI;
+    delete process.env.ONE_NO_TELEMETRY;
+    delete process.env.ONE_DISABLE_TELEMETRY;
+    delete process.env.DO_NOT_TRACK;
+    process.env.ONE_SECRET = 'sk_live_test_key';
+  });
+
+  afterEach(async () => {
+    restoreFetch?.();
+    restoreFetch = undefined;
+    await flush(); // settle anything a test left in flight
+    process.chdir(originalCwd);
+    for (const [k, v] of Object.entries(orig)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  });
+
+  it('uuidFromInsertId is deterministic and yields a valid v5-shaped UUID', () => {
+    const a = uuidFromInsertId('abc123');
+    assert.match(a, UUID_RE);
+    assert.equal(a, uuidFromInsertId('abc123'), 'same input → same uuid');
+    assert.notEqual(a, uuidFromInsertId('abc124'), 'different input → different uuid');
+    const already = '123e4567-e89b-42d3-a456-426614174000';
+    assert.equal(uuidFromInsertId(already), already, 'an id that already is a UUID is kept as is');
+  });
+
+  it('every queued event carries a uuid derived from its $insert_id', () => {
+    capture('Something Happened', { $insert_id: 'content-hash-1' });
+    capture('Other Thing');
+    const [a, b] = queuedLines();
+    assert.equal(a.uuid, uuidFromInsertId('content-hash-1'));
+    assert.match(String(b.uuid), /^[0-9a-f-]{36}$/);
+    assert.equal(b.uuid, uuidFromInsertId(String(b.properties.$insert_id)));
+  });
+
+  it('sends the uuid to PostHog so a re-sent copy dedupes on ingest', () => {
+    const stub = stubFetch('ok');
+    restoreFetch = stub.restore;
+    capture('Something Happened', { $insert_id: 'content-hash-1' });
+    drainQueue();
+    assert.equal(stub.bodies.length, 1);
+    assert.equal(stub.bodies[0].uuid, uuidFromInsertId('content-hash-1'));
+    assert.equal((stub.bodies[0].properties as Record<string, unknown>).$insert_id, 'content-hash-1');
+  });
+
+  it('backfills a uuid for queue lines written by an older CLI', () => {
+    const stub = stubFetch('ok');
+    restoreFetch = stub.restore;
+    writeAnalyticsQueue([
+      JSON.stringify({
+        event: 'CLI Usage Rollup',
+        distinct_id: 'u',
+        timestamp: new Date().toISOString(),
+        properties: { $insert_id: 'legacy-hash' },
+      }),
+    ]);
+    drainQueue();
+    assert.equal(stub.bodies[0].uuid, uuidFromInsertId('legacy-hash'));
+  });
+
+  it('a delivered event leaves the queue after flush', async () => {
+    const stub = stubFetch('ok');
+    restoreFetch = stub.restore;
+    capture('Something Happened');
+    drainQueue();
+    await flush();
+    assert.equal(queuedLines().length, 0);
+  });
+
+  it('flush waits briefly for an in-flight send instead of aborting it', async () => {
+    const stub = stubFetch('slow-ok'); // completes in ~40ms, well inside the grace period
+    restoreFetch = stub.restore;
+    capture('Something Happened');
+    drainQueue();
+    await flush();
+    assert.equal(queuedLines().length, 0, 'delivered within the grace period → not retried');
+  });
+
+  it('counts an attempt each time an event is dispatched and drops it after the cap', async () => {
+    const stub = stubFetch('hang'); // every attempt gets aborted at exit
+    restoreFetch = stub.restore;
+    capture('Something Happened');
+    for (let run = 1; run <= SEND_MAX_ATTEMPTS; run++) {
+      drainQueue();
+      await flush();
+      if (run < SEND_MAX_ATTEMPTS) {
+        assert.equal(queuedLines().length, 1, `still queued after run ${run}`);
+        assert.equal(queuedLines()[0].attempts, run, `attempts persisted after run ${run}`);
+      }
+    }
+    assert.equal(queuedLines().length, 0, `dropped after ${SEND_MAX_ATTEMPTS} dispatches`);
+    assert.equal(stub.bodies.length, SEND_MAX_ATTEMPTS, 'dispatched exactly the cap, never more');
+    drainQueue();
+    await flush();
+    assert.equal(stub.bodies.length, SEND_MAX_ATTEMPTS, 'nothing left to re-send');
+  });
+
+  it('drops events older than the age cap without sending them', () => {
+    const stub = stubFetch('ok');
+    restoreFetch = stub.restore;
+    writeAnalyticsQueue([
+      JSON.stringify({
+        event: 'CLI Usage Rollup',
+        distinct_id: 'u',
+        timestamp: new Date(Date.now() - QUEUE_MAX_AGE_MS - 60_000).toISOString(),
+        properties: { $insert_id: 'stale' },
+      }),
+      JSON.stringify({
+        event: 'CLI Usage Rollup',
+        distinct_id: 'u',
+        timestamp: new Date().toISOString(),
+        properties: { $insert_id: 'fresh' },
+      }),
+    ]);
+    drainQueue();
+    assert.equal(stub.bodies.length, 1, 'only the fresh event is sent');
+    assert.equal((stub.bodies[0].properties as Record<string, unknown>).$insert_id, 'fresh');
+    assert.deepEqual(
+      queuedLines().map((l) => l.properties.$insert_id),
+      ['fresh'],
+      'the stale event is gone from the queue',
+    );
+  });
+
+  it('does not dispatch the same event twice within one run', () => {
+    const stub = stubFetch('hang');
+    restoreFetch = stub.restore;
+    capture('Something Happened');
+    drainQueue();
+    drainQueue(); // e.g. a second drain at postAction
+    assert.equal(stub.bodies.length, 1);
+  });
+
+  it('a failed send is retried on the next run (queue kept, attempt counted)', async () => {
+    const stub = stubFetch('fail');
+    restoreFetch = stub.restore;
+    capture('Something Happened');
+    drainQueue();
+    await flush();
+    assert.equal(queuedLines().length, 1);
+    assert.equal(queuedLines()[0].attempts, 1);
   });
 });

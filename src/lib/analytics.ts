@@ -46,11 +46,17 @@ import { cliVersion } from './version.js';
  * DELIVERY — a CLI process is short-lived and a network round-trip is ~1s, so
  * we never make the user wait: each event is written to a tiny on-disk queue
  * instantly (sync), the queue is sent in the background overlapping the
- * command, in-flight requests are aborted at exit (so they can't hold the
- * process open), and anything not confirmed delivered is retried on the next
- * run. A stable `$insert_id` lets PostHog dedupe the occasional re-send. Net:
- * zero added latency, no lost events. (This is the standard CLI-telemetry
- * pattern used by tools like Next.js.)
+ * command, and anything not confirmed delivered is retried on the next run.
+ * At exit we give in-flight requests a short grace period (EXIT_GRACE_MS),
+ * then abort whatever is left so telemetry can never hold the process open.
+ *
+ * Retries are idempotent and bounded. An aborted request has usually already
+ * left the machine, so PostHog ingests it while the CLI still thinks it is
+ * undelivered; PostHog dedupes on the event `uuid` (NOT on `$insert_id`), so
+ * every event carries a `uuid` derived from its `$insert_id` and a re-sent copy
+ * collapses on ingest. Each event also counts its dispatches and is dropped
+ * after SEND_MAX_ATTEMPTS or QUEUE_MAX_AGE_MS, so a stuck backlog can never
+ * replay forever (one user's queue once re-sent every rollup ~230 times).
  *
  * PRIVACY — on by default (opt-out), per CLI norms. We never send positional
  * args or flag values (they can contain emails, queries, payloads, secrets) —
@@ -79,12 +85,42 @@ interface QueuedEvent {
   distinct_id: string;
   properties: Record<string, unknown>;
   timestamp: string;
+  /** PostHog's dedupe key; derived from `$insert_id` (see uuidFromInsertId). */
+  uuid?: string;
+  /** How many runs have dispatched this event; dropped at SEND_MAX_ATTEMPTS. */
+  attempts?: number;
 }
+
+/** An event is dropped once it has been dispatched this many times. */
+export const SEND_MAX_ATTEMPTS = 3;
+/** ...or once it is older than this (a stale backlog is not worth replaying). */
+export const QUEUE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+/** How long flush() lets in-flight sends finish before aborting them at exit. */
+export const EXIT_GRACE_MS = 300;
 
 /** Abort controllers for in-flight sends, so flush() can cancel them at exit. */
 const inFlight = new Set<AbortController>();
+/** The in-flight send promises, so flush() can wait (briefly) for them. */
+const pending = new Set<Promise<void>>();
+/** `$insert_id`s dispatched this run (never send the same event twice per run). */
+const dispatched = new Set<string>();
 /** `$insert_id`s confirmed delivered this run (so flush() drops them from the queue). */
 const delivered = new Set<string>();
+
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The event `uuid` PostHog dedupes on, derived deterministically from the
+ * `$insert_id` so a re-sent copy of an event carries the same uuid and
+ * collapses on ingest. A v5-shaped UUID built from a SHA-1 of the id; an id
+ * that already is a UUID is used as is.
+ */
+export function uuidFromInsertId(insertId: string): string {
+  if (UUID_SHAPE.test(insertId)) return insertId.toLowerCase();
+  const h = createHash('sha1').update(`one-cli-event:${insertId}`).digest('hex');
+  const variant = ((parseInt(h[16], 16) & 0x3) | 0x8).toString(16);
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-5${h.slice(13, 16)}-${variant}${h.slice(17, 20)}-${h.slice(20, 32)}`;
+}
 
 function posthogHost(): string {
   return process.env.ONE_POSTHOG_HOST || DEFAULT_POSTHOG_HOST;
@@ -166,9 +202,10 @@ function personSet(): Record<string, unknown> | undefined {
 /** Fire one queued event to PostHog (best-effort); mark it delivered on success. */
 function send(item: QueuedEvent): void {
   const insertId = item.properties.$insert_id as string | undefined;
+  if (insertId) dispatched.add(insertId);
   const controller = new AbortController();
   inFlight.add(controller);
-  void (async () => {
+  const run = (async () => {
     try {
       const res = await fetch(`${posthogHost()}/i/v0/e/`, {
         method: 'POST',
@@ -177,6 +214,8 @@ function send(item: QueuedEvent): void {
           api_key: posthogKey(),
           event: item.event,
           distinct_id: item.distinct_id,
+          // PostHog's dedupe key — a re-sent copy is dropped on ingest.
+          uuid: item.uuid ?? (insertId ? uuidFromInsertId(insertId) : undefined),
           properties: item.properties,
           timestamp: item.timestamp,
         }),
@@ -186,12 +225,14 @@ function send(item: QueuedEvent): void {
       debugLog(`"${item.event}" -> HTTP ${res.status}${res.ok ? '' : ' (retry next run)'}`);
     } catch (err) {
       // Best-effort: a tracking failure must never affect the command; the
-      // event stays queued and is retried on the next run.
+      // event stays queued and is retried on the next run (bounded, see drainQueue).
       debugLog(`"${item.event}" not sent: ${err instanceof Error ? err.message : String(err)} (retry next run)`);
     } finally {
       inFlight.delete(controller);
     }
   })();
+  pending.add(run);
+  void run.finally(() => pending.delete(run));
 }
 
 /**
@@ -202,7 +243,7 @@ function send(item: QueuedEvent): void {
 export function capture(
   event: string,
   properties: Record<string, unknown> = {},
-  opts: { distinctId?: string; timestamp?: string } = {},
+  opts: { distinctId?: string; timestamp?: string; personProfile?: boolean } = {},
 ): void {
   if (isTelemetryDisabled()) {
     debugLog(`disabled — skipping "${event}"`);
@@ -211,11 +252,18 @@ export function capture(
   const did = opts.distinctId ?? distinctId();
   const props: Record<string, unknown> = { ...baseProperties(), ...properties };
   // One-off events get a random id; rollups pass a content-derived id (see
-  // emitRollup) so duplicate batches collapse to a single event in PostHog.
+  // emitRollup). The id is mirrored into the event `uuid`, which is what
+  // PostHog actually dedupes on, so a re-sent copy collapses to one event.
   if (props.$insert_id === undefined) props.$insert_id = randomUUID();
-  // Person props belong only to the *current* user; never tag a rollup for a
-  // previous login (distinct_id ≠ current) with the new user's email/name.
-  if (did === distinctId()) {
+  const insertId = props.$insert_id as string;
+  if (opts.personProfile === false) {
+    // Anonymous-rate event: no person profile is created or updated for it
+    // (rollups don't need one — the signup events already made the person),
+    // and person properties would be ignored, so none are attached.
+    props.$process_person_profile = false;
+  } else if (did === distinctId()) {
+    // Person props belong only to the *current* user; never tag a rollup for a
+    // previous login (distinct_id ≠ current) with the new user's email/name.
     const set = personSet();
     if (set) props.$set = set;
   }
@@ -224,6 +272,7 @@ export function capture(
     distinct_id: did,
     properties: props,
     timestamp: opts.timestamp ?? new Date().toISOString(),
+    uuid: uuidFromInsertId(insertId),
   };
   appendAnalyticsQueue(JSON.stringify(item));
 }
@@ -347,9 +396,10 @@ function emitRollup(did: string, group: UsageEntry[]): void {
     if (e.agent) agentCount += 1;
   }
   // Content-derived id hashed over the EXACT entries (each command's timestamp +
-  // path + agent flag). A re-emitted copy of the same batch hashes identically so
-  // PostHog dedupes it on ingest; genuinely different batches hash differently
-  // (distinct per-command timestamps), so this never collapses real activity.
+  // path + agent flag). A re-emitted copy of the same batch hashes identically
+  // (and so gets the same event uuid, which PostHog dedupes on); genuinely
+  // different batches hash differently (distinct per-command timestamps), so
+  // this never collapses real activity.
   const insertId = createHash('sha1')
     .update(`${did}|${group.map((e) => `${e.ts}:${e.command}:${e.agent ? 1 : 0}`).join('|')}`)
     .digest('hex');
@@ -364,7 +414,12 @@ function emitRollup(did: string, group: UsageEntry[]): void {
       window_end: new Date(group[group.length - 1].ts).toISOString(),
       $insert_id: insertId,
     },
-    { distinctId: did, timestamp: new Date(group[group.length - 1].ts).toISOString() },
+    {
+      distinctId: did,
+      timestamp: new Date(group[group.length - 1].ts).toISOString(),
+      // Rollups bill at the anonymous rate; the person already exists.
+      personProfile: false,
+    },
   );
   debugLog(`rollup — ${group.length} command(s) for ${did}`);
 }
@@ -381,42 +436,88 @@ function commandPath(command: Command): string {
 
 /**
  * Start sending every queued event (this run's + any left over from prior
- * runs) in the background. Called once in preAction so the requests overlap
- * the command's own work. Opting out drops the backlog instead of sending it.
+ * runs) in the background, so the requests overlap the command's own work.
+ * Called in preAction and again in postAction (for a rollup that came due
+ * during the command). Opting out drops the backlog instead of sending it.
+ *
+ * Bounded: an event is dispatched at most SEND_MAX_ATTEMPTS times in total
+ * (the count is persisted before the send so a crash can't reset it) and is
+ * dropped unsent once older than QUEUE_MAX_AGE_MS. A line an older CLI wrote
+ * without a `uuid` gets one here, so an inherited backlog dedupes too.
  */
 export function drainQueue(): void {
   if (isTelemetryDisabled()) {
     writeAnalyticsQueue([]);
     return;
   }
+  const now = Date.now();
+  const kept: string[] = [];
+  let changed = false;
   for (const line of readAnalyticsQueue()) {
+    let item: QueuedEvent;
     try {
-      const item = JSON.parse(line) as QueuedEvent;
-      if (item?.properties?.$insert_id) send(item);
+      item = JSON.parse(line) as QueuedEvent;
     } catch {
-      // Skip malformed lines; flush() prunes them from the queue.
+      changed = true; // drop a malformed line
+      continue;
     }
+    const insertId = item?.properties?.$insert_id as string | undefined;
+    if (!insertId) {
+      changed = true;
+      continue;
+    }
+    const age = now - Date.parse(item.timestamp);
+    const attempts = item.attempts ?? 0;
+    if (!(age < QUEUE_MAX_AGE_MS) || attempts >= SEND_MAX_ATTEMPTS) {
+      debugLog(`"${item.event}" dropped (${attempts} attempts, ${Math.round(age / 60_000)} min old)`);
+      changed = true;
+      continue;
+    }
+    if (dispatched.has(insertId)) {
+      kept.push(line); // already in flight (or delivered) this run; flush() settles it
+      continue;
+    }
+    item.attempts = attempts + 1;
+    if (!item.uuid) item.uuid = uuidFromInsertId(insertId);
+    kept.push(JSON.stringify(item));
+    changed = true;
+    send(item);
   }
+  if (changed) writeAnalyticsQueue(kept);
 }
 
 /**
- * Called from postAction. Abort any still-in-flight sends so a pending request
- * can't hold the process open (and the user waiting) on the network, then
- * rewrite the queue to keep only events NOT yet confirmed delivered — those
- * are retried on the next run.
+ * Called from postAction. Give in-flight sends a short grace period to land,
+ * abort whatever is still pending so it can't hold the process open (and the
+ * user waiting), then rewrite the queue to keep only events NOT yet confirmed
+ * delivered and still under the attempt cap — those are retried next run.
  */
-export function flush(): void {
+export async function flush(): Promise<void> {
+  if (pending.size > 0) {
+    // The timer is deliberately NOT unref'd: it is the only thing guaranteed
+    // to keep the process alive until the queue below is pruned, and it is
+    // bounded to EXIT_GRACE_MS.
+    await Promise.race([
+      Promise.allSettled([...pending]),
+      new Promise<void>((resolve) => setTimeout(resolve, EXIT_GRACE_MS)),
+    ]);
+  }
   for (const controller of inFlight) controller.abort();
 
   const remaining = readAnalyticsQueue().filter((line) => {
     try {
-      const id = (JSON.parse(line) as QueuedEvent).properties?.$insert_id as string | undefined;
-      return id ? !delivered.has(id) : false;
+      const item = JSON.parse(line) as QueuedEvent;
+      const id = item.properties?.$insert_id as string | undefined;
+      if (!id || delivered.has(id)) return false;
+      return (item.attempts ?? 0) < SEND_MAX_ATTEMPTS;
     } catch {
       return false; // drop malformed lines
     }
   });
   writeAnalyticsQueue(remaining);
+  // The run is over: the next drain (in this process, e.g. tests) starts clean.
+  dispatched.clear();
+  delivered.clear();
 }
 
 /**
