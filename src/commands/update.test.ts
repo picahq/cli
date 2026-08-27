@@ -60,9 +60,12 @@ describe('resolveNpmBin', () => {
 
 describe('updateChildEnv', () => {
   it("prepends node's own directory so npm's `env node` shebang resolves", () => {
-    const env = updateChildEnv({ PATH: '/usr/bin:/bin' }, '/opt/nvm/v20/bin/node');
+    // Build the seed PATH with the platform delimiter — a hardcoded ':' is a
+    // single opaque entry on Windows, where the separator is ';'.
+    const cronPath = ['/usr/bin', '/bin'].join(path.delimiter);
+    const env = updateChildEnv({ PATH: cronPath }, '/opt/nvm/v20/bin/node');
 
-    assert.equal(env.PATH, `/opt/nvm/v20/bin${path.delimiter}/usr/bin${path.delimiter}/bin`);
+    assert.equal(env.PATH, ['/opt/nvm/v20/bin', '/usr/bin', '/bin'].join(path.delimiter));
   });
 
   it('does not duplicate a directory that is already on PATH', () => {
