@@ -650,6 +650,10 @@ Updates the CLI to the latest version (`npm install -g @withone/cli@latest`).
 
 The CLI also **auto-updates in the background**: when a newer version has been published for more than 30 minutes, the next `one` command silently kicks off a global install. This is hardened against concurrent runs — a lock file in `~/.one/` ensures at most one install runs at a time (so parallel agent invocations can't collide and wedge npm), and the lock self-heals after 10 minutes if an install ever crashes or hangs.
 
+**Scheduled runs update too.** `one sync schedule` installs a crontab entry, and cron runs jobs with a bare `PATH=/usr/bin:/bin` — where an nvm, Volta, fnm, or Homebrew `npm` does not appear. The updater therefore resolves `npm` next to the running `node` binary rather than through `PATH`, and prepends node's own directory to the install's environment. Without this a scheduled install can never upgrade itself and stays pinned to the version that created it, forever.
+
+If an install still doesn't land — a read-only prefix, a permissions problem, a node with no npm alongside it — the CLI **says so instead of retrying invisibly**. npm's own output is appended to `~/.one/auto-update.log`, and after three consecutive failed attempts a warning goes to **stderr** (never stdout, so it can't corrupt `--agent` JSON or a piped command) telling you to run the install by hand. That notice repeats at most once a day.
+
 To disable background auto-updates entirely (e.g. on CI or a shared agent host), set:
 
 ```bash
