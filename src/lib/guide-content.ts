@@ -834,6 +834,12 @@ one sync schedule repair <id>             # Re-install broken cron line
 \`\`\`
 Backed by system cron (macOS/Linux). Schedules tracked in a global registry at \`~/.one/sync/schedules.json\`.
 
+Cron runs jobs with a bare \`PATH=/usr/bin:/bin\`. The CLI pins the absolute \`node\` and CLI paths into the cron
+line, and its background auto-updater resolves \`npm\` next to that \`node\` rather than through \`PATH\`, so a
+scheduled install still upgrades itself. If an install repeatedly fails anyway, the reason is appended to
+\`~/.one/auto-update.log\` and a warning goes to stderr — check there before assuming a schedule is running the
+current version. \`one --agent sync schedule status\` reports drift and tails the logs.
+
 ## Record Enrichment
 
 When a list endpoint returns lightweight records (e.g. just IDs), add an \`enrich\` config to call a detail endpoint per record and merge the full data before storing:
