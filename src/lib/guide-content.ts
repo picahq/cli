@@ -240,11 +240,19 @@ The CLI validates required parameters before executing. Missing params return a 
 
 All errors return JSON: \`{"error": "message"}\`. Check the \`error\` key.
 
+A misspelled platform on \`actions search\` is **not** an empty result. The command exits 1 with:
+
+\`\`\`json
+{"error": "Unknown platform \\"bogus-platform-xyz\\"", "similar": ["gmail"], "hint": "Run \`one --agent platforms\` (or \`one platforms\`) to list platforms."}
+\`\`\`
+
+Exit 0 with \`{"actions": []}\` means the platform exists and the query matched nothing — broaden the query. Unknown-platform misses are not cached.
+
 ## Notes
 
 - Platform names are **lowercase**; multi-word names use dashes (e.g., \`hubspot\`, \`ship-station\`)
 - JSON flags use single quotes around the JSON to avoid shell escaping
-- If search returns no results, try broader queries
+- If search returns no results, try broader queries — but first confirm the platform slug is real
 - Access control settings from \`one config\` may restrict execution
 `;
 
