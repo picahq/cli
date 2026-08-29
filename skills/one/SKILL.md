@@ -78,6 +78,7 @@ one --agent actions search <platform> "<query>" -t execute
 - Platform names are lowercase; multi-word names use dashes: `gmail`, `hubspot`, `ship-station`, `google-calendar`
 - Use `-t execute` when performing actions, `-t knowledge` when researching or writing code
 - If no results, broaden the query (e.g., `"list"` instead of `"list active premium customers"`)
+- A misspelled platform is **not** an empty result: the command exits 1 with `{"error":"Unknown platform \"...\"","similar":[...]}`. Exit 0 with `{"actions":[]}` means the platform exists and the query matched nothing. Check the `error` key before treating empty `actions` as "no matches".
 
 ### 3. Get the action's knowledge (REQUIRED before executing)
 

@@ -64,6 +64,8 @@ one list
 
 # Search for actions you can take
 one actions search gmail "send email" -t execute
+# A misspelled platform exits 1 (not an empty result list).
+# `one --agent actions search bogus "test"` → {"error":"Unknown platform \"bogus\"",...}
 
 # Read the docs for an action
 one actions knowledge gmail <actionId>

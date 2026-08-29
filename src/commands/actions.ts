@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
 import { getApiKey, getApiBase, getAccessControlFromAllSources } from '../lib/config.js';
@@ -8,9 +9,10 @@ import {
   isMethodAllowed,
   buildActionKnowledgeWithGuidance,
 } from '../lib/api.js';
+import { findPlatform, findSimilarPlatforms } from '../lib/platforms.js';
 import { printTable } from '../lib/table.js';
 import * as output from '../lib/output.js';
-import type { PermissionLevel, ActionKnowledgeResponse, ActionDetails, SearchCacheData, SearchCacheAction } from '../lib/types.js';
+import type { PermissionLevel, ActionKnowledgeResponse, ActionDetails, SearchCacheData, SearchCacheAction, CacheEntry } from '../lib/types.js';
 import { validateActionInput } from '../lib/validate.js';
 import { resolveActionDetails } from '../lib/action-details.js';
 import {
@@ -48,6 +50,53 @@ function parseJsonArg(value: string, argName: string): any {
   }
 }
 
+class UnknownPlatformError extends Error {
+  readonly similar: string[];
+  readonly hint: string;
+  constructor(platform: string, similar: string[], hint: string) {
+    super(`Unknown platform "${platform}"`);
+    this.name = 'UnknownPlatformError';
+    this.similar = similar;
+    this.hint = hint;
+  }
+}
+
+/**
+ * Empty search results on a misspelled platform used to look identical to a
+ * real platform with no matches (exit 0, `{actions:[]}`, and the miss was
+ * cached). Throws UnknownPlatformError so the caller can exit 1 with a
+ * structured body and drop any cache file.
+ *
+ * Catalog fetch failure is swallowed so a downed `/available-connectors`
+ * cannot turn a genuine empty search into a crash.
+ */
+async function rejectIfUnknownPlatform(
+  api: OneApi,
+  platform: string,
+  cachePath: string,
+): Promise<void> {
+  let platforms;
+  try {
+    platforms = await api.listPlatforms();
+  } catch {
+    return;
+  }
+  if (findPlatform(platforms, platform)) return;
+
+  try {
+    fs.unlinkSync(cachePath);
+  } catch {
+    // no cache file — fine
+  }
+
+  const similar = findSimilarPlatforms(platforms, platform).map((p) => p.platform);
+  throw new UnknownPlatformError(
+    platform,
+    similar,
+    'Run `one --agent platforms` (or `one platforms`) to list platforms.',
+  );
+}
+
 export async function actionsSearchCommand(
   platform: string,
   query: string,
@@ -74,6 +123,7 @@ export async function actionsSearchCommand(
 
     let cleanedActions: SearchCacheAction[];
     let cacheHit = false;
+    let pendingCache: CacheEntry<SearchCacheData> | null = null;
 
     if (cached && isFresh(cached)) {
       // Serve from cache
@@ -104,13 +154,12 @@ export async function actionsSearchCommand(
             path: action.path,
           }));
 
-          // Write to cache, recording the request params so `cache update`
-          // can re-run this exact search later.
-          writeCache(cachePath, makeCacheEntry(
+          // Defer the write until we know this isn't a misspelled platform.
+          pendingCache = makeCacheEntry(
             `${platform}_${query}_${searchType}`,
             { actions: cleanedActions, platform, query, searchType },
             result.etag
-          ));
+          );
         }
       } catch (fetchError) {
         // Network failure — serve stale cache if available
@@ -124,6 +173,14 @@ export async function actionsSearchCommand(
           throw fetchError;
         }
       }
+    }
+
+    if (cleanedActions.length === 0) {
+      await rejectIfUnknownPlatform(api, platform, cachePath);
+    }
+
+    if (pendingCache) {
+      writeCache(cachePath, pendingCache);
     }
 
     if (output.isAgentMode()) {
@@ -186,6 +243,21 @@ export async function actionsSearchCommand(
       'Next Steps'
     );
   } catch (error) {
+    if (error instanceof UnknownPlatformError) {
+      spinner.stop('Unknown platform');
+      if (output.isAgentMode()) {
+        output.json({
+          error: error.message,
+          similar: error.similar,
+          hint: error.hint,
+        });
+        process.exit(1);
+      }
+      const suggestion = error.similar.length
+        ? `\nDid you mean: ${error.similar.join(', ')}`
+        : '';
+      output.error(`${error.message}.${suggestion}\n\n${error.hint}`);
+    }
     spinner.stop('Search failed');
     output.error(
       `Error: ${error instanceof Error ? error.message : 'Unknown error'}`
